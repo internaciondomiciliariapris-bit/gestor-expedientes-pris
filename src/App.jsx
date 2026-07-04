@@ -284,6 +284,7 @@ function Login({ onOk }) {
     <div style={{ ...S.page, display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div style={{ ...S.card, width: 340, textAlign: "center" }}>
         <img src={LOGO_PRIS} alt="" style={{ maxWidth: "85%", height: "auto", marginBottom: 10 }} onError={(e) => (e.target.style.display = "none")} />
+<img src={LOGO_GOBIERNO} alt="" style={{ maxWidth: "70%", height: "auto", marginBottom: 10 }} onError={(e) => (e.target.style.display = "none")} />
         <h2 style={{ color: "#075e75", marginBottom: 4 }}>Gestor de Expedientes</h2>
         <div style={{ fontSize: 13, color: "#64748b", marginBottom: 16 }}>Internación Domiciliaria · PRIS</div>
         <input
