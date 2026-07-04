@@ -9,18 +9,19 @@ import { getAuth, signInAnonymously } from "firebase/auth";
    CONSTANTES CRÍTICAS — VERIFICAR SIEMPRE ANTES DE REEMPLAZAR ESTE ARCHIVO
    ================================================================ */
 
-// ⚠️ PASO 1: Copiá acá el mismo firebaseConfig que está en el App.jsx de visitas-siprosa
+// Configuración Firebase (proyecto visitas-siprosa, colecciones propias gexp_)
 const firebaseConfig = {
-  apiKey: "PEGAR_AQUI",
-  authDomain: "PEGAR_AQUI",
-  projectId: "PEGAR_AQUI",
-  storageBucket: "PEGAR_AQUI",
-  messagingSenderId: "PEGAR_AQUI",
-  appId: "PEGAR_AQUI",
+  apiKey: "AIzaSyCDFcb5B7swNnetMOxXhVNQWaDxa1LVRF4",
+  authDomain: "visitas-siprosa.firebaseapp.com",
+  projectId: "visitas-siprosa",
+  storageBucket: "visitas-siprosa.firebasestorage.app",
+  messagingSenderId: "957519453967",
+  appId: "1:957519453967:web:e6c2bfac7a4da10fed287a",
+  measurementId: "G-GHDRCXE81C"
 };
 
-// ⚠️ PASO 2: Pegá acá la URL del NUEVO Apps Script (archivo apps-script/Codigo.gs)
-const APPS_SCRIPT_URL = "PEGAR_AQUI_URL_DEL_NUEVO_APPS_SCRIPT";
+// Apps Script del Gestor de Expedientes (Gmail + Drive)
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwXnUvwLx91Y88AX7wDT9M7sSkp76vJ888aErmcWMT7-E7csttQVho31TZfk1G6lPnk/exec";
 const APPS_SCRIPT_CLAVE = "GESTORPRIS2026";
 
 // Contraseña de acceso (la misma del panel admin de visitas-siprosa)
