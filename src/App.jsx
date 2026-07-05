@@ -266,8 +266,26 @@ export default function App() {
         )}
         {vista === "nuevo" && (
           <NuevoExpediente
+            modo="nuevo"
             onCreado={(e) => { setExpedienteSel(e); setVista("detalle"); }}
             onCancelar={() => setVista("tablero")}
+          />
+        )}
+        {vista === "editar" && expedienteVivo && (
+          <NuevoExpediente
+            modo="editar"
+            inicial={expedienteVivo}
+            expId={expedienteVivo.id}
+            onCreado={() => setVista("detalle")}
+            onCancelar={() => setVista("detalle")}
+          />
+        )}
+        {vista === "renovar" && expedienteVivo && (
+          <NuevoExpediente
+            modo="renovar"
+            inicial={expedienteVivo}
+            onCreado={(e) => { setExpedienteSel(e); setVista("detalle"); }}
+            onCancelar={() => setVista("detalle")}
           />
         )}
         {vista === "detalle" && expedienteVivo && (
@@ -275,6 +293,8 @@ export default function App() {
             exp={expedienteVivo}
             proveedores={proveedores}
             volver={() => { setExpedienteSel(null); setVista("tablero"); }}
+            editar={() => setVista("editar")}
+            renovar={() => setVista("renovar")}
           />
         )}
         {vista === "proveedores" && <Proveedores proveedores={proveedores} />}
@@ -287,6 +307,7 @@ export default function App() {
 
 function Login({ onOk }) {
   const [clave, setClave] = useState("");
+  const [ver, setVer] = useState(false);
   const [error, setError] = useState(false);
   const entrar = () => {
     if (clave === ADMIN_PASSWORD) onOk();
@@ -299,15 +320,26 @@ function Login({ onOk }) {
         <img src={LOGO_GOBIERNO} alt="" style={{ maxWidth: "70%", height: "auto", marginBottom: 10 }} onError={(e) => (e.target.style.display = "none")} />
         <h2 style={{ color: "#075e75", marginBottom: 4 }}>Gestor de Expedientes</h2>
         <div style={{ fontSize: 13, color: "#64748b", marginBottom: 16 }}>Internación Domiciliaria · PRIS</div>
-        <input
-          type="password"
-          placeholder="Contraseña"
-          autoComplete="new-password"
-          style={S.input}
-          value={clave}
-          onChange={(e) => { setClave(e.target.value); setError(false); }}
-          onKeyDown={(e) => e.key === "Enter" && entrar()}
-        />
+        <div style={{ position: "relative" }}>
+          <input
+            type={ver ? "text" : "password"}
+            placeholder="Contraseña"
+            autoComplete="new-password"
+            style={{ ...S.input, paddingRight: 44 }}
+            value={clave}
+            onChange={(e) => { setClave(e.target.value); setError(false); }}
+            onKeyDown={(e) => e.key === "Enter" && entrar()}
+          />
+          <button
+            type="button"
+            onClick={() => setVer(!ver)}
+            title={ver ? "Ocultar contraseña" : "Ver contraseña"}
+            style={{
+              position: "absolute", right: 8, top: "50%", transform: "translateY(-38%)",
+              background: "none", border: "none", cursor: "pointer", fontSize: 19, padding: 4,
+            }}
+          >{ver ? "🙈" : "👁️"}</button>
+        </div>
         {error && <div style={{ color: "#dc2626", fontSize: 13, marginTop: 8 }}>Contraseña incorrecta</div>}
         <button style={{ ...S.btn, width: "100%", marginTop: 14 }} onClick={entrar}>Ingresar</button>
       </div>
@@ -356,15 +388,35 @@ function Tablero({ expedientes, abrir }) {
 
 /* ---------- Nuevo expediente ---------- */
 
-function NuevoExpediente({ onCreado, onCancelar }) {
-  const [f, setF] = useState({
-    nroExpediente: "", paciente: "", dni: "", fechaNacimiento: "",
-    domicilio: "", telefono: "", diagnostico: "", modulo: "",
-    detalleServicios: "", periodoMeses: 6, periodoTexto: "",
+function NuevoExpediente({ modo = "nuevo", inicial = null, expId = null, onCreado, onCancelar }) {
+  const [f, setF] = useState(() => {
+    if (inicial) {
+      return {
+        nroExpediente: modo === "renovar" ? "" : (inicial.nroExpediente || ""),
+        paciente: inicial.paciente || "", dni: inicial.dni || "",
+        fechaNacimiento: inicial.fechaNacimiento || "",
+        domicilio: inicial.domicilio || "", telefono: inicial.telefono || "",
+        diagnostico: inicial.diagnostico || "", modulo: inicial.modulo || "",
+        detalleServicios: inicial.detalleServicios || "",
+        periodoMeses: inicial.periodoMeses || 6,
+        periodoTexto: modo === "renovar" ? "" : (inicial.periodoTexto || ""),
+      };
+    }
+    return {
+      nroExpediente: "", paciente: "", dni: "", fechaNacimiento: "",
+      domicilio: "", telefono: "", diagnostico: "", modulo: "",
+      detalleServicios: "", periodoMeses: 6, periodoTexto: "",
+    };
   });
   const [guardando, setGuardando] = useState(false);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const edad = calcularEdad(f.fechaNacimiento);
+
+  const titulos = {
+    nuevo: ["Nuevo expediente", "Estos datos se usan para el mail de cotización y para todos los documentos posteriores. Se cargan una sola vez."],
+    editar: ["✏️ Editar expediente", "Corregí lo que haga falta y guardá. El avance de etapas y la cotización enviada no se pierden."],
+    renovar: ["🔄 Renovación de período", "Los datos del paciente ya vienen cargados. Completá el N° de expediente NUEVO y el período nuevo, y se crea el trámite de renovación desde cero."],
+  };
 
   const guardar = async () => {
     if (!f.nroExpediente || !f.paciente || !f.dni || !f.modulo) {
@@ -373,9 +425,14 @@ function NuevoExpediente({ onCreado, onCancelar }) {
     }
     setGuardando(true);
     try {
-      const data = { ...f, edad, etapa: 0, creado: new Date().toISOString() };
-      const ref = await addDoc(collection(db, COL_EXPEDIENTES), data);
-      onCreado({ id: ref.id, ...data });
+      if (modo === "editar" && expId) {
+        await updateDoc(doc(db, COL_EXPEDIENTES, expId), { ...f, edad });
+        onCreado({ id: expId, ...f, edad });
+      } else {
+        const data = { ...f, edad, etapa: 0, creado: new Date().toISOString() };
+        const ref = await addDoc(collection(db, COL_EXPEDIENTES), data);
+        onCreado({ id: ref.id, ...data });
+      }
     } catch (e) {
       alert("Error al guardar: " + e.message);
     }
@@ -384,10 +441,10 @@ function NuevoExpediente({ onCreado, onCancelar }) {
 
   return (
     <div style={S.card}>
-      <h3 style={{ color: "#075e75", marginBottom: 4 }}>Nuevo expediente</h3>
-      <div style={{ fontSize: 13, color: "#64748b" }}>Estos datos se usan para el mail de cotización y para todos los documentos posteriores. Se cargan una sola vez.</div>
+      <h3 style={{ color: "#075e75", marginBottom: 4 }}>{titulos[modo][0]}</h3>
+      <div style={{ fontSize: 13, color: "#64748b" }}>{titulos[modo][1]}</div>
 
-      <label style={S.label}>N° de expediente (ej: 1694/415/G/2026)</label>
+      <label style={S.label}>N° de expediente (ej: 1694/415/G/2026){modo === "renovar" && " — PONÉ EL NÚMERO NUEVO"}</label>
       <input style={S.input} value={f.nroExpediente} onChange={set("nroExpediente")} placeholder="0000/000/G/2026" />
 
       <label style={S.label}>Apellido y nombre del paciente</label>
@@ -436,7 +493,7 @@ function NuevoExpediente({ onCreado, onCancelar }) {
 
       <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
         <button style={S.btn} onClick={guardar} disabled={guardando}>
-          {guardando ? "Guardando..." : "💾 Crear expediente"}
+          {guardando ? "Guardando..." : modo === "editar" ? "💾 Guardar cambios" : modo === "renovar" ? "🔄 Crear renovación" : "💾 Crear expediente"}
         </button>
         <button style={S.btnSec} onClick={onCancelar}>Cancelar</button>
       </div>
@@ -446,10 +503,15 @@ function NuevoExpediente({ onCreado, onCancelar }) {
 
 /* ---------- Detalle de expediente ---------- */
 
-function DetalleExpediente({ exp, proveedores, volver }) {
+function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
   return (
     <div>
-      <button style={{ ...S.btnSec, marginBottom: 12 }} onClick={volver}>← Volver al tablero</button>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        <button style={S.btnSec} onClick={volver}>← Volver al tablero</button>
+        <div style={{ flex: 1 }} />
+        <button style={S.btnSec} onClick={editar}>✏️ Editar datos</button>
+        <button style={S.btnSec} onClick={renovar}>🔄 Renovar período</button>
+      </div>
 
       <div style={S.card}>
         <div style={{ fontWeight: 800, fontSize: 18, color: "#075e75" }}>{exp.paciente.toUpperCase()}</div>
