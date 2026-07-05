@@ -698,9 +698,65 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
         </div>
       )}
 
-      {exp.etapa >= 4 && (
-        <div style={{ ...S.card, background: "#f8fafc", color: "#64748b", fontSize: 14 }}>
-          🔜 <b>Próximas etapas: pases, resolución de contratación y orden de compra</b> — se habilitan en la Fase 3 del desarrollo. Mientras tanto, con el cuadro y la nota en PDF ya podés subir al SIGEDIG y girar a Asesoría Letrada como siempre.
+      {/* ============ FASE 3 ============ */}
+
+      {exp.etapa >= 5 && exp.paseLetrada && (
+        <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
+          <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Pase a Asesoría Letrada generado</div>
+          <div style={{ fontSize: 14, color: "#334155" }}>
+            <b>Fecha:</b> {formatearFecha(exp.paseLetrada.fecha)}<br />
+            {exp.paseLetrada.pdfUrl && <a href={exp.paseLetrada.pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📄 Pase en PDF (para SIGEDIG)</a>}
+            {exp.paseLetrada.docUrl && <> · <a href={exp.paseLetrada.docUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>✏️ Versión editable (Google Doc)</a></>}
+          </div>
+        </div>
+      )}
+      {exp.etapa === 4 && <PaseLetrada exp={exp} />}
+
+      {exp.etapa >= 6 && exp.resolucion && (
+        <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
+          <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Resolución Interna Nº {exp.resolucion.nro} generada</div>
+          <div style={{ fontSize: 14, color: "#334155" }}>
+            <b>Fecha:</b> {formatearFecha(exp.resolucion.fecha)}<br />
+            <b>Adjudicado:</b> {exp.resolucion.adjudicado} · <b>Monto total:</b> {formatoPesos(exp.resolucion.total)}<br />
+            {exp.resolucion.pdfUrl && <a href={exp.resolucion.pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📄 Resolución en PDF (para SIGEDIG)</a>}
+            {exp.resolucion.docUrl && <> · <a href={exp.resolucion.docUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>✏️ Versión editable (Google Doc)</a></>}
+          </div>
+        </div>
+      )}
+      {exp.etapa === 5 && <GenerarResolucion exp={exp} />}
+
+      {exp.etapa >= 7 && exp.paseTribunal && (
+        <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
+          <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Pase al Tribunal de Cuentas generado</div>
+          <div style={{ fontSize: 14, color: "#334155" }}>
+            <b>Fecha:</b> {formatearFecha(exp.paseTribunal.fecha)}<br />
+            {exp.paseTribunal.pdfUrl && <a href={exp.paseTribunal.pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📄 Pase en PDF (para SIGEDIG)</a>}
+            {exp.paseTribunal.docUrl && <> · <a href={exp.paseTribunal.docUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>✏️ Versión editable (Google Doc)</a></>}
+          </div>
+        </div>
+      )}
+      {exp.etapa === 6 && <PaseTribunal exp={exp} />}
+
+      {exp.etapa >= 8 && exp.oc && (
+        <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
+          <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Orden de Compra Nº {exp.oc.nro} enviada al adjudicado</div>
+          <div style={{ fontSize: 14, color: "#334155" }}>
+            <b>Fecha de envío:</b> {formatearFecha(exp.oc.fecha)}<br />
+            {exp.oc.firmante && (<><b>Enviado por:</b> {exp.oc.firmante}<br /></>)}
+            <b>Destinatarios:</b> {exp.oc.destinatarios}<br />
+            {exp.oc.pdfUrl && <a href={exp.oc.pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📄 Orden de compra en el Drive</a>}
+          </div>
+        </div>
+      )}
+      {exp.etapa === 7 && <OrdenCompraEnvio exp={exp} proveedores={proveedores} />}
+
+      {exp.etapa >= 8 && (
+        <div style={{ ...S.card, background: "#f0fdf4", border: "2px solid #16a34a", textAlign: "center" }}>
+          <div style={{ fontSize: 22 }}>🎉</div>
+          <div style={{ fontWeight: 800, color: "#166534", fontSize: 16 }}>Expediente completo</div>
+          <div style={{ fontSize: 13, color: "#475569", marginTop: 4 }}>
+            Las 8 etapas del circuito están cerradas. Cuando se acerque el fin del período, usá <b>🔄 Renovar período</b> para arrancar el trámite nuevo con los datos ya cargados.
+          </div>
         </div>
       )}
 
@@ -1116,6 +1172,383 @@ function GenerarNota({ exp }) {
 }
 
 
+
+/* ---------- FASE 3: Pases, Resolución y Orden de Compra ---------- */
+
+function mesAnioActual() {
+  const meses = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const d = new Date();
+  return meses[d.getMonth()] + " " + d.getFullYear();
+}
+
+/* ---------- Pase a Asesoría Letrada ---------- */
+
+function PaseLetrada({ exp }) {
+  const [fechaTexto, setFechaTexto] = useState(mesAnioActual());
+  const [anio, setAnio] = useState(String(new Date().getFullYear()));
+  const [ocupado, setOcupado] = useState(false);
+
+  const generar = async () => {
+    setOcupado(true);
+    try {
+      const res = await fetch(APPS_SCRIPT_URL, {
+        method: "POST",
+        body: JSON.stringify({
+          accion: "generarPase", clave: APPS_SCRIPT_CLAVE, tipo: "letrada",
+          nroExpediente: exp.nroExpediente, paciente: exp.paciente,
+          fechaTexto, anioPresupuesto: anio,
+        }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "Error en Apps Script");
+      await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
+        etapa: 5,
+        paseLetrada: {
+          fecha: new Date().toISOString(),
+          pdfUrl: data.pdfUrl || "", docUrl: data.docUrl || "",
+        },
+      });
+      alert("✅ Pase a Asesoría Letrada generado.");
+    } catch (e) {
+      alert("❌ Error al generar el pase: " + e.message);
+    }
+    setOcupado(false);
+  };
+
+  return (
+    <div style={{ ...S.card, borderLeft: "5px solid #f59e0b" }}>
+      <h3 style={{ color: "#075e75", marginBottom: 4 }}>⚖️ Pase a Asesoría Letrada</h3>
+      <div style={{ fontSize: 13, color: "#64748b" }}>
+        Genera la nota de pase para la intervención de Asesoría Letrada, con la firma de la Gerente. Cuando vuelva el informe jurídico favorable, seguís con la resolución.
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 10 }}>
+        <div>
+          <label style={S.label}>Fecha que sale en la nota</label>
+          <input style={S.input} value={fechaTexto} onChange={(e) => setFechaTexto(e.target.value)} placeholder="Julio 2026" />
+        </div>
+        <div>
+          <label style={S.label}>Presupuesto (año)</label>
+          <input style={S.input} value={anio} onChange={(e) => setAnio(e.target.value)} placeholder="2026" />
+        </div>
+      </div>
+
+      <button style={{ ...S.btn, marginTop: 16, width: "100%", fontSize: 16, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={generar}>
+        {ocupado ? "⏳ Generando..." : "⚖️ GENERAR PASE A ASESORÍA LETRADA (PDF)"}
+      </button>
+    </div>
+  );
+}
+
+/* ---------- Resolución Interna de contratación ---------- */
+
+function GenerarResolucion({ exp }) {
+  const total = (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6);
+  const [f, setF] = useState({
+    nroResolucion: "",
+    tipoTramite: "inicio",
+    fsSolicitud: "02,04",
+    fsPresupuesto: "",
+    fsCuadro: "",
+    fsDictamen: "",
+    directora: "Dra. Noelia Soledad Bottone",
+    anio: String(new Date().getFullYear()),
+    imputacion: exp.nota?.imputacion ||
+      "Jurisdicción 67 - Unid. Org. 965 - Recurso 10 - Finalidad/Función 314 - Programa 19 - Actividad 01 - Partida 300 - Subpartida 322",
+  });
+  const [ocupado, setOcupado] = useState(false);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+
+  const generar = async () => {
+    if (!f.nroResolucion) { alert("Cargá el N° de la resolución (ej: 3123/DGPRIS)."); return; }
+    if (!f.fsPresupuesto || !f.fsCuadro || !f.fsDictamen) {
+      if (!confirm("Faltan números de fojas (presupuesto, cuadro o dictamen). El documento va a salir con esos espacios vacíos. ¿Generar igual?")) return;
+    }
+    setOcupado(true);
+    try {
+      const res = await fetch(APPS_SCRIPT_URL, {
+        method: "POST",
+        body: JSON.stringify({
+          accion: "generarResolucion", clave: APPS_SCRIPT_CLAVE,
+          nroExpediente: exp.nroExpediente, paciente: exp.paciente,
+          modulo: exp.modulo, periodoTexto: exp.periodoTexto || "", periodoMeses: exp.periodoMeses,
+          adjudicado: exp.cuadro?.adjudicado || "", mensual: exp.cuadro?.mensual || 0, total,
+          nroResolucion: f.nroResolucion, tipoTramite: f.tipoTramite,
+          fsSolicitud: f.fsSolicitud, fsPresupuesto: f.fsPresupuesto,
+          fsCuadro: f.fsCuadro, fsDictamen: f.fsDictamen,
+          directora: f.directora, imputacion: f.imputacion, anioPresupuesto: f.anio,
+        }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "Error en Apps Script");
+      await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
+        etapa: 6,
+        resolucion: {
+          fecha: new Date().toISOString(),
+          nro: f.nroResolucion, tipoTramite: f.tipoTramite,
+          adjudicado: exp.cuadro?.adjudicado || "", total,
+          montoLetras: data.montoLetras || "",
+          fojas: { solicitud: f.fsSolicitud, presupuesto: f.fsPresupuesto, cuadro: f.fsCuadro, dictamen: f.fsDictamen },
+          pdfUrl: data.pdfUrl || "", docUrl: data.docUrl || "",
+        },
+      });
+      alert("✅ Resolución Interna Nº " + f.nroResolucion + " generada.");
+    } catch (e) {
+      alert("❌ Error al generar la resolución: " + e.message);
+    }
+    setOcupado(false);
+  };
+
+  return (
+    <div style={{ ...S.card, borderLeft: "5px solid #f59e0b" }}>
+      <h3 style={{ color: "#075e75", marginBottom: 4 }}>📜 Resolución Interna de contratación</h3>
+      <div style={{ fontSize: 13, color: "#64748b" }}>
+        El monto, las letras, el adjudicado y el período salen solos del expediente y se replican en todos los artículos. Vos solo cargás el N° de resolución y las fojas mirando el expediente físico.
+      </div>
+
+      <div style={{ background: "#e0f2fe", borderRadius: 8, padding: 10, marginTop: 12, fontSize: 14, color: "#075e75", fontWeight: 700 }}>
+        Adjudicado: {exp.cuadro?.adjudicado} · {formatoPesos(exp.cuadro?.mensual)}/mes · Total {exp.periodoMeses} meses: {formatoPesos(total)}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 130px", gap: 10 }}>
+        <div>
+          <label style={S.label}>N° de Resolución Interna</label>
+          <input style={S.input} value={f.nroResolucion} onChange={(e) => setF({ ...f, nroResolucion: e.target.value.toUpperCase() })} placeholder="3123/DGPRIS" />
+        </div>
+        <div>
+          <label style={S.label}>Presupuesto (año)</label>
+          <input style={S.input} value={f.anio} onChange={set("anio")} placeholder="2026" />
+        </div>
+      </div>
+
+      <label style={S.label}>Tipo de trámite (así aparece en el texto: "se solicita ___ de servicios")</label>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+        {["inicio", "ampliación", "renovación"].map((t) => (
+          <label key={t} style={{
+            display: "flex", alignItems: "center", gap: 6, padding: "7px 12px",
+            borderRadius: 8, border: "1.5px solid " + (f.tipoTramite === t ? "#0891b2" : "#cbd5e1"),
+            background: f.tipoTramite === t ? "#e0f2fe" : "#fff", cursor: "pointer", fontSize: 14, fontWeight: 600,
+          }}>
+            <input type="radio" name="tipoTramite" checked={f.tipoTramite === t} onChange={() => setF({ ...f, tipoTramite: t })} />
+            {t}
+          </label>
+        ))}
+      </div>
+
+      <label style={{ ...S.label, marginTop: 16 }}>📑 Fojas del expediente (miralas en el expediente físico / SIGEDIG)</label>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10 }}>
+        <div>
+          <label style={{ ...S.label, marginTop: 4, fontWeight: 600 }}>Solicitud (fs.)</label>
+          <input style={S.input} value={f.fsSolicitud} onChange={set("fsSolicitud")} placeholder="02,04" />
+        </div>
+        <div>
+          <label style={{ ...S.label, marginTop: 4, fontWeight: 600 }}>Presupuesto (fs.)</label>
+          <input style={S.input} value={f.fsPresupuesto} onChange={set("fsPresupuesto")} placeholder="31" />
+        </div>
+        <div>
+          <label style={{ ...S.label, marginTop: 4, fontWeight: 600 }}>Cuadro comp. (fs.)</label>
+          <input style={S.input} value={f.fsCuadro} onChange={set("fsCuadro")} placeholder="32" />
+        </div>
+        <div>
+          <label style={{ ...S.label, marginTop: 4, fontWeight: 600 }}>Dictamen aud. (fs.)</label>
+          <input style={S.input} value={f.fsDictamen} onChange={set("fsDictamen")} placeholder="34" />
+        </div>
+      </div>
+
+      <label style={S.label}>Firma (Directora del Programa)</label>
+      <input style={S.input} value={f.directora} onChange={set("directora")} />
+
+      <label style={S.label}>Imputación presupuestaria (Artículo 2º — revisala si cambió el ejercicio)</label>
+      <textarea style={{ ...S.input, minHeight: 70 }} value={f.imputacion} onChange={set("imputacion")} />
+
+      <button style={{ ...S.btn, marginTop: 16, width: "100%", fontSize: 16, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={generar}>
+        {ocupado ? "⏳ Generando..." : "📜 GENERAR RESOLUCIÓN INTERNA (PDF)"}
+      </button>
+    </div>
+  );
+}
+
+/* ---------- Pase al Tribunal de Cuentas ---------- */
+
+function PaseTribunal({ exp }) {
+  const [ocupado, setOcupado] = useState(false);
+
+  const generar = async () => {
+    setOcupado(true);
+    try {
+      const res = await fetch(APPS_SCRIPT_URL, {
+        method: "POST",
+        body: JSON.stringify({
+          accion: "generarPase", clave: APPS_SCRIPT_CLAVE, tipo: "tribunal",
+          nroExpediente: exp.nroExpediente, paciente: exp.paciente,
+        }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "Error en Apps Script");
+      await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
+        etapa: 7,
+        paseTribunal: {
+          fecha: new Date().toISOString(),
+          pdfUrl: data.pdfUrl || "", docUrl: data.docUrl || "",
+        },
+      });
+      alert("✅ Pase al Tribunal de Cuentas generado.");
+    } catch (e) {
+      alert("❌ Error al generar el pase: " + e.message);
+    }
+    setOcupado(false);
+  };
+
+  return (
+    <div style={{ ...S.card, borderLeft: "5px solid #f59e0b" }}>
+      <h3 style={{ color: "#075e75", marginBottom: 4 }}>🏛️ Pase al Tribunal de Cuentas</h3>
+      <div style={{ fontSize: 13, color: "#64748b" }}>
+        Genera la nota solicitando la intervención de competencia del Honorable Tribunal de Cuentas sobre el <b>Expediente {exp.nroExpediente}</b>, con fecha de hoy y la firma de la Gerente.
+      </div>
+
+      <button style={{ ...S.btn, marginTop: 16, width: "100%", fontSize: 16, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={generar}>
+        {ocupado ? "⏳ Generando..." : "🏛️ GENERAR PASE AL TRIBUNAL DE CUENTAS (PDF)"}
+      </button>
+    </div>
+  );
+}
+
+/* ---------- Orden de compra + mail final al adjudicado ---------- */
+
+function generarCuerpoAdjudicacion(exp, nroOC, firmante) {
+  return (
+`Estimados:
+
+INICIO DE PRESTACIÓN expte ${exp.nroExpediente} ${exp.paciente.toUpperCase()}. ${(exp.modulo || "").toUpperCase()}. En la que se Adjudica a uds como Proveedores de la Prestación de Servicios.
+
+Se solicita se nos informe vía mail:
+
+• RECEPCIÓN DEL MAIL.
+• FECHA DE INICIO EN LA QUE SE BRINDARÁ LA PRESTACIÓN.
+
+ENVÍO Nº DE ORDEN ${nroOC || "____"}.-
+
+--
+Confirmar Recepción
+Atte. ${firmante}
+
+Internaciones Domiciliarias.
+Oficina de Compras y Contrataciones.
+Gerencia Administrativa.`
+  );
+}
+
+function OrdenCompraEnvio({ exp, proveedores }) {
+  const adjudicado = exp.cuadro?.adjudicado || "";
+  const provAdj = proveedores.find((p) => p.nombre === adjudicado);
+  const firmaInicial = (USUARIOS.find((u) => u.id === exp.responsable)?.firma) || FIRMANTES[0];
+
+  const [nroOC, setNroOC] = useState("");
+  const [destinatarios, setDestinatarios] = useState(provAdj?.emails || "");
+  const [firmante, setFirmante] = useState(firmaInicial);
+  const [asunto, setAsunto] = useState(
+    `ENVIO ORDEN DE COMPRA ${(exp.modulo || "").toUpperCase()} ${exp.paciente.toUpperCase()}`
+  );
+  const [cuerpo, setCuerpo] = useState(generarCuerpoAdjudicacion(exp, "", firmaInicial));
+  const [archivo, setArchivo] = useState(null);
+  const [enviando, setEnviando] = useState(false);
+
+  const cambiarFirmante = (nuevo) => {
+    setFirmante(nuevo);
+    setCuerpo(generarCuerpoAdjudicacion(exp, nroOC, nuevo));
+  };
+  const cambiarNroOC = (v) => {
+    setNroOC(v);
+    setCuerpo(generarCuerpoAdjudicacion(exp, v, firmante));
+  };
+
+  const enviar = async () => {
+    if (!nroOC) { alert("Cargá el N° de la orden de compra."); return; }
+    if (!archivo) { alert("Adjuntá el PDF de la orden de compra (la que hiciste en el sistema del SIPROSA)."); return; }
+    const listaDest = destinatarios.split(",").map((e) => e.trim()).filter(Boolean);
+    if (listaDest.length === 0) { alert("Cargá al menos un correo de destino."); return; }
+    if (!confirm(`Se enviará el mail de adjudicación con la OC Nº ${nroOC} adjunta a:\n\n${listaDest.map((d) => "• " + d).join("\n")}\n\n¿Confirmás el envío?`)) return;
+
+    setEnviando(true);
+    try {
+      const base64 = await leerArchivoBase64(archivo);
+      const res = await fetch(APPS_SCRIPT_URL, {
+        method: "POST",
+        body: JSON.stringify({
+          accion: "enviarAdjudicacion", clave: APPS_SCRIPT_CLAVE,
+          nroExpediente: exp.nroExpediente, paciente: exp.paciente,
+          modulo: exp.modulo, nroOC, firmante,
+          asunto, cuerpo, destinatarios: listaDest,
+          adjunto: { nombre: archivo.name, mimeType: archivo.type || "application/pdf", base64 },
+        }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "Error en Apps Script");
+
+      await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
+        etapa: 8,
+        oc: {
+          fecha: new Date().toISOString(),
+          nro: nroOC, firmante,
+          destinatarios: listaDest.join(", "),
+          pdfUrl: data.ocPdfUrl || "",
+        },
+      });
+      alert("✅ Mail de adjudicación enviado con la OC Nº " + nroOC + ". ¡Expediente completo! 🎉");
+    } catch (e) {
+      alert("❌ Error al enviar: " + e.message);
+    }
+    setEnviando(false);
+  };
+
+  return (
+    <div style={{ ...S.card, borderLeft: "5px solid #f59e0b" }}>
+      <h3 style={{ color: "#075e75", marginBottom: 4 }}>🧾 Orden de compra y mail al adjudicado</h3>
+      <div style={{ fontSize: 13, color: "#64748b" }}>
+        La OC la emitís en el sistema del SIPROSA como siempre. Acá la subís en PDF, cargás el número, y el sistema se la manda a <b>{adjudicado || "el proveedor adjudicado"}</b> con el texto oficial, tu firma y los logos. La OC queda guardada también en el Drive del expediente.
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "180px 1fr", gap: 10 }}>
+        <div>
+          <label style={S.label}>N° de orden de compra</label>
+          <input style={S.input} value={nroOC} onChange={(e) => cambiarNroOC(e.target.value)} placeholder="18344" />
+        </div>
+        <div>
+          <label style={S.label}>Correo(s) del adjudicado — separados por coma</label>
+          <input style={S.input} value={destinatarios} onChange={(e) => setDestinatarios(e.target.value)} placeholder="correo@proveedor.com.ar" />
+        </div>
+      </div>
+
+      <label style={S.label}>PDF de la orden de compra (obligatorio — va adjunto al mail)</label>
+      <input type="file" accept="application/pdf" style={{ marginTop: 6 }} onChange={(e) => setArchivo(e.target.files[0])} />
+      {archivo && <div style={{ fontSize: 13, color: "#334155", marginTop: 6 }}>📎 {archivo.name} ({(archivo.size / 1024 / 1024).toFixed(1)} MB)</div>}
+
+      <label style={S.label}>¿Quién envía este mail? (la firma sale en el mail)</label>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+        {FIRMANTES.map((fi) => (
+          <label key={fi} style={{
+            display: "flex", alignItems: "center", gap: 6, padding: "7px 12px",
+            borderRadius: 8, border: "1.5px solid " + (firmante === fi ? "#0891b2" : "#cbd5e1"),
+            background: firmante === fi ? "#e0f2fe" : "#fff", cursor: "pointer", fontSize: 14, fontWeight: 600,
+          }}>
+            <input type="radio" name="firmante-oc" checked={firmante === fi} onChange={() => cambiarFirmante(fi)} />
+            {fi}
+          </label>
+        ))}
+      </div>
+
+      <label style={S.label}>Asunto</label>
+      <input style={S.input} value={asunto} onChange={(e) => setAsunto(e.target.value)} />
+
+      <label style={S.label}>Cuerpo del mail (podés editar los textos; las negritas y el formato oficial se aplican automáticamente al enviar)</label>
+      <textarea style={{ ...S.input, minHeight: 220, fontFamily: "inherit", fontSize: 14 }} value={cuerpo} onChange={(e) => setCuerpo(e.target.value)} />
+
+      <button style={{ ...S.btn, marginTop: 18, width: "100%", fontSize: 16, opacity: enviando ? 0.6 : 1 }} disabled={enviando} onClick={enviar}>
+        {enviando ? "⏳ Enviando mail y guardando en Drive..." : "📨 ENVIAR ORDEN DE COMPRA AL ADJUDICADO"}
+      </button>
+    </div>
+  );
+}
 
 function Proveedores({ proveedores }) {
   const [nuevo, setNuevo] = useState({ nombre: "", emails: "" });
