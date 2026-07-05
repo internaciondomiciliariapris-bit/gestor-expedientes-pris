@@ -152,6 +152,10 @@ function numeroEnLetrasSimple(n) {
   return letras[n] || n;
 }
 
+function formatoPesos(n) {
+  return "$ " + Number(n || 0).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 function leerArchivoBase64(file) {
   return new Promise((res, rej) => {
     const r = new FileReader();
@@ -553,9 +557,36 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
           </div>
         </div>
       )}
-      {exp.etapa >= 1 && (
+      {exp.etapa === 1 && <RegistroPresupuestos exp={exp} />}
+
+      {exp.etapa >= 3 && exp.cuadro && (
+        <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
+          <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Cuadro comparativo generado — Adjudicado: {exp.cuadro.adjudicado}</div>
+          <div style={{ fontSize: 14, color: "#334155" }}>
+            <b>Fecha de adjudicación:</b> {formatearFecha(exp.cuadro.fecha)}<br />
+            <b>Precio mensual:</b> {formatoPesos(exp.cuadro.mensual)} · <b>Total {exp.periodoMeses} meses:</b> {formatoPesos(exp.cuadro.total)}<br />
+            {exp.cuadro.pdfUrl && <a href={exp.cuadro.pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📄 Cuadro en PDF (para SIGEDIG)</a>}
+            {exp.cuadro.docUrl && <> · <a href={exp.cuadro.docUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>✏️ Versión editable (Google Doc)</a></>}
+          </div>
+        </div>
+      )}
+
+      {exp.etapa === 3 && <GenerarNota exp={exp} />}
+
+      {exp.etapa >= 4 && exp.nota && (
+        <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
+          <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Nota de afectación presupuestaria generada</div>
+          <div style={{ fontSize: 14, color: "#334155" }}>
+            <b>Importe total:</b> {formatoPesos(exp.nota.monto)} ({exp.nota.montoLetras})<br />
+            {exp.nota.pdfUrl && <a href={exp.nota.pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📄 Nota en PDF (para SIGEDIG)</a>}
+            {exp.nota.docUrl && <> · <a href={exp.nota.docUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>✏️ Versión editable (Google Doc)</a></>}
+          </div>
+        </div>
+      )}
+
+      {exp.etapa >= 4 && (
         <div style={{ ...S.card, background: "#f8fafc", color: "#64748b", fontSize: 14 }}>
-          🔜 <b>Próxima etapa: registro de presupuestos y cuadro comparativo</b> — se habilita en la Fase 2 del desarrollo.
+          🔜 <b>Próximas etapas: pases, resolución de contratación y orden de compra</b> — se habilitan en la Fase 3 del desarrollo. Mientras tanto, con el cuadro y la nota en PDF ya podés subir al SIGEDIG y girar a Asesoría Letrada como siempre.
         </div>
       )}
 
@@ -707,7 +738,252 @@ function EnvioCotizacion({ exp, proveedores }) {
   );
 }
 
-/* ---------- Proveedores ---------- */
+/* ---------- Registro de presupuestos (Fase 2) ---------- */
+
+function RegistroPresupuestos({ exp }) {
+  const consultados = (exp.cotizacion?.proveedores || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const guardados = exp.presupuestos || {};
+  const [datos, setDatos] = useState(() => {
+    const d = {};
+    consultados.forEach((n) => {
+      d[n] = guardados[n] || { estado: "", unitario: "", mensual: "", pdfNombre: "" };
+    });
+    return d;
+  });
+  const [archivos, setArchivos] = useState({});
+  const [ocupado, setOcupado] = useState(false);
+
+  const setProv = (nombre, campo, valor) =>
+    setDatos({ ...datos, [nombre]: { ...datos[nombre], [campo]: valor } });
+
+  const guardarProveedor = async (nombre) => {
+    const d = datos[nombre];
+    if (!d.estado) { alert("Marcá el estado del presupuesto de " + nombre); return; }
+    if (d.estado === "cotizo" && (!d.unitario || !d.mensual)) {
+      alert("Cargá el precio unitario y el precio mensual de " + nombre); return;
+    }
+    setOcupado(true);
+    try {
+      let pdfNombre = d.pdfNombre || "";
+      const archivo = archivos[nombre];
+      if (archivo) {
+        const base64 = await leerArchivoBase64(archivo);
+        const res = await fetch(APPS_SCRIPT_URL, {
+          method: "POST",
+          body: JSON.stringify({
+            accion: "subirPresupuesto", clave: APPS_SCRIPT_CLAVE,
+            nroExpediente: exp.nroExpediente, paciente: exp.paciente,
+            proveedor: nombre,
+            adjunto: { nombre: archivo.name, mimeType: archivo.type || "application/pdf", base64 },
+          }),
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || "Error al subir el PDF");
+        pdfNombre = archivo.name;
+      }
+      const registro = {
+        estado: d.estado,
+        unitario: d.estado === "cotizo" ? Number(d.unitario) : null,
+        mensual: d.estado === "cotizo" ? Number(d.mensual) : null,
+        pdfNombre,
+        fecha: new Date().toISOString(),
+      };
+      await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), { ["presupuestos." + nombre]: registro });
+      setDatos({ ...datos, [nombre]: { ...d, pdfNombre } });
+      alert("✅ Guardado: " + nombre);
+    } catch (e) {
+      alert("❌ Error: " + e.message);
+    }
+    setOcupado(false);
+  };
+
+  const cotizantes = consultados.filter((n) => (guardados[n]?.estado) === "cotizo");
+  const pendientes = consultados.filter((n) => !guardados[n]?.estado);
+
+  const generarCuadro = async () => {
+    if (cotizantes.length === 0) { alert("Todavía no hay ningún proveedor con presupuesto cargado (Cotizó)."); return; }
+    if (pendientes.length > 0 && !confirm(`Hay proveedores sin marcar: ${pendientes.join(", ")}.\n\nSi seguís, quedarán registrados como SIN RESPUESTA. ¿Continuar?`)) return;
+
+    // ganador: menor precio mensual entre los que cotizaron
+    let ganador = null;
+    cotizantes.forEach((n) => {
+      const p = guardados[n];
+      if (!ganador || p.mensual < guardados[ganador].mensual) ganador = n;
+    });
+    const g = guardados[ganador];
+    const total = g.mensual * Number(exp.periodoMeses || 6);
+
+    if (!confirm(`CUADRO COMPARATIVO\n\nAdjudicación al menor precio:\n→ ${ganador}: ${formatoPesos(g.mensual)}/mes · Total ${exp.periodoMeses} meses: ${formatoPesos(total)}\n\n¿Generar el cuadro comparativo en PDF?`)) return;
+
+    setOcupado(true);
+    try {
+      const lista = consultados.map((n) => ({
+        nombre: n,
+        estado: guardados[n]?.estado || "sin_respuesta",
+        unitario: guardados[n]?.unitario || null,
+        mensual: guardados[n]?.mensual || null,
+      }));
+      const res = await fetch(APPS_SCRIPT_URL, {
+        method: "POST",
+        body: JSON.stringify({
+          accion: "generarCuadro", clave: APPS_SCRIPT_CLAVE,
+          nroExpediente: exp.nroExpediente, paciente: exp.paciente,
+          modulo: exp.modulo, detalleServicios: exp.detalleServicios,
+          periodoTexto: exp.periodoTexto, periodoMeses: exp.periodoMeses,
+          proveedores: lista,
+          adjudicado: { nombre: ganador, unitario: g.unitario, mensual: g.mensual, total },
+        }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "Error en Apps Script");
+      await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
+        etapa: 3,
+        cuadro: {
+          fecha: new Date().toISOString(),
+          adjudicado: ganador,
+          unitario: g.unitario, mensual: g.mensual, total,
+          pdfUrl: data.pdfUrl || "", docUrl: data.docUrl || "",
+        },
+      });
+      alert("✅ Cuadro comparativo generado. Adjudicado: " + ganador);
+    } catch (e) {
+      alert("❌ Error al generar el cuadro: " + e.message);
+    }
+    setOcupado(false);
+  };
+
+  return (
+    <div style={{ ...S.card, borderLeft: "5px solid #f59e0b" }}>
+      <h3 style={{ color: "#075e75", marginBottom: 4 }}>📬 Registro de presupuestos</h3>
+      <div style={{ fontSize: 13, color: "#64748b" }}>
+        A medida que respondan al mail, cargá acá cada proveedor: estado, precios y el PDF del presupuesto (queda guardado en el Drive del expediente). Cuando estén todos, generá el cuadro comparativo.
+      </div>
+
+      {consultados.map((nombre) => {
+        const d = datos[nombre] || {};
+        const g = guardados[nombre];
+        return (
+          <div key={nombre} style={{
+            border: "1.5px solid " + (g?.estado ? "#86efac" : "#e2e8f0"),
+            borderRadius: 10, padding: 12, marginTop: 12,
+            background: g?.estado ? "#f0fdf4" : "#fff",
+          }}>
+            <div style={{ fontWeight: 800, color: "#075e75", marginBottom: 6 }}>
+              {nombre} {g?.estado === "cotizo" && `✅ Cotizó: ${formatoPesos(g.mensual)}/mes`}
+              {g?.estado === "desestimo" && "🚫 Desestimó"}
+              {g?.estado === "sin_respuesta" && "⏳ Sin respuesta"}
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {[["cotizo", "💰 Cotizó"], ["desestimo", "🚫 Desestimó"], ["sin_respuesta", "⏳ No respondió"]].map(([v, label]) => (
+                <label key={v} style={{
+                  display: "flex", alignItems: "center", gap: 5, padding: "6px 10px",
+                  borderRadius: 8, border: "1.5px solid " + (d.estado === v ? "#0891b2" : "#cbd5e1"),
+                  background: d.estado === v ? "#e0f2fe" : "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600,
+                }}>
+                  <input type="radio" name={"estado-" + nombre} checked={d.estado === v} onChange={() => setProv(nombre, "estado", v)} />
+                  {label}
+                </label>
+              ))}
+            </div>
+            {d.estado === "cotizo" && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 8 }}>
+                <div>
+                  <label style={{ ...S.label, marginTop: 4 }}>Precio unitario ($)</label>
+                  <input type="number" style={S.input} value={d.unitario} onChange={(e) => setProv(nombre, "unitario", e.target.value)} placeholder="12250" />
+                </div>
+                <div>
+                  <label style={{ ...S.label, marginTop: 4 }}>Precio mensual ($)</label>
+                  <input type="number" style={S.input} value={d.mensual} onChange={(e) => setProv(nombre, "mensual", e.target.value)} placeholder="367500" />
+                </div>
+                <div style={{ gridColumn: "1 / -1" }}>
+                  <label style={{ ...S.label, marginTop: 0 }}>PDF del presupuesto {d.pdfNombre && `(guardado: ${d.pdfNombre})`}</label>
+                  <input type="file" accept="application/pdf" style={{ marginTop: 4 }}
+                    onChange={(e) => setArchivos({ ...archivos, [nombre]: e.target.files[0] })} />
+                </div>
+              </div>
+            )}
+            {d.estado && (
+              <button style={{ ...S.btnSec, marginTop: 10 }} disabled={ocupado} onClick={() => guardarProveedor(nombre)}>
+                💾 Guardar {nombre}
+              </button>
+            )}
+          </div>
+        );
+      })}
+
+      <button style={{ ...S.btn, marginTop: 18, width: "100%", fontSize: 16, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={generarCuadro}>
+        {ocupado ? "⏳ Procesando..." : "📊 GENERAR CUADRO COMPARATIVO (adjudica al menor precio)"}
+      </button>
+    </div>
+  );
+}
+
+/* ---------- Nota de afectación presupuestaria (Fase 2) ---------- */
+
+function GenerarNota({ exp }) {
+  const monto = (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6);
+  const [directora, setDirectora] = useState("Dra. Noellia Bottone");
+  const [imputacion, setImputacion] = useState(
+    "Jur: 67, U.O: 965, Fin/Fun: 314, Proy: 00, Subp: 00, Progr: 19, A/OB: 01, Part. Ppal.: 300, Subp: 322 – Fuente de financiamiento Nº 10 – Recursos Tesoro General de la Provincia – Presupuesto 2026"
+  );
+  const [ocupado, setOcupado] = useState(false);
+
+  const generar = async () => {
+    if (!exp.periodoTexto && !confirm("El expediente no tiene el período en texto (ej: Julio 2026 a Diciembre 2026). Podés cargarlo con ✏️ Editar datos. ¿Generar la nota igual?")) return;
+    setOcupado(true);
+    try {
+      const res = await fetch(APPS_SCRIPT_URL, {
+        method: "POST",
+        body: JSON.stringify({
+          accion: "generarNota", clave: APPS_SCRIPT_CLAVE,
+          nroExpediente: exp.nroExpediente, paciente: exp.paciente, dni: exp.dni,
+          modulo: exp.modulo, periodoTexto: exp.periodoTexto || "", periodoMeses: exp.periodoMeses,
+          monto, directora, imputacion,
+        }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "Error en Apps Script");
+      await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
+        etapa: 4,
+        nota: {
+          fecha: new Date().toISOString(),
+          monto, montoLetras: data.montoLetras || "",
+          directora, imputacion,
+          pdfUrl: data.pdfUrl || "", docUrl: data.docUrl || "",
+        },
+      });
+      alert("✅ Nota de afectación generada.");
+    } catch (e) {
+      alert("❌ Error al generar la nota: " + e.message);
+    }
+    setOcupado(false);
+  };
+
+  return (
+    <div style={{ ...S.card, borderLeft: "5px solid #f59e0b" }}>
+      <h3 style={{ color: "#075e75", marginBottom: 4 }}>📄 Nota de afectación presupuestaria</h3>
+      <div style={{ fontSize: 13, color: "#64748b" }}>
+        Informa a la Dirección el gasto del período. El importe sale del cuadro comparativo y se escribe también en letras, automáticamente.
+      </div>
+
+      <div style={{ background: "#e0f2fe", borderRadius: 8, padding: 10, marginTop: 12, fontSize: 14, color: "#075e75", fontWeight: 700 }}>
+        Importe total ({exp.periodoMeses} meses · {exp.cuadro?.adjudicado}): {formatoPesos(monto)}
+      </div>
+
+      <label style={S.label}>Dirigida a (Directora del Programa)</label>
+      <input style={S.input} value={directora} onChange={(e) => setDirectora(e.target.value)} />
+
+      <label style={S.label}>Imputación presupuestaria (revisala si cambió el ejercicio)</label>
+      <textarea style={{ ...S.input, minHeight: 70 }} value={imputacion} onChange={(e) => setImputacion(e.target.value)} />
+
+      <button style={{ ...S.btn, marginTop: 16, width: "100%", fontSize: 16, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={generar}>
+        {ocupado ? "⏳ Generando..." : "📄 GENERAR NOTA DE AFECTACIÓN (PDF)"}
+      </button>
+    </div>
+  );
+}
+
+
 
 function Proveedores({ proveedores }) {
   const [nuevo, setNuevo] = useState({ nombre: "", emails: "" });
