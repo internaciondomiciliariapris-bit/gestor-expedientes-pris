@@ -31,13 +31,14 @@ const ADMIN_PASSWORD = "gerenciapris626";
 const LOGO_PRIS = "/logo-pris.png";
 const LOGO_GOBIERNO = "/logo-gobierno.png";
 
-// Firmantes del equipo (aparecen en el selector al enviar la cotización)
-const FIRMANTES = [
-  "Dipl. Jorge Barone",
-  "Julieta Aguirre",
-  "Paula Facchin",
-  "Yamila Avila",
+// Usuarios del equipo: nombre corto (para el tablero) y firma completa (para los mails)
+const USUARIOS = [
+  { id: "Jorge", firma: "Dipl. Jorge Barone" },
+  { id: "Yamila", firma: "Yamila Avila" },
+  { id: "Paula", firma: "Paula Facchin" },
+  { id: "Julieta", firma: "Julieta Aguirre" },
 ];
+const FIRMANTES = USUARIOS.map((u) => u.firma);
 
 /* ================================================================ */
 
@@ -209,10 +210,16 @@ const S = {
 
 export default function App() {
   const [logueado, setLogueado] = useState(localStorage.getItem("gexp_login") === "ok");
+  const [usuario, setUsuario] = useState(localStorage.getItem("gexp_usuario") || "");
   const [vista, setVista] = useState("tablero"); // tablero | nuevo | detalle | proveedores
   const [expedientes, setExpedientes] = useState([]);
   const [proveedores, setProveedores] = useState([]);
   const [expedienteSel, setExpedienteSel] = useState(null);
+
+  const elegirUsuario = (id) => {
+    localStorage.setItem("gexp_usuario", id);
+    setUsuario(id);
+  };
 
   useEffect(() => {
     signInAnonymously(auth).catch((e) => console.error("Auth:", e));
@@ -240,6 +247,7 @@ export default function App() {
   );
 
   if (!logueado) return <Login onOk={() => { localStorage.setItem("gexp_login", "ok"); setLogueado(true); }} />;
+  if (!usuario) return <SeleccionUsuario onElegir={elegirUsuario} />;
 
   return (
     <div style={S.page}>
@@ -254,23 +262,30 @@ export default function App() {
 
       <div style={S.container}>
         {/* barra de navegación */}
-        <div style={{ display: "flex", gap: 8, marginBottom: 18, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 18, flexWrap: "wrap", alignItems: "center" }}>
           <button style={vista === "tablero" ? S.btn : S.btnSec} onClick={() => setVista("tablero")}>📋 Tablero</button>
           <button style={vista === "nuevo" ? S.btn : S.btnSec} onClick={() => setVista("nuevo")}>➕ Nuevo expediente</button>
           <button style={vista === "proveedores" ? S.btn : S.btnSec} onClick={() => setVista("proveedores")}>🏢 Proveedores</button>
           <div style={{ flex: 1 }} />
-          <button style={S.btnRojo} onClick={() => { localStorage.removeItem("gexp_login"); setLogueado(false); }}>Salir</button>
+          <span
+            title="Cambiar de usuario"
+            onClick={() => { localStorage.removeItem("gexp_usuario"); setUsuario(""); }}
+            style={{ fontWeight: 800, color: "#075e75", cursor: "pointer", fontSize: 14, padding: "8px 12px", background: "#e0f2fe", borderRadius: 8 }}
+          >👤 {usuario} ▾</span>
+          <button style={S.btnRojo} onClick={() => { localStorage.removeItem("gexp_login"); localStorage.removeItem("gexp_usuario"); setUsuario(""); setLogueado(false); }}>Salir</button>
         </div>
 
         {vista === "tablero" && (
           <Tablero
             expedientes={expedientes}
+            usuario={usuario}
             abrir={(e) => { setExpedienteSel(e); setVista("detalle"); }}
           />
         )}
         {vista === "nuevo" && (
           <NuevoExpediente
             modo="nuevo"
+            usuario={usuario}
             onCreado={(e) => { setExpedienteSel(e); setVista("detalle"); }}
             onCancelar={() => setVista("tablero")}
           />
@@ -278,6 +293,7 @@ export default function App() {
         {vista === "editar" && expedienteVivo && (
           <NuevoExpediente
             modo="editar"
+            usuario={usuario}
             inicial={expedienteVivo}
             expId={expedienteVivo.id}
             onCreado={() => setVista("detalle")}
@@ -287,6 +303,7 @@ export default function App() {
         {vista === "renovar" && expedienteVivo && (
           <NuevoExpediente
             modo="renovar"
+            usuario={usuario}
             inicial={expedienteVivo}
             onCreado={(e) => { setExpedienteSel(e); setVista("detalle"); }}
             onCancelar={() => setVista("detalle")}
@@ -351,48 +368,93 @@ function Login({ onOk }) {
   );
 }
 
-/* ---------- Tablero ---------- */
+/* ---------- Selección de usuario ---------- */
 
-function Tablero({ expedientes, abrir }) {
-  if (expedientes.length === 0) {
-    return (
-      <div style={{ ...S.card, textAlign: "center", color: "#64748b", padding: 40 }}>
-        Todavía no hay expedientes cargados.<br />Creá el primero con el botón <b>➕ Nuevo expediente</b>.
-      </div>
-    );
-  }
-  return expedientes.map((e) => {
-    const dias = e.etapa >= 1 && e.cotizacion ? diasHabilesDesde(e.cotizacion.fecha) : null;
-    const vencido = dias !== null && dias > 5 && e.etapa === 1;
-    return (
-      <div key={e.id} style={{ ...S.card, cursor: "pointer" }} onClick={() => abrir(e)}>
-        <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-          <div>
-            <div style={{ fontWeight: 800, fontSize: 16, color: "#075e75" }}>{e.paciente.toUpperCase()}</div>
-            <div style={{ fontSize: 13, color: "#475569" }}>
-              Expte. {e.nroExpediente} · DNI {e.dni}
-            </div>
-            <div style={{ fontSize: 13, color: "#475569", marginTop: 2 }}>{e.modulo}</div>
-          </div>
-          <div style={{ textAlign: "right" }}>
-            <span style={S.chip(true, e.etapa > 0)}>
-              {e.etapa === 0 ? "⏳ Sin cotizar" : ETAPAS[e.etapa - 1] + " ✓"}
-            </span>
-            {dias !== null && e.etapa === 1 && (
-              <div style={{ fontSize: 12, marginTop: 6, fontWeight: 700, color: vencido ? "#dc2626" : "#f59e0b" }}>
-                {vencido ? `⚠️ Plazo vencido (${dias} días hábiles)` : `Día hábil ${dias} de 5`}
-              </div>
-            )}
-          </div>
+function SeleccionUsuario({ onElegir }) {
+  return (
+    <div style={{ ...S.page, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ ...S.card, width: 400, textAlign: "center" }}>
+        <img src={LOGO_PRIS} alt="" style={{ maxWidth: "75%", height: "auto", marginBottom: 10 }} onError={(e) => (e.target.style.display = "none")} />
+        <h2 style={{ color: "#075e75", marginBottom: 4 }}>¿Quién sos?</h2>
+        <div style={{ fontSize: 13, color: "#64748b", marginBottom: 16 }}>
+          Cada expediente queda a nombre de quien lo carga, y los mails salen con tu firma.
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          {USUARIOS.map((u) => (
+            <button key={u.id} style={{ ...S.btn, padding: "18px 10px", fontSize: 17 }} onClick={() => onElegir(u.id)}>
+              👤 {u.id}
+            </button>
+          ))}
         </div>
       </div>
-    );
-  });
+    </div>
+  );
+}
+
+/* ---------- Tablero ---------- */
+
+function Tablero({ expedientes, usuario, abrir }) {
+  const [filtro, setFiltro] = useState("mios"); // mios | todos
+  const lista = filtro === "mios"
+    ? expedientes.filter((e) => (e.responsable || "") === usuario)
+    : expedientes;
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+        <button style={filtro === "mios" ? S.btn : S.btnSec} onClick={() => setFiltro("mios")}>
+          👤 Mis expedientes ({expedientes.filter((e) => (e.responsable || "") === usuario).length})
+        </button>
+        <button style={filtro === "todos" ? S.btn : S.btnSec} onClick={() => setFiltro("todos")}>
+          👥 Todos ({expedientes.length})
+        </button>
+      </div>
+
+      {lista.length === 0 && (
+        <div style={{ ...S.card, textAlign: "center", color: "#64748b", padding: 40 }}>
+          {filtro === "mios"
+            ? <>No tenés expedientes a tu nombre todavía.<br />Creá uno con <b>➕ Nuevo expediente</b> o mirá la pestaña <b>👥 Todos</b>.</>
+            : <>Todavía no hay expedientes cargados.<br />Creá el primero con el botón <b>➕ Nuevo expediente</b>.</>}
+        </div>
+      )}
+
+      {lista.map((e) => {
+        const dias = e.etapa >= 1 && e.cotizacion ? diasHabilesDesde(e.cotizacion.fecha) : null;
+        const vencido = dias !== null && dias > 5 && e.etapa === 1;
+        return (
+          <div key={e.id} style={{ ...S.card, cursor: "pointer" }} onClick={() => abrir(e)}>
+            <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+              <div>
+                <div style={{ fontWeight: 800, fontSize: 16, color: "#075e75" }}>{e.paciente.toUpperCase()}</div>
+                <div style={{ fontSize: 13, color: "#475569" }}>
+                  Expte. {e.nroExpediente} · DNI {e.dni}
+                </div>
+                <div style={{ fontSize: 13, color: "#475569", marginTop: 2 }}>{e.modulo}</div>
+                <div style={{ fontSize: 12, marginTop: 4, fontWeight: 700, color: e.responsable ? "#0e7490" : "#94a3b8" }}>
+                  👤 {e.responsable || "Sin responsable asignado"}
+                </div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <span style={S.chip(true, e.etapa > 0)}>
+                  {e.etapa === 0 ? "⏳ Sin cotizar" : ETAPAS[e.etapa - 1] + " ✓"}
+                </span>
+                {dias !== null && e.etapa === 1 && (
+                  <div style={{ fontSize: 12, marginTop: 6, fontWeight: 700, color: vencido ? "#dc2626" : "#f59e0b" }}>
+                    {vencido ? `⚠️ Plazo vencido (${dias} días hábiles)` : `Día hábil ${dias} de 5`}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 /* ---------- Nuevo expediente ---------- */
 
-function NuevoExpediente({ modo = "nuevo", inicial = null, expId = null, onCreado, onCancelar }) {
+function NuevoExpediente({ modo = "nuevo", usuario = "", inicial = null, expId = null, onCreado, onCancelar }) {
   const [f, setF] = useState(() => {
     if (inicial) {
       return {
@@ -404,12 +466,14 @@ function NuevoExpediente({ modo = "nuevo", inicial = null, expId = null, onCread
         detalleServicios: inicial.detalleServicios || "",
         periodoMeses: inicial.periodoMeses || 6,
         periodoTexto: modo === "renovar" ? "" : (inicial.periodoTexto || ""),
+        responsable: modo === "renovar" ? usuario : (inicial.responsable || usuario),
       };
     }
     return {
       nroExpediente: "", paciente: "", dni: "", fechaNacimiento: "",
       domicilio: "", telefono: "", diagnostico: "", modulo: "",
       detalleServicios: "", periodoMeses: 6, periodoTexto: "",
+      responsable: usuario,
     };
   });
   const [guardando, setGuardando] = useState(false);
@@ -495,6 +559,20 @@ function NuevoExpediente({ modo = "nuevo", inicial = null, expId = null, onCread
         </div>
       </div>
 
+      <label style={S.label}>Responsable del expediente</label>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+        {USUARIOS.map((u) => (
+          <label key={u.id} style={{
+            display: "flex", alignItems: "center", gap: 6, padding: "7px 12px",
+            borderRadius: 8, border: "1.5px solid " + (f.responsable === u.id ? "#0891b2" : "#cbd5e1"),
+            background: f.responsable === u.id ? "#e0f2fe" : "#fff", cursor: "pointer", fontSize: 14, fontWeight: 600,
+          }}>
+            <input type="radio" name="responsable" checked={f.responsable === u.id} onChange={() => setF({ ...f, responsable: u.id })} />
+            👤 {u.id}
+          </label>
+        ))}
+      </div>
+
       <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
         <button style={S.btn} onClick={guardar} disabled={guardando}>
           {guardando ? "Guardando..." : modo === "editar" ? "💾 Guardar cambios" : modo === "renovar" ? "🔄 Crear renovación" : "💾 Crear expediente"}
@@ -525,6 +603,7 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
         <div style={{ fontSize: 14, color: "#475569" }}><b>Diagnóstico:</b> {exp.diagnostico}</div>
         <div style={{ fontSize: 14, color: "#475569" }}><b>Módulo:</b> {exp.modulo}</div>
         <div style={{ fontSize: 14, color: "#475569" }}><b>Período:</b> {exp.periodoMeses} meses {exp.periodoTexto && `(${exp.periodoTexto})`}</div>
+        <div style={{ fontSize: 13, marginTop: 4, fontWeight: 700, color: "#0e7490" }}>👤 Responsable: {exp.responsable || "sin asignar"}</div>
       </div>
 
       {/* semáforo de etapas */}
@@ -615,10 +694,11 @@ function BotonEliminar({ exp, volver }) {
 
 function EnvioCotizacion({ exp, proveedores }) {
   const activos = proveedores.filter((p) => p.activo);
+  const firmaInicial = (USUARIOS.find((u) => u.id === exp.responsable)?.firma) || FIRMANTES[0];
   const [seleccion, setSeleccion] = useState({});
-  const [firmante, setFirmante] = useState(FIRMANTES[0]);
+  const [firmante, setFirmante] = useState(firmaInicial);
   const [asunto, setAsunto] = useState(`SOLICITAMOS COTIZACION PARA ${exp.paciente.toUpperCase()}`);
-  const [cuerpo, setCuerpo] = useState(generarCuerpoMail(exp, FIRMANTES[0]));
+  const [cuerpo, setCuerpo] = useState(generarCuerpoMail(exp, firmaInicial));
   const [archivos, setArchivos] = useState([]);
   const [enviando, setEnviando] = useState(false);
 
