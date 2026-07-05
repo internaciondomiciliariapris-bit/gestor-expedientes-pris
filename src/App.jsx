@@ -247,7 +247,12 @@ export default function App() {
   );
 
   if (!logueado) return <Login onOk={() => { localStorage.setItem("gexp_login", "ok"); setLogueado(true); }} />;
-  if (!usuario) return <SeleccionUsuario onElegir={elegirUsuario} />;
+  if (!usuario) return (
+    <SeleccionUsuario
+      onElegir={elegirUsuario}
+      onVolver={() => { localStorage.removeItem("gexp_login"); setLogueado(false); }}
+    />
+  );
 
   return (
     <div style={S.page}>
@@ -271,9 +276,20 @@ export default function App() {
             title="Cambiar de usuario"
             onClick={() => { localStorage.removeItem("gexp_usuario"); setUsuario(""); }}
             style={{ fontWeight: 800, color: "#075e75", cursor: "pointer", fontSize: 14, padding: "8px 12px", background: "#e0f2fe", borderRadius: 8 }}
-          >👤 {usuario} ▾</span>
+          >👤 {usuario} · Cambiar</span>
           <button style={S.btnRojo} onClick={() => { localStorage.removeItem("gexp_login"); localStorage.removeItem("gexp_usuario"); setUsuario(""); setLogueado(false); }}>Salir</button>
         </div>
+
+        {/* botón Volver según la pantalla */}
+        {vista === "nuevo" && (
+          <button style={{ ...S.btnSec, marginBottom: 12 }} onClick={() => setVista("tablero")}>← Volver al tablero</button>
+        )}
+        {vista === "proveedores" && (
+          <button style={{ ...S.btnSec, marginBottom: 12 }} onClick={() => setVista("tablero")}>← Volver al tablero</button>
+        )}
+        {(vista === "editar" || vista === "renovar") && (
+          <button style={{ ...S.btnSec, marginBottom: 12 }} onClick={() => setVista("detalle")}>← Volver al expediente</button>
+        )}
 
         {vista === "tablero" && (
           <Tablero
@@ -370,7 +386,7 @@ function Login({ onOk }) {
 
 /* ---------- Selección de usuario ---------- */
 
-function SeleccionUsuario({ onElegir }) {
+function SeleccionUsuario({ onElegir, onVolver }) {
   return (
     <div style={{ ...S.page, display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div style={{ ...S.card, width: 400, textAlign: "center" }}>
@@ -386,6 +402,7 @@ function SeleccionUsuario({ onElegir }) {
             </button>
           ))}
         </div>
+        <button style={{ ...S.btnSec, width: "100%", marginTop: 14 }} onClick={onVolver}>← Volver al inicio</button>
       </div>
     </div>
   );
