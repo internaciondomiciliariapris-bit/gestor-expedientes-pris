@@ -895,11 +895,16 @@ function RegistroPresupuestos({ exp }) {
                   <label style={{ ...S.label, marginTop: 4 }}>Precio mensual ($)</label>
                   <input type="number" style={S.input} value={d.mensual} onChange={(e) => setProv(nombre, "mensual", e.target.value)} placeholder="367500" />
                 </div>
-                <div style={{ gridColumn: "1 / -1" }}>
-                  <label style={{ ...S.label, marginTop: 0 }}>PDF del presupuesto {d.pdfNombre && `(guardado: ${d.pdfNombre})`}</label>
-                  <input type="file" accept="application/pdf" style={{ marginTop: 4 }}
-                    onChange={(e) => setArchivos({ ...archivos, [nombre]: e.target.files[0] })} />
-                </div>
+              </div>
+            )}
+            {(d.estado === "cotizo" || d.estado === "desestimo") && (
+              <div style={{ marginTop: 8 }}>
+                <label style={{ ...S.label, marginTop: 0 }}>
+                  {d.estado === "cotizo" ? "PDF del presupuesto" : "PDF de la negativa (constancia de que no cotiza)"}
+                  {d.pdfNombre && ` — guardado: ${d.pdfNombre}`}
+                </label>
+                <input type="file" accept="application/pdf" style={{ marginTop: 4 }}
+                  onChange={(e) => setArchivos({ ...archivos, [nombre]: e.target.files[0] })} />
               </div>
             )}
             {d.estado && (
