@@ -31,6 +31,14 @@ const ADMIN_PASSWORD = "gerenciapris626";
 const LOGO_PRIS = "/logo-pris.png";
 const LOGO_GOBIERNO = "/logo-gobierno.png";
 
+// Firmantes del equipo (aparecen en el selector al enviar la cotización)
+const FIRMANTES = [
+  "Dipl. Jorge Barone",
+  "Julieta Aguirre",
+  "Paula Facchin",
+  "Yamila Avila",
+];
+
 /* ================================================================ */
 
 const app = initializeApp(firebaseConfig);
@@ -103,7 +111,7 @@ function diasHabilesDesde(iso) {
   return count;
 }
 
-function generarCuerpoMail(exp) {
+function generarCuerpoMail(exp, firmante) {
   return (
 `Estimados: Desde la Gerencia Administrativa del Programa Integrado de Salud, se solicita presupuesto para la provisión de un Módulo: ${exp.modulo} Domiciliaria por el período de ${exp.periodoMeses} (${numeroEnLetrasSimple(exp.periodoMeses)}) meses, destinado al siguiente paciente:
 
@@ -129,7 +137,11 @@ Plazo de respuesta: Se otorgará un tiempo máximo de 5 (cinco) días hábiles a
 
 Quedamos a la espera de su pronta respuesta.
 
-Atentamente,
+--
+Confirmar Recepción
+Atte. ${firmante}
+Internaciones Domiciliarias
+Oficina de Compras y Contrataciones
 Gerencia Administrativa
 Programa Integrado de Salud – SI.PRO.SA.`
   );
@@ -283,8 +295,8 @@ function Login({ onOk }) {
   return (
     <div style={{ ...S.page, display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div style={{ ...S.card, width: 340, textAlign: "center" }}>
-        <img src={LOGO_PRIS} alt="" style={{ maxWidth: "85%", height: "auto", marginBottom: 10 }} onError={(e) => (e.target.style.display = "none")} />
-<img src={LOGO_GOBIERNO} alt="" style={{ maxWidth: "70%", height: "auto", marginBottom: 10 }} onError={(e) => (e.target.style.display = "none")} />
+        <img src={LOGO_PRIS} alt="" style={{ maxWidth: "85%", height: "auto", marginBottom: 8 }} onError={(e) => (e.target.style.display = "none")} />
+        <img src={LOGO_GOBIERNO} alt="" style={{ maxWidth: "70%", height: "auto", marginBottom: 10 }} onError={(e) => (e.target.style.display = "none")} />
         <h2 style={{ color: "#075e75", marginBottom: 4 }}>Gestor de Expedientes</h2>
         <div style={{ fontSize: 13, color: "#64748b", marginBottom: 16 }}>Internación Domiciliaria · PRIS</div>
         <input
@@ -464,6 +476,7 @@ function DetalleExpediente({ exp, proveedores, volver }) {
           <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Cotización enviada</div>
           <div style={{ fontSize: 14, color: "#334155" }}>
             <b>Fecha de envío:</b> {formatearFecha(exp.cotizacion.fecha)}<br />
+            {exp.cotizacion.firmante && (<><b>Enviado por:</b> {exp.cotizacion.firmante}<br /></>)}
             <b>Proveedores consultados:</b> {exp.cotizacion.proveedores}<br />
             <b>Plazo:</b>{" "}
             {(() => {
@@ -510,10 +523,16 @@ function BotonEliminar({ exp, volver }) {
 function EnvioCotizacion({ exp, proveedores }) {
   const activos = proveedores.filter((p) => p.activo);
   const [seleccion, setSeleccion] = useState({});
+  const [firmante, setFirmante] = useState(FIRMANTES[0]);
   const [asunto, setAsunto] = useState(`SOLICITAMOS COTIZACION PARA ${exp.paciente.toUpperCase()}`);
-  const [cuerpo, setCuerpo] = useState(generarCuerpoMail(exp));
+  const [cuerpo, setCuerpo] = useState(generarCuerpoMail(exp, FIRMANTES[0]));
   const [archivos, setArchivos] = useState([]);
   const [enviando, setEnviando] = useState(false);
+
+  const cambiarFirmante = (nuevo) => {
+    setFirmante(nuevo);
+    setCuerpo(generarCuerpoMail(exp, nuevo)); // regenera el texto con la firma nueva
+  };
 
   // por defecto, todos los proveedores activos marcados
   useEffect(() => {
@@ -544,6 +563,7 @@ function EnvioCotizacion({ exp, proveedores }) {
           clave: APPS_SCRIPT_CLAVE,
           nroExpediente: exp.nroExpediente,
           paciente: exp.paciente,
+          firmante,
           asunto, cuerpo, destinatarios, adjuntos,
         }),
       });
@@ -556,6 +576,7 @@ function EnvioCotizacion({ exp, proveedores }) {
           fecha: new Date().toISOString(),
           proveedores: elegidos.map((p) => p.nombre).join(", "),
           destinatarios: destinatarios.join(", "),
+          firmante,
           asunto,
           carpetaUrl: data.carpetaUrl || "",
         },
@@ -587,6 +608,20 @@ function EnvioCotizacion({ exp, proveedores }) {
           </label>
         ))}
         {activos.length === 0 && <div style={{ color: "#dc2626", fontSize: 14 }}>No hay proveedores activos. Cargalos en la pestaña 🏢 Proveedores.</div>}
+      </div>
+
+      <label style={S.label}>¿Quién envía este pedido? (la firma sale en el mail)</label>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+        {FIRMANTES.map((f) => (
+          <label key={f} style={{
+            display: "flex", alignItems: "center", gap: 6, padding: "7px 12px",
+            borderRadius: 8, border: "1.5px solid " + (firmante === f ? "#0891b2" : "#cbd5e1"),
+            background: firmante === f ? "#e0f2fe" : "#fff", cursor: "pointer", fontSize: 14, fontWeight: 600,
+          }}>
+            <input type="radio" name="firmante" checked={firmante === f} onChange={() => cambiarFirmante(f)} />
+            {f}
+          </label>
+        ))}
       </div>
 
       <label style={S.label}>Asunto</label>
