@@ -531,8 +531,24 @@ function NuevoExpediente({ modo = "nuevo", usuario = "", inicial = null, expId =
       <h3 style={{ color: "#075e75", marginBottom: 4 }}>{titulos[modo][0]}</h3>
       <div style={{ fontSize: 13, color: "#64748b" }}>{titulos[modo][1]}</div>
 
-      <label style={S.label}>N° de expediente (ej: 1694/415/G/2026){modo === "renovar" && " — PONÉ EL NÚMERO NUEVO"}</label>
-      <input style={S.input} value={f.nroExpediente} onChange={set("nroExpediente")} placeholder="0000/000/G/2026" />
+      <label style={S.label}>N° de expediente (ej: 1694/415/G/2026) — tip: apretá TAB y la barra / se pone sola{modo === "renovar" && " — PONÉ EL NÚMERO NUEVO"}</label>
+      <input
+        style={S.input}
+        value={f.nroExpediente}
+        onChange={(e) => setF({ ...f, nroExpediente: e.target.value.toUpperCase() })}
+        onKeyDown={(e) => {
+          if (e.key === "Tab") {
+            const v = f.nroExpediente;
+            const barras = (v.match(/\//g) || []).length;
+            if (v && !v.endsWith("/") && barras < 3) {
+              e.preventDefault(); // no salta de campo: agrega la barra
+              setF({ ...f, nroExpediente: v + "/" });
+            }
+            // con las 3 barras puestas, TAB salta normalmente al campo siguiente
+          }
+        }}
+        placeholder="0000/000/G/2026"
+      />
 
       <label style={S.label}>Apellido y nombre del paciente</label>
       <input style={S.input} value={f.paciente} onChange={set("paciente")} placeholder="GOMEZ PRISCILA BERENICE" />
