@@ -138,13 +138,15 @@ Plazo de respuesta: Se otorgará un tiempo máximo de 5 (cinco) días hábiles a
 
 Quedamos a la espera de su pronta respuesta.
 
+Atentamente,
+
 --
 Confirmar Recepción
 Atte. ${firmante}
-Internaciones Domiciliarias
-Oficina de Compras y Contrataciones
-Gerencia Administrativa
-Programa Integrado de Salud – SI.PRO.SA.`
+
+Internaciones Domiciliarias.
+Oficina de Compras y Contrataciones.
+Gerencia Administrativa.`
   );
 }
 
@@ -562,8 +564,8 @@ function NuevoExpediente({ modo = "nuevo", usuario = "", inicial = null, expId =
       <label style={S.label}>Módulo a cotizar</label>
       <input style={S.input} value={f.modulo} onChange={set("modulo")} placeholder="BOMBA DE INFUSIÓN ENTERAL PARA SOPORTE NUTRICIONAL ENTERAL PARA GASTROSTOMIA (x15 set)" />
 
-      <label style={S.label}>Detalle de servicios mensuales (lo autorizado por Auditoría Médica)</label>
-      <textarea style={{ ...S.input, minHeight: 70 }} value={f.detalleServicios} onChange={set("detalleServicios")} placeholder="Alimentación: BOMBA DE INFUSIÓN ENTERAL PARA SOPORTE NUTRICIONAL ENTERAL PARA GASTROTOMIA (x15 set)" />
+      <label style={S.label}>Detalle de servicios mensuales (lo autorizado por Auditoría Médica) — UNO POR LÍNEA, con el nombre del servicio antes de los dos puntos</label>
+      <textarea style={{ ...S.input, minHeight: 110 }} value={f.detalleServicios} onChange={set("detalleServicios")} placeholder={"Enfermería: 12 horas diarias, de lunes a domingo.\nKinesiología Motora: 1 sesión diaria, de lunes a domingo (31 sesiones mensuales).\nControl Médico: 4 sesiones mensuales (1 sesión semanal).\nAlimentación: Enteral con bomba de infusión."} />
 
       <div style={{ display: "grid", gridTemplateColumns: "140px 1fr", gap: 10 }}>
         <div>
@@ -755,6 +757,18 @@ function EnvioCotizacion({ exp, proveedores }) {
           paciente: exp.paciente,
           firmante,
           asunto, cuerpo, destinatarios, adjuntos,
+          expData: {
+            dni: exp.dni,
+            edad: exp.edad,
+            fechaNacimiento: formatearFechaCorta(exp.fechaNacimiento),
+            domicilio: exp.domicilio,
+            telefono: exp.telefono,
+            diagnostico: exp.diagnostico,
+            modulo: exp.modulo,
+            detalleServicios: exp.detalleServicios,
+            periodoMeses: exp.periodoMeses,
+            periodoLetras: numeroEnLetrasSimple(Number(exp.periodoMeses)),
+          },
         }),
       });
       const data = await res.json();
@@ -817,7 +831,7 @@ function EnvioCotizacion({ exp, proveedores }) {
       <label style={S.label}>Asunto</label>
       <input style={S.input} value={asunto} onChange={(e) => setAsunto(e.target.value)} />
 
-      <label style={S.label}>Cuerpo del mail (podés editarlo antes de enviar)</label>
+      <label style={S.label}>Cuerpo del mail (podés editar los textos; las negritas, viñetas y centrados del formato oficial se aplican automáticamente al enviar)</label>
       <textarea style={{ ...S.input, minHeight: 260, fontFamily: "inherit", fontSize: 14 }} value={cuerpo} onChange={(e) => setCuerpo(e.target.value)} />
 
       <label style={S.label}>Adjuntos (historia clínica, pedido médico, etc. — PDF)</label>
