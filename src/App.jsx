@@ -476,6 +476,8 @@ const fechaCortaHoy = () => {
 };
 
 // d.proveedores: solo los que respondieron (cotizó o negativa) — van en columnas
+// Calcado del Excel original: logos y título en recuadros con borde, cantidad en su
+// propia columna, recuadro de adjudicación del ancho de las primeras 4 columnas.
 function plantillaCuadro(d, logos) {
   const provs = d.proveedores || [];
   const anchoTabla = 194 + provs.length * 149; // pt: A(98)+B(48)+C(48) + 149 por proveedor
@@ -489,9 +491,9 @@ function plantillaCuadro(d, logos) {
   let filaEnc = '<td colspan="2" style="' + celda + ' font-weight:bold; width:146pt;">PRESTACION</td>' +
     '<td style="' + celda + ' font-weight:bold; width:48pt;">CANT DE HS/SES.</td>';
   let filaDatos =
-    '<td colspan="2" style="' + celda + '" data-campo="prestacion">' + esc(d.modulo) +
-    (d.cantTexto ? " (" + esc(d.cantTexto) + ")" : "") + "</td>" +
-    '<td style="' + celda + '" data-campo="cantNum">' + esc(d.cantNum) + "</td>";
+    '<td style="' + celda + ' width:98pt;" data-campo="prestacion">' + esc(d.modulo) + "</td>" +
+    '<td style="' + celda + ' width:48pt;" data-campo="cantTexto">' + esc(d.cantTexto) + "</td>" +
+    '<td style="' + celda + ' width:48pt;" data-campo="cantNum">' + esc(d.cantNum) + "</td>";
 
   provs.forEach((p, i) => {
     const fondo = i % 2 ? "#E7E6E6" : "#F2F2F2";
@@ -506,26 +508,29 @@ function plantillaCuadro(d, logos) {
       (p.estado === "cotizo" ? formatoPesos(p.mensual) : "") + "</td>";
   });
 
+  // Título compuesto en un solo recuadro, como el original:
+  // "EXPTE : ... - PTE ... (Periodo que corresponde a ...)      fecha de Adjudicacion dd/mm/aaaa"
+  const tituloCompuesto =
+    "EXPTE : " + esc(d.nroExpediente) + " - PTE " + esc(d.paciente).toUpperCase() +
+    (d.periodoTexto ? " (Periodo que corresponde a " + esc(d.periodoTexto) + ")" : "") +
+    "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;fecha de Adjudicacion " + esc(d.fechaAdj);
+
   const body =
     '<div class="pagina ultima">' +
     '<div style="width:' + anchoTabla + 'pt; margin:0 auto;">' +
-    '<p style="text-align:center; margin-bottom:8pt;">' +
+    '<div style="border:1pt solid #000; padding:4pt 0; text-align:center;">' +
     '<img src="' + logos.pris + '" style="height:32pt; vertical-align:middle; margin-right:10pt;">' +
-    '<img src="' + logos.gob + '" style="height:38pt; vertical-align:middle;"></p>' +
-    '<p style="text-align:center; font-weight:bold;" data-campo="titulo">EXPTE : ' + esc(d.nroExpediente) +
-    " - PTE " + esc(d.paciente).toUpperCase() + "</p>" +
-    (d.periodoTexto
-      ? '<p style="text-align:center; font-weight:bold;" data-campo="periodo">(Periodo que corresponde a ' + esc(d.periodoTexto) + ")</p>"
-      : "") +
-    '<p style="text-align:center; font-weight:bold;" data-campo="fechaAdj">Fecha de Adjudicación: ' + esc(d.fechaAdj) + "</p>" +
-    '<table class="cc" style="width:100%; margin-top:10pt;">' +
+    '<img src="' + logos.gob + '" style="height:38pt; vertical-align:middle;"></div>' +
+    '<div style="border:1pt solid #000; border-top:none; padding:2pt 4pt; text-align:center; font-weight:bold;" data-campo="titulo">' +
+    tituloCompuesto + "</div>" +
+    '<table class="cc" style="width:100%;">' +
     "<tr>" + filaNombres + "</tr>" +
     '<tr style="height:28pt;">' + filaEnc + "</tr>" +
     '<tr style="height:30pt;">' + filaDatos + "</tr>" +
     "</table>" +
-    '<div style="background:#F2F2F2; margin-top:14pt; padding:3pt 5pt; font-weight:bold;" data-campo="adjudicacion">' +
+    '<div style="width:272pt; box-sizing:border-box; background:#F2F2F2; border:1pt solid #000; margin-top:12pt; padding:3pt 5pt;" data-campo="adjudicacion">' +
     esc(d.textoAdjudicacion) + "</div>" +
-    '<p style="margin-top:10pt; text-align:justify; line-height:1.3;" data-campo="constancia">' +
+    '<p style="margin-top:8pt; text-align:justify; line-height:1.3;" data-campo="constancia">' +
     esc(d.textoConstancia) + "</p>" +
     "<p style=\"margin-top:24pt; font-family:'Times New Roman', Times, serif; font-size:12pt; font-weight:bold; line-height:1.5;\">" +
     "Firmado digitalmente:<br>C.P.N Mariela Agustina Castillo<br>Gerente Administrativo<br>Dirección Gral. Prog. Integrado de Salud<br>" +
@@ -582,6 +587,25 @@ const datosCuadro = (exp) => {
     mensual: g[n]?.mensual || null,
   }));
   const responden = lista.filter((p) => p.estado === "cotizo" || p.estado === "desestimo");
+
+  // Reconstrucción de textos por defecto: si el expediente fue generado con una versión
+  // anterior que no los guardó, se rearman a partir de los proveedores (nunca quedan vacíos).
+  const adjudicado = c.adjudicado || (() => {
+    let win = null;
+    lista.forEach((p) => { if (p.estado === "cotizo" && p.mensual && (!win || p.mensual < win.mensual)) win = p; });
+    return win ? win.nombre : "";
+  })();
+  const cotizaron = lista.filter((p) => p.estado === "cotizo").map((p) => p.nombre.toUpperCase());
+  const negativas = lista.filter((p) => p.estado === "desestimo").map((p) => p.nombre.toUpperCase() + " (NEGATIVA)");
+  const textoAdjudicacion = c.textoAdjudicacion ||
+    ("CONFORME A LO DETALLADO EN EL CUADRO COMPARATIVO , SE ADJUDICA SERVICIO DE " +
+      (exp.modulo || "").toUpperCase() + (adjudicado ? " A LA FIRMA : " + adjudicado.toUpperCase() : ""));
+  const textoConstancia = c.textoConstancia ||
+    ("Se deja constancia que, habiendose solicitado cotizacion a " + lista.length +
+      " proveedores del rubro, unicamente las firmas comerciales: " + cotizaron.concat(negativas).join("/") +
+      " ; presentaron presupuestos dentro del plazo establecido. Los restantes proveedores convocados no remitieron " +
+      "cotizacion ni emitieron respuesta alguna al requerimiento efectuado a la fecha de adjudicacion.-");
+
   return {
     nroExpediente: exp.nroExpediente, paciente: exp.paciente,
     periodoTexto: exp.periodoTexto, modulo: exp.modulo,
@@ -590,8 +614,7 @@ const datosCuadro = (exp) => {
       : fechaCortaHoy(),
     cantTexto: c.cantTexto || "", cantNum: c.cantNum || "",
     proveedores: responden.length ? responden : lista,
-    textoAdjudicacion: c.textoAdjudicacion || "",
-    textoConstancia: c.textoConstancia || "",
+    textoAdjudicacion, textoConstancia,
   };
 };
 
@@ -602,6 +625,7 @@ async function descargarExcelCuadro(exp, hoja) {
     accion: "generarCuadro", soloExcel: true,
     nroExpediente: exp.nroExpediente, paciente: exp.paciente,
     modulo: exp.modulo, periodoTexto: exp.periodoTexto, periodoMeses: exp.periodoMeses,
+    cantTexto: hoja ? (hoja.querySelector('[data-campo="cantTexto"]')?.innerText || "").trim() : (exp.cuadro?.cantTexto || ""),
     cantNum: e.cantNum,
     prestacionTexto: e.prestacion,
     fechaAdj: hoja ? (hoja.querySelector('[data-campo="fechaAdj"]')?.innerText || "").replace(/.*?:\s*/, "").trim() : "",
