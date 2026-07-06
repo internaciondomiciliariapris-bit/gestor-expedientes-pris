@@ -168,6 +168,98 @@ function leerArchivoBase64(file) {
   });
 }
 
+/* ---------- descarga directa de documentos (Word + PDF) ---------- */
+
+function descargarBase64(b64, nombre, mime) {
+  const bytes = atob(b64);
+  const arr = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+  const blob = new Blob([arr], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = nombre;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+// Llama al Apps Script y descarga a la máquina los dos archivos: PDF + Word
+async function llamarYDescargar(payload) {
+  const res = await fetch(APPS_SCRIPT_URL, {
+    method: "POST",
+    body: JSON.stringify({ clave: APPS_SCRIPT_CLAVE, ...payload }),
+  });
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "Error desconocido en Apps Script");
+  if (data.pdfBase64) descargarBase64(data.pdfBase64, data.nombreArchivo + ".pdf", "application/pdf");
+  if (data.docBase64) {
+    // pequeña pausa para que el navegador no bloquee la segunda descarga
+    await new Promise((r) => setTimeout(r, 500));
+    descargarBase64(data.docBase64, data.nombreArchivo + (data.docExt || ".doc"), data.docMime || "application/msword");
+  }
+  return data;
+}
+
+/* Reconstruyen los datos de cada documento ya generado, para volver a descargarlo */
+
+const payloadNota = (exp) => ({
+  accion: "generarNota",
+  nroExpediente: exp.nroExpediente, paciente: exp.paciente, dni: exp.dni,
+  modulo: exp.modulo, periodoTexto: exp.periodoTexto || "", periodoMeses: exp.periodoMeses,
+  monto: exp.nota?.monto ?? (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6),
+  directora: exp.nota?.directora || "Dra. Noelia Soledad Bottone",
+  imputacion: exp.nota?.imputacion || "",
+});
+
+const payloadCuadro = (exp) => {
+  const consultados = (exp.cotizacion?.proveedores || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const guardados = exp.presupuestos || {};
+  const c = exp.cuadro || {};
+  return {
+    accion: "generarCuadro",
+    nroExpediente: exp.nroExpediente, paciente: exp.paciente,
+    modulo: exp.modulo, detalleServicios: exp.detalleServicios,
+    periodoTexto: exp.periodoTexto, periodoMeses: exp.periodoMeses,
+    proveedores: consultados.map((n) => ({
+      nombre: n,
+      estado: guardados[n]?.estado || "sin_respuesta",
+      unitario: guardados[n]?.unitario || null,
+      mensual: guardados[n]?.mensual || null,
+    })),
+    adjudicado: { nombre: c.adjudicado, unitario: c.unitario, mensual: c.mensual, total: c.total },
+  };
+};
+
+const payloadPaseLetrada = (exp) => ({
+  accion: "generarPase", tipo: "letrada",
+  nroExpediente: exp.nroExpediente, paciente: exp.paciente,
+  fechaTexto: exp.paseLetrada?.fechaTexto || "",
+  anioPresupuesto: exp.paseLetrada?.anio || "",
+});
+
+const payloadPaseTribunal = (exp) => ({
+  accion: "generarPase", tipo: "tribunal",
+  nroExpediente: exp.nroExpediente, paciente: exp.paciente,
+});
+
+const payloadResolucion = (exp) => {
+  const r = exp.resolucion || {};
+  return {
+    accion: "generarResolucion",
+    nroExpediente: exp.nroExpediente, paciente: exp.paciente,
+    modulo: exp.modulo, periodoTexto: exp.periodoTexto || "", periodoMeses: exp.periodoMeses,
+    adjudicado: exp.cuadro?.adjudicado || "", mensual: exp.cuadro?.mensual || 0,
+    total: r.total ?? (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6),
+    nroResolucion: r.nro || "", tipoTramite: r.tipoTramite || "inicio",
+    fsSolicitud: r.fojas?.solicitud || "", fsPresupuesto: r.fojas?.presupuesto || "",
+    fsCuadro: r.fojas?.cuadro || "", fsDictamen: r.fojas?.dictamen || "",
+    directora: r.directora || "Dra. Noelia Soledad Bottone",
+    imputacion: r.imputacion || "", anioPresupuesto: r.anio || "",
+  };
+};
+
 /* ---------- estilos ---------- */
 
 const S = {
@@ -678,10 +770,9 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
           <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Cuadro comparativo generado — Adjudicado: {exp.cuadro.adjudicado}</div>
           <div style={{ fontSize: 14, color: "#334155" }}>
             <b>Fecha de adjudicación:</b> {formatearFecha(exp.cuadro.fecha)}<br />
-            <b>Precio mensual:</b> {formatoPesos(exp.cuadro.mensual)} · <b>Total {exp.periodoMeses} meses:</b> {formatoPesos(exp.cuadro.total)}<br />
-            {exp.cuadro.pdfUrl && <a href={exp.cuadro.pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📄 Cuadro en PDF (para SIGEDIG)</a>}
-            {exp.cuadro.docUrl && <> · <a href={exp.cuadro.docUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>✏️ Versión editable (Google Doc)</a></>}
+            <b>Precio mensual:</b> {formatoPesos(exp.cuadro.mensual)} · <b>Total {exp.periodoMeses} meses:</b> {formatoPesos(exp.cuadro.total)}
           </div>
+          <BotonRedescargar construirPayload={() => payloadCuadro(exp)} />
         </div>
       )}
 
@@ -691,10 +782,9 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
         <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
           <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Nota de afectación presupuestaria generada</div>
           <div style={{ fontSize: 14, color: "#334155" }}>
-            <b>Importe total:</b> {formatoPesos(exp.nota.monto)} ({exp.nota.montoLetras})<br />
-            {exp.nota.pdfUrl && <a href={exp.nota.pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📄 Nota en PDF (para SIGEDIG)</a>}
-            {exp.nota.docUrl && <> · <a href={exp.nota.docUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>✏️ Versión editable (Google Doc)</a></>}
+            <b>Importe total:</b> {formatoPesos(exp.nota.monto)} ({exp.nota.montoLetras})
           </div>
+          <BotonRedescargar construirPayload={() => payloadNota(exp)} />
         </div>
       )}
 
@@ -704,10 +794,9 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
         <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
           <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Pase a Asesoría Letrada generado</div>
           <div style={{ fontSize: 14, color: "#334155" }}>
-            <b>Fecha:</b> {formatearFecha(exp.paseLetrada.fecha)}<br />
-            {exp.paseLetrada.pdfUrl && <a href={exp.paseLetrada.pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📄 Pase en PDF (para SIGEDIG)</a>}
-            {exp.paseLetrada.docUrl && <> · <a href={exp.paseLetrada.docUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>✏️ Versión editable (Google Doc)</a></>}
+            <b>Fecha:</b> {formatearFecha(exp.paseLetrada.fecha)}
           </div>
+          <BotonRedescargar construirPayload={() => payloadPaseLetrada(exp)} />
         </div>
       )}
       {exp.etapa === 4 && <PaseLetrada exp={exp} />}
@@ -717,10 +806,9 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
           <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Resolución Interna Nº {exp.resolucion.nro} generada</div>
           <div style={{ fontSize: 14, color: "#334155" }}>
             <b>Fecha:</b> {formatearFecha(exp.resolucion.fecha)}<br />
-            <b>Adjudicado:</b> {exp.resolucion.adjudicado} · <b>Monto total:</b> {formatoPesos(exp.resolucion.total)}<br />
-            {exp.resolucion.pdfUrl && <a href={exp.resolucion.pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📄 Resolución en PDF (para SIGEDIG)</a>}
-            {exp.resolucion.docUrl && <> · <a href={exp.resolucion.docUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>✏️ Versión editable (Google Doc)</a></>}
+            <b>Adjudicado:</b> {exp.resolucion.adjudicado} · <b>Monto total:</b> {formatoPesos(exp.resolucion.total)}
           </div>
+          <BotonRedescargar construirPayload={() => payloadResolucion(exp)} />
         </div>
       )}
       {exp.etapa === 5 && <GenerarResolucion exp={exp} />}
@@ -729,10 +817,9 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
         <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
           <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Pase al Tribunal de Cuentas generado</div>
           <div style={{ fontSize: 14, color: "#334155" }}>
-            <b>Fecha:</b> {formatearFecha(exp.paseTribunal.fecha)}<br />
-            {exp.paseTribunal.pdfUrl && <a href={exp.paseTribunal.pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📄 Pase en PDF (para SIGEDIG)</a>}
-            {exp.paseTribunal.docUrl && <> · <a href={exp.paseTribunal.docUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>✏️ Versión editable (Google Doc)</a></>}
+            <b>Fecha:</b> {formatearFecha(exp.paseTribunal.fecha)}
           </div>
+          <BotonRedescargar construirPayload={() => payloadPaseTribunal(exp)} />
         </div>
       )}
       {exp.etapa === 6 && <PaseTribunal exp={exp} />}
@@ -778,6 +865,24 @@ function BotonEliminar({ exp, volver }) {
         }}
       >🗑️ Eliminar expediente</button>
     </div>
+  );
+}
+
+/* ---------- Botón para volver a descargar un documento ya generado ---------- */
+
+function BotonRedescargar({ construirPayload }) {
+  const [ocupado, setOcupado] = useState(false);
+  return (
+    <button
+      style={{ ...S.btnSec, marginTop: 10, opacity: ocupado ? 0.6 : 1 }}
+      disabled={ocupado}
+      onClick={async () => {
+        setOcupado(true);
+        try { await llamarYDescargar(construirPayload()); }
+        catch (e) { alert("\u274c Error al descargar: " + e.message); }
+        setOcupado(false);
+      }}
+    >{ocupado ? "\u23f3 Generando..." : "\u2b07\ufe0f Descargar de nuevo (Word + PDF)"}</button>
   );
 }
 
@@ -1006,29 +1111,23 @@ function RegistroPresupuestos({ exp }) {
         unitario: guardados[n]?.unitario || null,
         mensual: guardados[n]?.mensual || null,
       }));
-      const res = await fetch(APPS_SCRIPT_URL, {
-        method: "POST",
-        body: JSON.stringify({
-          accion: "generarCuadro", clave: APPS_SCRIPT_CLAVE,
-          nroExpediente: exp.nroExpediente, paciente: exp.paciente,
-          modulo: exp.modulo, detalleServicios: exp.detalleServicios,
-          periodoTexto: exp.periodoTexto, periodoMeses: exp.periodoMeses,
-          proveedores: lista,
-          adjudicado: { nombre: ganador, unitario: g.unitario, mensual: g.mensual, total },
-        }),
+      await llamarYDescargar({
+        accion: "generarCuadro",
+        nroExpediente: exp.nroExpediente, paciente: exp.paciente,
+        modulo: exp.modulo, detalleServicios: exp.detalleServicios,
+        periodoTexto: exp.periodoTexto, periodoMeses: exp.periodoMeses,
+        proveedores: lista,
+        adjudicado: { nombre: ganador, unitario: g.unitario, mensual: g.mensual, total },
       });
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.error || "Error en Apps Script");
       await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
         etapa: 3,
         cuadro: {
           fecha: new Date().toISOString(),
           adjudicado: ganador,
           unitario: g.unitario, mensual: g.mensual, total,
-          pdfUrl: data.pdfUrl || "", docUrl: data.docUrl || "",
         },
       });
-      alert("✅ Cuadro comparativo generado. Adjudicado: " + ganador);
+      alert("✅ Cuadro comparativo generado. Adjudicado: " + ganador + "\n\nSe descargaron a tu máquina el PDF (para el SIGEDIG) y el Word (por si necesitás retocar algo).");
     } catch (e) {
       alert("❌ Error al generar el cuadro: " + e.message);
     }
@@ -1039,7 +1138,7 @@ function RegistroPresupuestos({ exp }) {
     <div style={{ ...S.card, borderLeft: "5px solid #f59e0b" }}>
       <h3 style={{ color: "#075e75", marginBottom: 4 }}>📬 Registro de presupuestos</h3>
       <div style={{ fontSize: 13, color: "#64748b" }}>
-        A medida que respondan al mail, cargá acá cada proveedor: estado, precios y el PDF del presupuesto (queda guardado en el Drive del expediente). Cuando estén todos, generá el cuadro comparativo.
+        A medida que respondan al mail, cargá acá cada proveedor: estado, precios y el PDF del presupuesto (queda guardado en el Drive del expediente). Cuando estén todos, generá el cuadro comparativo: se descarga a tu máquina en Word y PDF.
       </div>
 
       {consultados.map((nombre) => {
@@ -1120,27 +1219,21 @@ function GenerarNota({ exp }) {
     if (!exp.periodoTexto && !confirm("El expediente no tiene el período en texto (ej: Julio 2026 a Diciembre 2026). Podés cargarlo con ✏️ Editar datos. ¿Generar la nota igual?")) return;
     setOcupado(true);
     try {
-      const res = await fetch(APPS_SCRIPT_URL, {
-        method: "POST",
-        body: JSON.stringify({
-          accion: "generarNota", clave: APPS_SCRIPT_CLAVE,
-          nroExpediente: exp.nroExpediente, paciente: exp.paciente, dni: exp.dni,
-          modulo: exp.modulo, periodoTexto: exp.periodoTexto || "", periodoMeses: exp.periodoMeses,
-          monto, directora, imputacion,
-        }),
+      const data = await llamarYDescargar({
+        accion: "generarNota",
+        nroExpediente: exp.nroExpediente, paciente: exp.paciente, dni: exp.dni,
+        modulo: exp.modulo, periodoTexto: exp.periodoTexto || "", periodoMeses: exp.periodoMeses,
+        monto, directora, imputacion,
       });
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.error || "Error en Apps Script");
       await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
         etapa: 4,
         nota: {
           fecha: new Date().toISOString(),
           monto, montoLetras: data.montoLetras || "",
           directora, imputacion,
-          pdfUrl: data.pdfUrl || "", docUrl: data.docUrl || "",
         },
       });
-      alert("✅ Nota de afectación generada.");
+      alert("✅ Nota de afectación generada.\n\nSe descargaron a tu máquina el PDF y el Word.");
     } catch (e) {
       alert("❌ Error al generar la nota: " + e.message);
     }
@@ -1151,7 +1244,7 @@ function GenerarNota({ exp }) {
     <div style={{ ...S.card, borderLeft: "5px solid #f59e0b" }}>
       <h3 style={{ color: "#075e75", marginBottom: 4 }}>📄 Nota de afectación presupuestaria</h3>
       <div style={{ fontSize: 13, color: "#64748b" }}>
-        Informa a la Dirección el gasto del período. El importe sale del cuadro comparativo y se escribe también en letras, automáticamente.
+        Informa a la Dirección el gasto del período. El importe sale del cuadro comparativo y se escribe también en letras, automáticamente. Se descarga a tu máquina en Word (editable) y PDF (para el SIGEDIG); no queda copia en el Drive.
       </div>
 
       <div style={{ background: "#e0f2fe", borderRadius: 8, padding: 10, marginTop: 12, fontSize: 14, color: "#075e75", fontWeight: 700 }}>
@@ -1191,24 +1284,19 @@ function PaseLetrada({ exp }) {
   const generar = async () => {
     setOcupado(true);
     try {
-      const res = await fetch(APPS_SCRIPT_URL, {
-        method: "POST",
-        body: JSON.stringify({
-          accion: "generarPase", clave: APPS_SCRIPT_CLAVE, tipo: "letrada",
-          nroExpediente: exp.nroExpediente, paciente: exp.paciente,
-          fechaTexto, anioPresupuesto: anio,
-        }),
+      await llamarYDescargar({
+        accion: "generarPase", tipo: "letrada",
+        nroExpediente: exp.nroExpediente, paciente: exp.paciente,
+        fechaTexto, anioPresupuesto: anio,
       });
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.error || "Error en Apps Script");
       await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
         etapa: 5,
         paseLetrada: {
           fecha: new Date().toISOString(),
-          pdfUrl: data.pdfUrl || "", docUrl: data.docUrl || "",
+          fechaTexto, anio,
         },
       });
-      alert("✅ Pase a Asesoría Letrada generado.");
+      alert("✅ Pase a Asesoría Letrada generado.\n\nSe descargaron a tu máquina el PDF y el Word.");
     } catch (e) {
       alert("❌ Error al generar el pase: " + e.message);
     }
@@ -1219,7 +1307,7 @@ function PaseLetrada({ exp }) {
     <div style={{ ...S.card, borderLeft: "5px solid #f59e0b" }}>
       <h3 style={{ color: "#075e75", marginBottom: 4 }}>⚖️ Pase a Asesoría Letrada</h3>
       <div style={{ fontSize: 13, color: "#64748b" }}>
-        Genera la nota de pase para la intervención de Asesoría Letrada, con la firma de la Gerente. Cuando vuelva el informe jurídico favorable, seguís con la resolución.
+        Genera la nota de pase para la intervención de Asesoría Letrada, con la firma de la Gerente, y la descarga a tu máquina en Word y PDF. Cuando vuelva el informe jurídico favorable, seguís con la resolución.
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 10 }}>
@@ -1266,21 +1354,16 @@ function GenerarResolucion({ exp }) {
     }
     setOcupado(true);
     try {
-      const res = await fetch(APPS_SCRIPT_URL, {
-        method: "POST",
-        body: JSON.stringify({
-          accion: "generarResolucion", clave: APPS_SCRIPT_CLAVE,
-          nroExpediente: exp.nroExpediente, paciente: exp.paciente,
-          modulo: exp.modulo, periodoTexto: exp.periodoTexto || "", periodoMeses: exp.periodoMeses,
-          adjudicado: exp.cuadro?.adjudicado || "", mensual: exp.cuadro?.mensual || 0, total,
-          nroResolucion: f.nroResolucion, tipoTramite: f.tipoTramite,
-          fsSolicitud: f.fsSolicitud, fsPresupuesto: f.fsPresupuesto,
-          fsCuadro: f.fsCuadro, fsDictamen: f.fsDictamen,
-          directora: f.directora, imputacion: f.imputacion, anioPresupuesto: f.anio,
-        }),
+      const data = await llamarYDescargar({
+        accion: "generarResolucion",
+        nroExpediente: exp.nroExpediente, paciente: exp.paciente,
+        modulo: exp.modulo, periodoTexto: exp.periodoTexto || "", periodoMeses: exp.periodoMeses,
+        adjudicado: exp.cuadro?.adjudicado || "", mensual: exp.cuadro?.mensual || 0, total,
+        nroResolucion: f.nroResolucion, tipoTramite: f.tipoTramite,
+        fsSolicitud: f.fsSolicitud, fsPresupuesto: f.fsPresupuesto,
+        fsCuadro: f.fsCuadro, fsDictamen: f.fsDictamen,
+        directora: f.directora, imputacion: f.imputacion, anioPresupuesto: f.anio,
       });
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.error || "Error en Apps Script");
       await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
         etapa: 6,
         resolucion: {
@@ -1289,10 +1372,10 @@ function GenerarResolucion({ exp }) {
           adjudicado: exp.cuadro?.adjudicado || "", total,
           montoLetras: data.montoLetras || "",
           fojas: { solicitud: f.fsSolicitud, presupuesto: f.fsPresupuesto, cuadro: f.fsCuadro, dictamen: f.fsDictamen },
-          pdfUrl: data.pdfUrl || "", docUrl: data.docUrl || "",
+          directora: f.directora, imputacion: f.imputacion, anio: f.anio,
         },
       });
-      alert("✅ Resolución Interna Nº " + f.nroResolucion + " generada.");
+      alert("✅ Resolución Interna Nº " + f.nroResolucion + " generada.\n\nSe descargaron a tu máquina el PDF y el Word.");
     } catch (e) {
       alert("❌ Error al generar la resolución: " + e.message);
     }
@@ -1303,7 +1386,7 @@ function GenerarResolucion({ exp }) {
     <div style={{ ...S.card, borderLeft: "5px solid #f59e0b" }}>
       <h3 style={{ color: "#075e75", marginBottom: 4 }}>📜 Resolución Interna de contratación</h3>
       <div style={{ fontSize: 13, color: "#64748b" }}>
-        El monto, las letras, el adjudicado y el período salen solos del expediente y se replican en todos los artículos. Vos solo cargás el N° de resolución y las fojas mirando el expediente físico.
+        El monto, las letras, el adjudicado y el período salen solos del expediente y se replican en todos los artículos. Vos solo cargás el N° de resolución y las fojas mirando el expediente físico. Se descarga en Word (editable) y PDF (para el SIGEDIG).
       </div>
 
       <div style={{ background: "#e0f2fe", borderRadius: 8, padding: 10, marginTop: 12, fontSize: 14, color: "#075e75", fontWeight: 700 }}>
@@ -1376,23 +1459,17 @@ function PaseTribunal({ exp }) {
   const generar = async () => {
     setOcupado(true);
     try {
-      const res = await fetch(APPS_SCRIPT_URL, {
-        method: "POST",
-        body: JSON.stringify({
-          accion: "generarPase", clave: APPS_SCRIPT_CLAVE, tipo: "tribunal",
-          nroExpediente: exp.nroExpediente, paciente: exp.paciente,
-        }),
+      await llamarYDescargar({
+        accion: "generarPase", tipo: "tribunal",
+        nroExpediente: exp.nroExpediente, paciente: exp.paciente,
       });
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.error || "Error en Apps Script");
       await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
         etapa: 7,
         paseTribunal: {
           fecha: new Date().toISOString(),
-          pdfUrl: data.pdfUrl || "", docUrl: data.docUrl || "",
         },
       });
-      alert("✅ Pase al Tribunal de Cuentas generado.");
+      alert("✅ Pase al Tribunal de Cuentas generado.\n\nSe descargaron a tu máquina el PDF y el Word.");
     } catch (e) {
       alert("❌ Error al generar el pase: " + e.message);
     }
@@ -1403,7 +1480,7 @@ function PaseTribunal({ exp }) {
     <div style={{ ...S.card, borderLeft: "5px solid #f59e0b" }}>
       <h3 style={{ color: "#075e75", marginBottom: 4 }}>🏛️ Pase al Tribunal de Cuentas</h3>
       <div style={{ fontSize: 13, color: "#64748b" }}>
-        Genera la nota solicitando la intervención de competencia del Honorable Tribunal de Cuentas sobre el <b>Expediente {exp.nroExpediente}</b>, con fecha de hoy y la firma de la Gerente.
+        Genera la nota solicitando la intervención de competencia del Honorable Tribunal de Cuentas sobre el <b>Expediente {exp.nroExpediente}</b>, con fecha de hoy y la firma de la Gerente. Se descarga a tu máquina en Word y PDF.
       </div>
 
       <button style={{ ...S.btn, marginTop: 16, width: "100%", fontSize: 16, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={generar}>
