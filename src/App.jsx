@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef, Fragment } from "react";
 import { initializeApp } from "firebase/app";
 import {
   getFirestore, collection, addDoc, doc, updateDoc, deleteDoc, onSnapshot,
@@ -186,7 +186,7 @@ function descargarBase64(b64, nombre, mime) {
 }
 
 // Llama al Apps Script y descarga a la máquina los dos archivos: PDF + Word
-async function llamarYDescargar(payload) {
+async function llamarYDescargar(payload, descargarDoc = true) {
   const res = await fetch(APPS_SCRIPT_URL, {
     method: "POST",
     body: JSON.stringify({ clave: APPS_SCRIPT_CLAVE, ...payload }),
@@ -194,7 +194,7 @@ async function llamarYDescargar(payload) {
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || "Error desconocido en Apps Script");
   if (data.pdfBase64) descargarBase64(data.pdfBase64, data.nombreArchivo + ".pdf", "application/pdf");
-  if (data.docBase64) {
+  if (data.docBase64 && descargarDoc) {
     // pequeña pausa para que el navegador no bloquee la segunda descarga
     await new Promise((r) => setTimeout(r, 500));
     descargarBase64(data.docBase64, data.nombreArchivo + (data.docExt || ".doc"), data.docMime || "application/msword");
@@ -202,16 +202,334 @@ async function llamarYDescargar(payload) {
   return data;
 }
 
-/* Reconstruyen los datos de cada documento ya generado, para volver a descargarlo */
+/* ================================================================
+   PLANTILLAS DE DOCUMENTOS (vista previa editable → PDF)
+   Calcadas de los modelos oficiales reales de la oficina.
+   ================================================================ */
 
-const payloadNota = (exp) => ({
-  accion: "generarNota",
+const LOGO_PRIS_ABS = "https://gestor-expedientes-pris.vercel.app/logo-pris.png";
+const LOGO_GOB_ABS = "https://gestor-expedientes-pris.vercel.app/logo-gobierno.png";
+const AZUL = "#5B9BD5";
+const PIE_ANIO = '"2026 Año de la Memoria por: Golpe de Estado Cívico Militar de 1976, Cierre Masivo de los Ingenios en 1966 y Cierre de los Talleres Ferroviarios de Tafí Viejo en 1980"';
+
+// Monto en letras (pesos argentinos) — misma lógica que en el servidor
+function enteroALetras(n) {
+  if (n === 0) return "cero";
+  const u = ["", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve",
+    "diez", "once", "doce", "trece", "catorce", "quince", "dieciséis", "diecisiete", "dieciocho", "diecinueve", "veinte"];
+  const d = ["", "", "veinti", "treinta", "cuarenta", "cincuenta", "sesenta", "setenta", "ochenta", "noventa"];
+  const c = ["", "ciento", "doscientos", "trescientos", "cuatrocientos", "quinientos", "seiscientos", "setecientos", "ochocientos", "novecientos"];
+  function centenas(x) {
+    if (x === 0) return "";
+    if (x === 100) return "cien";
+    let s = "";
+    const ce = Math.floor(x / 100), resto = x % 100;
+    if (ce) s += c[ce] + (resto ? " " : "");
+    if (resto) {
+      if (resto <= 20) s += u[resto];
+      else {
+        const de = Math.floor(resto / 10), un = resto % 10;
+        if (de === 2) s += "veinti" + (un ? u[un] : "");
+        else s += d[de] + (un ? " y " + u[un] : "");
+        if (de === 2 && !un) s = s.replace("veinti", "veinte");
+      }
+    }
+    return s;
+  }
+  const partes = [];
+  const millones = Math.floor(n / 1000000);
+  const miles = Math.floor((n % 1000000) / 1000);
+  const resto = n % 1000;
+  if (millones) partes.push(millones === 1 ? "un millón" : enteroALetras(millones) + " millones");
+  if (miles) partes.push(miles === 1 ? "mil" : centenas(miles) + " mil");
+  if (resto) partes.push(centenas(resto));
+  return partes.join(" ").replace(/\s+/g, " ").trim();
+}
+
+function numeroALetras(n) {
+  n = Math.round(Number(n) * 100) / 100;
+  const entero = Math.floor(n);
+  const centavos = Math.round((n - entero) * 100);
+  let letras = enteroALetras(entero);
+  if (/mill(ón|ones)$/.test(letras)) letras += " de";
+  letras = letras.replace(/veintiuno$/, "veintiún").replace(/ uno$/, " un");
+  letras = letras.charAt(0).toUpperCase() + letras.slice(1);
+  return letras + " pesos con " + ("0" + centavos).slice(-2) + "/100";
+}
+
+function esc(t) {
+  return String(t || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// Logos como data URI (para que salgan incrustados en el PDF)
+let _logosCache = null;
+async function obtenerLogos() {
+  if (_logosCache) return _logosCache;
+  const aDataUri = (url) =>
+    fetch(url).then((r) => r.blob()).then((b) => new Promise((res, rej) => {
+      const fr = new FileReader();
+      fr.onload = () => res(fr.result);
+      fr.onerror = rej;
+      fr.readAsDataURL(b);
+    }));
+  const [pris, gob] = await Promise.all([aDataUri("/logo-pris.png"), aDataUri("/logo-gobierno.png")]);
+  _logosCache = { pris, gob };
+  return _logosCache;
+}
+
+// El Word (.doc) no acepta imágenes incrustadas: se reemplazan por las URL públicas
+function logosAUrl(body) {
+  if (!_logosCache) return body;
+  return body.split(_logosCache.pris).join(LOGO_PRIS_ABS).split(_logosCache.gob).join(LOGO_GOB_ABS);
+}
+
+function encabezadoDoc(logos) {
+  return (
+    '<table style="width:100%; border-collapse:collapse; margin-bottom:4pt;"><tr>' +
+    '<td style="vertical-align:middle; border:none; padding:0;"><img src="' + logos.pris + '" style="height:34pt;"></td>' +
+    '<td style="vertical-align:middle; text-align:right; border:none; padding:0;"><img src="' + logos.gob + '" style="height:44pt;"></td>' +
+    "</tr></table>" +
+    '<div style="border-bottom:2.2pt solid ' + AZUL + '; margin-bottom:6pt;"></div>'
+  );
+}
+
+const lineaAzulDoc = (m) => '<div style="border-bottom:2.2pt solid ' + AZUL + '; margin-top:' + m + 'pt; margin-bottom:6pt;"></div>';
+
+const envolverHtml = (css, body) =>
+  '<!DOCTYPE html><html><head><meta charset="utf-8"><style>' +
+  "@page { size: A4; margin: 0; } body { margin:0; padding:0; } " +
+  ".pagina { page-break-after: always; } .pagina.ultima { page-break-after: auto; } " +
+  css + "</style></head><body>" + body + "</body></html>";
+
+/* ---------- NOTA DE AFECTACIÓN (Times New Roman 12, formato del Word original) ---------- */
+
+function plantillaNota(d, logos) {
+  const letras = numeroALetras(d.monto);
+  const lineaModulo = /^m[oó]dulo/i.test((d.modulo || "").trim()) ? esc(d.modulo) : "Modulo de " + esc(d.modulo);
+  const impHtml = esc(d.imputacion)
+    .replace(/Subp:\s*322/, "<b>$&</b>")
+    .replace(/Presupuesto\s*\d{4}/, "<b>$&</b>");
+  const css =
+    ".hoja { font-family:'Times New Roman', Times, serif; font-size:12pt; color:#000; } " +
+    ".hoja .pagina { padding: 26pt 79pt 30pt 80pt; } .hoja p { margin:0; }";
+  const body =
+    '<div class="pagina ultima">' +
+    encabezadoDoc(logos) +
+    '<p style="margin-left:176pt; margin-top:14pt;">San Miguel de Tucumán, ' + esc(d.fechaTexto) + "</p>" +
+    '<p style="margin-left:5pt; margin-top:20pt; line-height:1.5;">A la Sra. Directora<br>Programa Integrado de Salud<br>' +
+    esc(d.directora) + '<br><b><span style="border-bottom:1.5pt solid #000;">Presente</span></b></p>' +
+    '<p style="text-align:justify; text-indent:135pt; margin-left:5pt; line-height:1.5; margin-top:16pt;">' +
+    "Me dirijo a usted a fines de informarle la afectación presupuestaria, en virtud de la prestación del servicio " +
+    esc(d.modulo) + " correspondiente al paciente<b>; " + esc(d.paciente) + " </b>la cual solicita:</p>" +
+    '<p style="margin-left:146pt; margin-top:12pt;">' + lineaModulo + "</p>" +
+    '<p style="text-align:justify; text-indent:135pt; line-height:1.5; margin-top:14pt;">' +
+    "Para los periodos de <b>" + esc(d.periodoTexto) + "</b>, por el importe total por " + esc(d.periodoMeses) +
+    " meses de <b>" + esc(d.montoFormato) + "</b> (" + letras + ") a la " + impHtml + ".</p>" +
+    '<p style="margin-left:145pt; margin-top:22pt;">Sin otro motivo saludo atentamente.</p>' +
+    '<p style="margin-left:5pt; margin-top:34pt; line-height:1.5; font-weight:bold;">Firmado digitalmente:<br>' +
+    "C.P.N Mariela Agustina Castillo<br>Gerente Administrativo<br>Dirección Gral. Prog. Integrado de Salud<br>SI.PRO.SA</p>" +
+    lineaAzulDoc(12) +
+    '<p style="font-size:10pt; line-height:1.2; text-align:justify;">' + PIE_ANIO + "</p>" +
+    "</div>";
+  return {
+    titulo: "NOTA AFECTACION PRESUPUESTARIA " + d.nroExpediente.replace(/\//g, "-"),
+    css, body, montoLetras: letras,
+  };
+}
+
+/* ---------- PASES (Auditoría Médica / Asesoría Letrada / Tribunal de Cuentas) ---------- */
+
+function plantillaPase(d, logos) {
+  const tipo = d.tipo;
+  let css, cuerpo, titulo;
+
+  if (tipo === "auditoria") {
+    css =
+      ".hoja { font-family: Arial, Helvetica, sans-serif; font-size:12pt; color:#000; } " +
+      ".hoja .pagina { padding: 26pt 85pt 30pt 85pt; } .hoja p { margin:0; }";
+    cuerpo =
+      '<p style="text-align:right; margin-top:16pt;">San Miguel de Tucumán, ' + esc(d.fechaTexto) + "</p>" +
+      '<p style="font-weight:bold; margin-top:26pt; line-height:1.6;">A la Jefa del Departamento<br>De Auditoria Médica<br>' +
+      esc(d.destinataria) +
+      '<br><span style="border-bottom:1.5pt solid #000;">S&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;D</span></p>' +
+      '<p style="font-weight:bold; margin-left:135pt; margin-top:22pt; line-height:1.6;">REF: Expte. ' + esc(d.nroExpediente) +
+      "<br>Paciente: " + esc(d.paciente) + "<br>DNI: " + esc(d.dni) + "</p>" +
+      '<p style="text-align:justify; text-indent:120pt; line-height:1.6; margin-top:24pt;">Me dirijo a usted a fin de solicitar intervención de competencia.</p>' +
+      '<p style="text-align:justify; text-indent:120pt; line-height:1.6; margin-top:10pt;">Sin otro particular, saludo a Ud. atentamente.</p>' +
+      '<p style="font-weight:bold; line-height:1.6; margin-top:70pt; margin-left:14pt;">Firmado digitalmente:<br>C.P.N. Mariela Agustina Castillo<br>Gerente Administrativo<br>Dirección Gral. Prog. Integrado de Salud<br>SI.PRO.SA.</p>' +
+      lineaAzulDoc(14) +
+      '<p style="font-family: Calibri, Arial, sans-serif; font-size:11pt; line-height:1.3; text-align:justify;">' + PIE_ANIO + "</p>";
+    titulo = "PASE AUDITORIA MEDICA EXPTE " + d.nroExpediente.replace(/\//g, "-") + " " + d.paciente.toUpperCase();
+  } else if (tipo === "letrada") {
+    css =
+      ".hoja { font-family: Arial, Helvetica, sans-serif; font-size:12pt; color:#000; } " +
+      ".hoja .pagina { padding: 26pt 73pt 30pt 80pt; } .hoja p { margin:0; }";
+    cuerpo =
+      '<p style="text-align:right; margin-top:16pt;">San Miguel de Tucumán, ' + esc(d.fechaTexto) + "</p>" +
+      '<p style="font-weight:bold; margin-top:30pt; line-height:1.6;">Oficina Asesoría Letrada<br>' +
+      '<span style="border-bottom:2pt solid ' + AZUL + '; padding-bottom:1pt;">Presente</span></p>' +
+      '<p style="text-align:justify; text-indent:100pt; line-height:1.18; margin-top:28pt;">' +
+      "Pase a Asesoría Letrada para su intervención, de competencia, dicho gasto será imputado con cargo al presupuesto " +
+      esc(d.anioPresupuesto) + "</p>" +
+      '<p style="text-indent:150pt; line-height:1.18; margin-top:32pt;">Sin otro particular, saludo a Ud. atentamente.</p>' +
+      '<p style="font-family:\'Times New Roman\', Times, serif; font-weight:bold; line-height:1.18; margin-top:245pt;">Firmado digitalmente:<br>C.P.N Mariela Agustina Castillo<br>Gerente Administrativo<br>Dirección Gral. Prog. Integrado de Salud<br>SI.PRO.SA</p>' +
+      lineaAzulDoc(10) +
+      '<p style="font-family:\'Times New Roman\', Times, serif; font-size:10pt; line-height:1.2; text-align:justify;">' + PIE_ANIO + "</p>";
+    titulo = "PASE ASESORIA LETRADA " + d.nroExpediente.replace(/\//g, "-") + " " + d.paciente.toUpperCase();
+  } else {
+    css =
+      ".hoja { font-family: Arial, Helvetica, sans-serif; font-size:12pt; color:#000; } " +
+      ".hoja .pagina { padding: 30pt 80pt 30pt 85pt; } .hoja p { margin:0; }";
+    cuerpo =
+      '<p style="text-align:right; margin-top:22pt;">San Miguel de Tucumán, ' + esc(d.fechaTexto) + "</p>" +
+      '<p style="font-weight:bold; margin-top:44pt; line-height:1.75;">Al Honorable Tribunal de Cuentas<br>De Gerencia Administrativa Contable</p>' +
+      '<p style="font-weight:bold; line-height:1.75;"><span style="border-bottom:2pt solid ' + AZUL + '; padding-bottom:1pt;">Presente</span></p>' +
+      '<p style="text-align:justify; text-indent:202pt; line-height:1.75; margin-top:36pt;">Me dirijo a Ud. a fin de solicitar intervención de competencia referente al <b>Expediente ' +
+      esc(d.nroExpediente) + "</b>.</p>" +
+      '<p style="text-align:justify; text-indent:202pt; line-height:1.75; margin-top:8pt;">Sin otro particular, saludo a Ud. atentamente.</p>' +
+      '<p style="font-weight:bold; font-size:11pt; line-height:1.72; margin-top:64pt; margin-left:14pt;">Firmado digitalmente:<br>C.P.N. Mariela Agustina Castillo<br>Gerente Administrativo<br>Dirección Gral. Prog. Integrado de Salud<br>SI.PRO.SA.</p>' +
+      lineaAzulDoc(14) +
+      '<p style="font-family: Calibri, Arial, sans-serif; font-size:11pt; line-height:1.3; text-align:justify;">' + PIE_ANIO + "</p>";
+    titulo = "PASE TRIBUNAL DE CUENTAS " + d.nroExpediente.replace(/\//g, "-") + " " + d.paciente.toUpperCase();
+  }
+
+  return { titulo, css, body: '<div class="pagina ultima">' + encabezadoDoc(logos) + cuerpo + "</div>" };
+}
+
+/* ---------- RESOLUCIÓN INTERNA (Times New Roman 12, 2 páginas) ---------- */
+
+function plantillaResolucion(d, logos) {
+  const letras = numeroALetras(d.total);
+  const pac = esc(d.paciente).toUpperCase();
+  const mod = esc(d.modulo);
+  const adj = esc(d.adjudicado).toUpperCase();
+  const per = esc(d.periodoTexto || d.periodoMeses + " meses");
+  const monto = formatoPesos(d.total);
+  const q = "margin:0; text-align:justify; text-indent:105pt; line-height:1.18;";
+  const css =
+    ".hoja { font-family:'Times New Roman', Times, serif; font-size:12pt; color:#000; } " +
+    ".hoja .pagina { padding: 26pt 79pt 30pt 85pt; } .hoja p { margin:0; } .hoja td { font-size:12pt; }";
+
+  const pag1 =
+    '<div class="pagina">' + encabezadoDoc(logos) +
+    '<p style="text-align:right; margin-top:10pt;">San Miguel de Tucumán, ' + esc(d.fechaTexto) + "</p>" +
+    '<p style="text-align:center; font-weight:bold; margin-top:14pt;">Resolución Interna: Nº ' + esc(d.nroResolucion) + "</p>" +
+    '<p style="text-align:center; font-weight:bold; margin-top:14pt;">PROGRAMA INTEGRADO DE SALUD</p>' +
+    '<p style="font-weight:bold; text-decoration:underline; margin-top:4pt;">VISTO:</p>' +
+    '<p style="text-align:justify; text-indent:52pt; line-height:1.18;">El <b>Expediente N° ' + esc(d.nroExpediente) +
+    "</b>, en el que se solicita " + esc(d.tipoTramite) + " de servicios de " + mod +
+    ", para el paciente; <b>" + pac + "</b> según lo indicado a fs. " + esc(d.fsSolicitud) + ". Y,</p>" +
+    '<p style="font-weight:bold; text-decoration:underline; margin-top:14pt;">CONSIDERANDO:</p>' +
+    '<p style="' + q + '">Que se solicita ' + esc(d.tipoTramite) + " de servicios de " + mod +
+    ", para el paciente; <b>" + pac + "</b>; por el <b>periodo de " + per + "</b>.</p>" +
+    '<p style="' + q + '">Que a fs. ' + esc(d.fsPresupuesto) + " se adjunta presupuesto del proveedor, correspondiente al <b>periodo de " +
+    per + "</b> (" + esc(d.periodoMeses) + " meses). --------------------------------------</p>" +
+    '<p style="' + q + '">Que a fs. ' + esc(d.fsCuadro) + " se adjunta Cuadro Comparativo, con la Adjudicación al Proveedor <b>" + adj +
+    "</b>, correspondiente a los periodos de <b>" + per + "</b>.</p>" +
+    '<p style="' + q + '">Que a fs. ' + esc(d.fsDictamen) + " se adjunta dictamen de auditoría médica, autorizando la prestación.</p>" +
+    '<p style="' + q + '">Que obra informe jurídico favorable a la contratación. ---------------</p>' +
+    '<p style="' + q + '">Que por lo expuesto, no existen objeciones legales que formular para que la Gerencia Administrativa Contable del Programa Integrado de Salud, en virtud de razones de urgencia invocadas, contrate con la firma <b>' +
+    adj + "</b>, la adquisición del servicio de " + mod +
+    ", bajo la figura de Contratación Directa de conformidad a lo normado por la Res. N°388/SPS/-05.</p>" +
+    '<p style="text-align:center; font-weight:bold; margin-top:14pt;">POR ELLO:</p>' +
+    '<p style="text-align:center; font-weight:bold;">LA GERENCIA ADMINISTRATIVA CONTABLE</p>' +
+    '<p style="text-align:center; font-weight:bold;">DEL PROGRAMA INTEGRADO DE SALUD.</p>' +
+    '<p style="text-align:center; font-weight:bold; text-decoration:underline;">RESUELVE:</p>' +
+    '<p style="text-align:justify; line-height:1.18; margin-top:14pt;"><b>ARTICULO 1º)</b> ADJUDICAR a la firma <b>' + adj +
+    "</b>, la provisión del siguiente servicio:</p>" +
+    '<table style="width:100%; border-collapse:collapse; margin-top:8pt;"><tr>' +
+    '<td style="border:1pt solid #000; padding:2pt 4pt; width:52%;">SERVICIO</td>' +
+    '<td style="border:1pt solid #000; padding:2pt 4pt; width:22%;">PRECIO POR MES</td>' +
+    '<td style="border:1pt solid #000; padding:2pt 4pt; width:26%;">PRECIO TOTAL POR ' + esc(d.periodoMeses) + " MESES</td>" +
+    "</tr><tr>" +
+    '<td style="border:1pt solid #000; padding:6pt 4pt 14pt;">' + mod + "</td>" +
+    '<td style="border:1pt solid #000; padding:6pt 4pt 14pt; text-align:center; font-weight:bold;">' + formatoPesos(d.mensual) + "</td>" +
+    '<td style="border:1pt solid #000; padding:6pt 4pt 14pt; text-align:center; font-weight:bold;">' + monto + "</td>" +
+    "</tr></table></div>";
+
+  const pag2 =
+    '<div class="pagina ultima">' + encabezadoDoc(logos) +
+    '<p style="text-align:justify; line-height:1.18; margin-top:12pt;">Por un monto total por ' + esc(d.periodoMeses) +
+    " meses <b>" + monto + "</b> (" + letras + "). Dicho servicio comprenderá a partir de la fecha de la orden de compra, comprendiendo desde los Meses de <b>" + per + "</b>.</p>" +
+    '<p style="text-align:justify; line-height:1.18; margin-top:14pt;"><b>ARTICULO 2º)</b> Imputar dicha suma <b>' + monto +
+    "</b> (" + letras + ") a " + esc(d.imputacion) + ", con cargo al <b>Presupuesto del año " + esc(d.anioPresupuesto) + "</b>.</p>" +
+    '<p style="text-align:justify; line-height:1.18; margin-top:14pt;"><b>ARTICULO 3°)</b> Pase a Control Pertinente del Honorable Tribunal de Cuentas en el Si.Pro.Sa.-</p>' +
+    '<p style="text-align:justify; line-height:1.18; margin-top:14pt;"><b>ARTICULO 4º)</b> Emitir la orden de compra respectiva.</p>' +
+    '<p style="text-align:justify; line-height:1.18; margin-top:20pt;"><b>ARTICULO 5°)</b> Comunicar y archivar.-</p>' +
+    '<p style="font-weight:bold; line-height:1.75; margin-top:120pt; margin-left:5pt;">Firmado digitalmente:<br>' +
+    esc(d.directora) + "<br>Directora. Gral. Prog. Integrado de Salud<br>SI.PRO.SA</p>" +
+    lineaAzulDoc(12) +
+    '<p style="font-size:10pt; line-height:1.2; text-align:justify;">' + PIE_ANIO + "</p></div>";
+
+  return {
+    titulo: "RESOLUCION " + String(d.nroResolucion || "").replace(/\//g, "-") + " EXPTE " +
+      d.nroExpediente.replace(/\//g, "-") + " " + d.paciente.toUpperCase(),
+    css, body: pag1 + pag2, montoLetras: letras,
+  };
+}
+
+/* ---------- Datos por defecto de cada documento (para generar y para revisar de nuevo) ---------- */
+
+const IMPUTACION_NOTA_DEFECTO =
+  "Jur: 67, U.O: 965, Fin/Fun: 314, Proy: 00, Subp: 00, Progr: 19, A/OB: 01, Part. Ppal.: 300, Subp: 322 – Fuente de financiamiento Nº 10 – Recursos Tesoro General de la Provincia – Presupuesto " + new Date().getFullYear();
+const IMPUTACION_RESOLUCION_DEFECTO =
+  "Jurisdicción 67 - Unid. Org. 965 - Recurso 10 - Finalidad/Función 314 - Programa 19 - Actividad 01 - Partida 300 - Subpartida 322";
+
+function fechaLargaHoy() {
+  const meses = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const d = new Date();
+  return d.getDate() + " de " + meses[d.getMonth()] + " de " + d.getFullYear();
+}
+
+const datosNota = (exp, extra = {}) => ({
   nroExpediente: exp.nroExpediente, paciente: exp.paciente, dni: exp.dni,
-  modulo: exp.modulo, periodoTexto: exp.periodoTexto || "", periodoMeses: exp.periodoMeses,
-  monto: exp.nota?.monto ?? (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6),
-  directora: exp.nota?.directora || "Dra. Noelia Soledad Bottone",
-  imputacion: exp.nota?.imputacion || "",
+  modulo: exp.modulo, periodoTexto: exp.periodoTexto || exp.periodoMeses + " meses", periodoMeses: exp.periodoMeses,
+  monto: extra.monto ?? exp.nota?.monto ?? (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6),
+  montoFormato: formatoPesos(extra.monto ?? exp.nota?.monto ?? (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6)),
+  directora: extra.directora ?? exp.nota?.directora ?? "Dra. Noellia Bottone",
+  imputacion: extra.imputacion ?? exp.nota?.imputacion ?? IMPUTACION_NOTA_DEFECTO,
+  fechaTexto: fechaLargaHoy(),
 });
+
+const datosPaseAuditoria = (exp, extra = {}) => ({
+  tipo: "auditoria",
+  nroExpediente: exp.nroExpediente, paciente: exp.paciente, dni: exp.dni,
+  destinataria: extra.destinataria ?? exp.paseAuditoria?.destinataria ?? "Farm. María Gabriela Policelli",
+  fechaTexto: fechaLargaHoy(),
+});
+
+const datosPaseLetrada = (exp, extra = {}) => ({
+  tipo: "letrada",
+  nroExpediente: exp.nroExpediente, paciente: exp.paciente,
+  fechaTexto: extra.fechaTexto ?? exp.paseLetrada?.fechaTexto ?? mesAnioActual(),
+  anioPresupuesto: extra.anio ?? exp.paseLetrada?.anio ?? String(new Date().getFullYear()),
+});
+
+const datosPaseTribunal = (exp) => ({
+  tipo: "tribunal",
+  nroExpediente: exp.nroExpediente, paciente: exp.paciente,
+  fechaTexto: fechaLargaHoy(),
+});
+
+const datosResolucion = (exp, extra = {}) => {
+  const r = exp.resolucion || {};
+  const total = extra.total ?? r.total ?? (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6);
+  return {
+    nroExpediente: exp.nroExpediente, paciente: exp.paciente,
+    modulo: exp.modulo, periodoTexto: exp.periodoTexto || "", periodoMeses: exp.periodoMeses,
+    adjudicado: exp.cuadro?.adjudicado || "", mensual: exp.cuadro?.mensual || 0, total,
+    nroResolucion: extra.nroResolucion ?? r.nro ?? "",
+    tipoTramite: extra.tipoTramite ?? r.tipoTramite ?? "inicio",
+    fsSolicitud: extra.fsSolicitud ?? r.fojas?.solicitud ?? "",
+    fsPresupuesto: extra.fsPresupuesto ?? r.fojas?.presupuesto ?? "",
+    fsCuadro: extra.fsCuadro ?? r.fojas?.cuadro ?? "",
+    fsDictamen: extra.fsDictamen ?? r.fojas?.dictamen ?? "",
+    directora: extra.directora ?? r.directora ?? "Dra. Noelia Soledad Bottone",
+    imputacion: extra.imputacion ?? r.imputacion ?? IMPUTACION_RESOLUCION_DEFECTO,
+    anioPresupuesto: extra.anio ?? r.anio ?? String(new Date().getFullYear()),
+    fechaTexto: fechaLargaHoy(),
+  };
+};
 
 const payloadCuadro = (exp) => {
   const consultados = (exp.cotizacion?.proveedores || "").split(",").map((s) => s.trim()).filter(Boolean);
@@ -222,6 +540,8 @@ const payloadCuadro = (exp) => {
     nroExpediente: exp.nroExpediente, paciente: exp.paciente,
     modulo: exp.modulo, detalleServicios: exp.detalleServicios,
     periodoTexto: exp.periodoTexto, periodoMeses: exp.periodoMeses,
+    cantTexto: c.cantTexto || "", cantNum: c.cantNum || "",
+    textoAdjudicacion: c.textoAdjudicacion || "", textoConstancia: c.textoConstancia || "",
     proveedores: consultados.map((n) => ({
       nombre: n,
       estado: guardados[n]?.estado || "sin_respuesta",
@@ -229,34 +549,6 @@ const payloadCuadro = (exp) => {
       mensual: guardados[n]?.mensual || null,
     })),
     adjudicado: { nombre: c.adjudicado, unitario: c.unitario, mensual: c.mensual, total: c.total },
-  };
-};
-
-const payloadPaseLetrada = (exp) => ({
-  accion: "generarPase", tipo: "letrada",
-  nroExpediente: exp.nroExpediente, paciente: exp.paciente,
-  fechaTexto: exp.paseLetrada?.fechaTexto || "",
-  anioPresupuesto: exp.paseLetrada?.anio || "",
-});
-
-const payloadPaseTribunal = (exp) => ({
-  accion: "generarPase", tipo: "tribunal",
-  nroExpediente: exp.nroExpediente, paciente: exp.paciente,
-});
-
-const payloadResolucion = (exp) => {
-  const r = exp.resolucion || {};
-  return {
-    accion: "generarResolucion",
-    nroExpediente: exp.nroExpediente, paciente: exp.paciente,
-    modulo: exp.modulo, periodoTexto: exp.periodoTexto || "", periodoMeses: exp.periodoMeses,
-    adjudicado: exp.cuadro?.adjudicado || "", mensual: exp.cuadro?.mensual || 0,
-    total: r.total ?? (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6),
-    nroResolucion: r.nro || "", tipoTramite: r.tipoTramite || "inicio",
-    fsSolicitud: r.fojas?.solicitud || "", fsPresupuesto: r.fojas?.presupuesto || "",
-    fsCuadro: r.fojas?.cuadro || "", fsDictamen: r.fojas?.dictamen || "",
-    directora: r.directora || "Dra. Noelia Soledad Bottone",
-    imputacion: r.imputacion || "", anioPresupuesto: r.anio || "",
   };
 };
 
@@ -742,6 +1034,8 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
         ))}
       </div>
 
+      <PaseAuditoria exp={exp} />
+
       {exp.etapa === 0 && <EnvioCotizacion exp={exp} proveedores={proveedores} />}
       {exp.etapa >= 1 && exp.cotizacion && (
         <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
@@ -784,7 +1078,7 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
           <div style={{ fontSize: 14, color: "#334155" }}>
             <b>Importe total:</b> {formatoPesos(exp.nota.monto)} ({exp.nota.montoLetras})
           </div>
-          <BotonRedescargar construirPayload={() => payloadNota(exp)} />
+          <BotonRevisar construirPlantilla={(logos) => plantillaNota(datosNota(exp), logos)} />
         </div>
       )}
 
@@ -796,7 +1090,7 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
           <div style={{ fontSize: 14, color: "#334155" }}>
             <b>Fecha:</b> {formatearFecha(exp.paseLetrada.fecha)}
           </div>
-          <BotonRedescargar construirPayload={() => payloadPaseLetrada(exp)} />
+          <BotonRevisar construirPlantilla={(logos) => plantillaPase(datosPaseLetrada(exp), logos)} />
         </div>
       )}
       {exp.etapa === 4 && <PaseLetrada exp={exp} />}
@@ -808,7 +1102,7 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
             <b>Fecha:</b> {formatearFecha(exp.resolucion.fecha)}<br />
             <b>Adjudicado:</b> {exp.resolucion.adjudicado} · <b>Monto total:</b> {formatoPesos(exp.resolucion.total)}
           </div>
-          <BotonRedescargar construirPayload={() => payloadResolucion(exp)} />
+          <BotonRevisar construirPlantilla={(logos) => plantillaResolucion(datosResolucion(exp), logos)} />
         </div>
       )}
       {exp.etapa === 5 && <GenerarResolucion exp={exp} />}
@@ -819,7 +1113,7 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
           <div style={{ fontSize: 14, color: "#334155" }}>
             <b>Fecha:</b> {formatearFecha(exp.paseTribunal.fecha)}
           </div>
-          <BotonRedescargar construirPayload={() => payloadPaseTribunal(exp)} />
+          <BotonRevisar construirPlantilla={(logos) => plantillaPase(datosPaseTribunal(exp), logos)} />
         </div>
       )}
       {exp.etapa === 6 && <PaseTribunal exp={exp} />}
@@ -882,7 +1176,142 @@ function BotonRedescargar({ construirPayload }) {
         catch (e) { alert("\u274c Error al descargar: " + e.message); }
         setOcupado(false);
       }}
-    >{ocupado ? "\u23f3 Generando..." : "\u2b07\ufe0f Descargar de nuevo (Word + PDF)"}</button>
+    >{ocupado ? "\u23f3 Generando..." : "\u2b07\ufe0f Descargar de nuevo (Excel + PDF)"}</button>
+  );
+}
+
+/* ---------- Vista previa editable de documentos ---------- */
+
+function VistaPrevia({ construirPlantilla, onListo, onCerrar }) {
+  const [plantilla, setPlantilla] = useState(null);
+  const [ocupado, setOcupado] = useState(false);
+  const hojaRef = useRef(null);
+
+  useEffect(() => {
+    let vivo = true;
+    obtenerLogos().then((logos) => { if (vivo) setPlantilla(construirPlantilla(logos)); });
+    return () => { vivo = false; };
+  }, []);
+
+  const generar = async (conWord) => {
+    setOcupado(true);
+    try {
+      const body = hojaRef.current.innerHTML;
+      const payload = {
+        accion: "htmlAPdf",
+        titulo: plantilla.titulo,
+        html: envolverHtml(plantilla.css, '<div class="hoja">' + body + "</div>"),
+      };
+      if (conWord) payload.htmlWord = envolverHtml(plantilla.css, '<div class="hoja">' + logosAUrl(body) + "</div>");
+      const data = await llamarYDescargar(payload);
+      if (onListo) await onListo({ ...data, montoLetras: plantilla.montoLetras || "" });
+      alert("✅ PDF generado y descargado a tu máquina." + (conWord ? "\n📄 También se descargó la versión Word." : ""));
+      if (onCerrar) onCerrar();
+    } catch (e) {
+      alert("❌ Error al generar el PDF: " + e.message);
+    }
+    setOcupado(false);
+  };
+
+  if (!plantilla) {
+    return <div style={{ ...S.card, textAlign: "center", color: "#64748b" }}>⏳ Preparando la vista previa...</div>;
+  }
+
+  return (
+    <div style={{ ...S.card, borderLeft: "5px solid #0891b2", background: "#f8fafc" }}>
+      <div style={{ fontWeight: 800, color: "#075e75", marginBottom: 4 }}>👁️ Revisión del documento</div>
+      <div style={{ fontSize: 13, color: "#64748b", marginBottom: 10 }}>
+        Así va a salir el PDF. <b>Si hay algo que corregir, hacé clic sobre el texto y editalo directamente acá</b> — nombres, fechas, fojas, montos, lo que sea. Cuando esté bien, apretá el botón verde.
+      </div>
+      <style>{plantilla.css + " .hoja .pagina { background:#fff; box-shadow:0 1px 6px rgba(0,0,0,0.3); margin:0 auto 14px; width:794px; min-height:1122px; box-sizing:border-box; }"}</style>
+      <div style={{ overflowX: "auto", background: "#cbd5e1", padding: 12, borderRadius: 8 }}>
+        <div
+          className="hoja"
+          ref={hojaRef}
+          contentEditable
+          suppressContentEditableWarning
+          spellCheck={false}
+          style={{ outline: "none", minWidth: 794 }}
+          dangerouslySetInnerHTML={{ __html: plantilla.body }}
+        />
+      </div>
+      <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+        <button style={{ ...S.btn, flex: 2, minWidth: 220, fontSize: 15, background: "#16a34a", opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => generar(false)}>
+          {ocupado ? "⏳ Generando..." : "✅ ESTÁ BIEN — GENERAR PDF"}
+        </button>
+        <button style={{ ...S.btnSec, flex: 1, minWidth: 130, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => generar(true)}>
+          {ocupado ? "⏳..." : "📄 PDF + Word"}
+        </button>
+        {onCerrar && (
+          <button style={{ ...S.btnSec, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={onCerrar}>✖ Cancelar</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function BotonRevisar({ construirPlantilla, etiqueta }) {
+  const [abierto, setAbierto] = useState(false);
+  if (!abierto) {
+    return (
+      <button style={{ ...S.btnSec, marginTop: 10 }} onClick={() => setAbierto(true)}>
+        {etiqueta || "👁️ Revisar / descargar de nuevo (PDF o Word)"}
+      </button>
+    );
+  }
+  return <VistaPrevia construirPlantilla={construirPlantilla} onCerrar={() => setAbierto(false)} />;
+}
+
+/* ---------- Pase a Auditoría Médica (documento del inicio del trámite) ---------- */
+
+function PaseAuditoria({ exp }) {
+  const [abierto, setAbierto] = useState(false);
+  const [destinataria, setDestinataria] = useState(exp.paseAuditoria?.destinataria || "Farm. María Gabriela Policelli");
+  const [revisando, setRevisando] = useState(false);
+
+  if (revisando) {
+    return (
+      <VistaPrevia
+        construirPlantilla={(logos) => plantillaPase(datosPaseAuditoria(exp, { destinataria }), logos)}
+        onCerrar={() => { setRevisando(false); setAbierto(false); }}
+        onListo={async () => {
+          await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
+            paseAuditoria: { fecha: new Date().toISOString(), destinataria },
+          });
+        }}
+      />
+    );
+  }
+
+  return (
+    <div style={{ ...S.card, borderLeft: exp.paseAuditoria ? "5px solid #16a34a" : "5px solid #94a3b8" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ fontWeight: 800, color: exp.paseAuditoria ? "#166534" : "#334155" }}>
+          {exp.paseAuditoria ? "✅ Pase a Auditoría Médica generado" : "🩺 Pase a Auditoría Médica"}
+        </div>
+        <div style={{ flex: 1 }} />
+        <button style={S.btnSec} onClick={() => setAbierto(!abierto)}>
+          {abierto ? "▲ Ocultar" : exp.paseAuditoria ? "👁️ Revisar / regenerar" : "▼ Generar"}
+        </button>
+      </div>
+      {exp.paseAuditoria && (
+        <div style={{ fontSize: 13, color: "#334155", marginTop: 4 }}>
+          <b>Fecha:</b> {formatearFecha(exp.paseAuditoria.fecha)} · <b>Dirigido a:</b> {exp.paseAuditoria.destinataria}
+        </div>
+      )}
+      {abierto && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontSize: 13, color: "#64748b" }}>
+            Nota dirigida al Departamento de Auditoría Médica solicitando intervención de competencia (para el dictamen). Con REF de expediente, paciente y DNI. Se revisa en pantalla y se genera el PDF.
+          </div>
+          <label style={S.label}>Jefa del Departamento (destinataria)</label>
+          <input style={S.input} value={destinataria} onChange={(e) => setDestinataria(e.target.value)} />
+          <button style={{ ...S.btn, marginTop: 14, width: "100%", fontSize: 15 }} onClick={() => setRevisando(true)}>
+            👁️ GENERAR Y REVISAR EL PASE
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1040,6 +1469,8 @@ function RegistroPresupuestos({ exp }) {
   });
   const [archivos, setArchivos] = useState({});
   const [ocupado, setOcupado] = useState(false);
+  const [cantTexto, setCantTexto] = useState(exp.cuadro?.cantTexto || "31 dias");
+  const [cantNum, setCantNum] = useState(exp.cuadro?.cantNum || "31");
 
   const setProv = (nombre, campo, valor) =>
     setDatos({ ...datos, [nombre]: { ...datos[nombre], [campo]: valor } });
@@ -1088,7 +1519,9 @@ function RegistroPresupuestos({ exp }) {
   const cotizantes = consultados.filter((n) => (guardados[n]?.estado) === "cotizo");
   const pendientes = consultados.filter((n) => !guardados[n]?.estado);
 
-  const generarCuadro = async () => {
+  const [previa, setPrevia] = useState(null);
+
+  const abrirPrevia = () => {
     if (cotizantes.length === 0) { alert("Todavía no hay ningún proveedor con presupuesto cargado (Cotizó)."); return; }
     if (pendientes.length > 0 && !confirm(`Hay proveedores sin marcar: ${pendientes.join(", ")}.\n\nSi seguís, quedarán registrados como SIN RESPUESTA. ¿Continuar?`)) return;
 
@@ -1100,45 +1533,129 @@ function RegistroPresupuestos({ exp }) {
     });
     const g = guardados[ganador];
     const total = g.mensual * Number(exp.periodoMeses || 6);
+    const lista = consultados.map((n) => ({
+      nombre: n,
+      estado: guardados[n]?.estado || "sin_respuesta",
+      unitario: guardados[n]?.unitario || null,
+      mensual: guardados[n]?.mensual || null,
+    }));
+    const cotizaron = lista.filter((p) => p.estado === "cotizo").map((p) => p.nombre.toUpperCase());
+    const negativas = lista.filter((p) => p.estado === "desestimo").map((p) => p.nombre.toUpperCase() + " (NEGATIVA)");
+    setPrevia({
+      ganador, g, total, lista,
+      textoAdjudicacion:
+        "CONFORME A LO DETALLADO EN EL CUADRO COMPARATIVO , SE ADJUDICA SERVICIO DE " +
+        (exp.modulo || "").toUpperCase() + " A LA FIRMA : " + ganador.toUpperCase(),
+      textoConstancia:
+        "Se deja constancia que, habiendose solicitado cotizacion a " + lista.length +
+        " proveedores del rubro, unicamente las firmas comerciales: " + cotizaron.concat(negativas).join("/") +
+        " ; presentaron presupuestos dentro del plazo establecido. Los restantes proveedores convocados no remitieron cotizacion ni emitieron respuesta alguna al requerimiento efectuado a la fecha de adjudicacion.-",
+    });
+  };
 
-    if (!confirm(`CUADRO COMPARATIVO\n\nAdjudicación al menor precio:\n→ ${ganador}: ${formatoPesos(g.mensual)}/mes · Total ${exp.periodoMeses} meses: ${formatoPesos(total)}\n\n¿Generar el cuadro comparativo en PDF?`)) return;
-
+  const confirmarCuadro = async (conExcel) => {
     setOcupado(true);
     try {
-      const lista = consultados.map((n) => ({
-        nombre: n,
-        estado: guardados[n]?.estado || "sin_respuesta",
-        unitario: guardados[n]?.unitario || null,
-        mensual: guardados[n]?.mensual || null,
-      }));
       await llamarYDescargar({
         accion: "generarCuadro",
         nroExpediente: exp.nroExpediente, paciente: exp.paciente,
         modulo: exp.modulo, detalleServicios: exp.detalleServicios,
         periodoTexto: exp.periodoTexto, periodoMeses: exp.periodoMeses,
-        proveedores: lista,
-        adjudicado: { nombre: ganador, unitario: g.unitario, mensual: g.mensual, total },
-      });
+        cantTexto, cantNum,
+        textoAdjudicacion: previa.textoAdjudicacion, textoConstancia: previa.textoConstancia,
+        proveedores: previa.lista,
+        adjudicado: { nombre: previa.ganador, unitario: previa.g.unitario, mensual: previa.g.mensual, total: previa.total },
+      }, conExcel);
       await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
         etapa: 3,
         cuadro: {
           fecha: new Date().toISOString(),
-          adjudicado: ganador,
-          unitario: g.unitario, mensual: g.mensual, total,
+          adjudicado: previa.ganador,
+          unitario: previa.g.unitario, mensual: previa.g.mensual, total: previa.total,
+          cantTexto, cantNum,
+          textoAdjudicacion: previa.textoAdjudicacion, textoConstancia: previa.textoConstancia,
         },
       });
-      alert("✅ Cuadro comparativo generado. Adjudicado: " + ganador + "\n\nSe descargaron a tu máquina el PDF (para el SIGEDIG) y el Word (por si necesitás retocar algo).");
+      alert("✅ Cuadro comparativo generado. Adjudicado: " + previa.ganador +
+        "\n\nSe descargó el PDF apaisado (para el SIGEDIG)" + (conExcel ? " y el Excel editable." : "."));
+      setPrevia(null);
     } catch (e) {
       alert("❌ Error al generar el cuadro: " + e.message);
     }
     setOcupado(false);
   };
 
+  if (previa) {
+    return (
+      <div style={{ ...S.card, borderLeft: "5px solid #0891b2", background: "#f8fafc" }}>
+        <div style={{ fontWeight: 800, color: "#075e75", marginBottom: 4 }}>👁️ Revisión del cuadro comparativo</div>
+        <div style={{ fontSize: 13, color: "#64748b", marginBottom: 10 }}>
+          Revisá los precios de la tabla y corregí los textos si hace falta. Cuando esté bien, generá el PDF (apaisado, formato Excel oficial).
+        </div>
+
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13, background: "#fff" }}>
+            <thead>
+              <tr>
+                <th style={{ border: "1px solid #334155", padding: 6, background: "#F2F2F2" }}>DETALLE SOLICITADO</th>
+                {previa.lista.filter((p) => p.estado !== "sin_respuesta").map((p, i) => (
+                  <th key={p.nombre} colSpan={2} style={{ border: "1px solid #334155", padding: 6, background: i % 2 ? "#E7E6E6" : "#F2F2F2" }}>{p.nombre.toUpperCase()}</th>
+                ))}
+              </tr>
+              <tr>
+                <th style={{ border: "1px solid #334155", padding: 6 }}>PRESTACION ({cantTexto || "-"} / {cantNum || "-"})</th>
+                {previa.lista.filter((p) => p.estado !== "sin_respuesta").map((p) => (
+                  <Fragment key={p.nombre}>
+                    <th style={{ border: "1px solid #334155", padding: 6 }}>P. UNITARIO</th>
+                    <th style={{ border: "1px solid #334155", padding: 6 }}>P. MENSUAL</th>
+                  </Fragment>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style={{ border: "1px solid #334155", padding: 6 }}>{exp.modulo}</td>
+                {previa.lista.filter((p) => p.estado !== "sin_respuesta").map((p) => (
+                  <Fragment key={p.nombre}>
+                    <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 700 }}>
+                      {p.estado === "cotizo" ? formatoPesos(p.unitario) : "NO COTIZA"}
+                    </td>
+                    <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 700 }}>
+                      {p.estado === "cotizo" ? formatoPesos(p.mensual) : ""}
+                    </td>
+                  </Fragment>
+                ))}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <label style={S.label}>Texto de adjudicación (recuadro gris del cuadro)</label>
+        <textarea style={{ ...S.input, minHeight: 60 }} value={previa.textoAdjudicacion}
+          onChange={(e) => setPrevia({ ...previa, textoAdjudicacion: e.target.value })} />
+
+        <label style={S.label}>Texto de constancia (proveedores consultados)</label>
+        <textarea style={{ ...S.input, minHeight: 90 }} value={previa.textoConstancia}
+          onChange={(e) => setPrevia({ ...previa, textoConstancia: e.target.value })} />
+
+        <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+          <button style={{ ...S.btn, flex: 2, minWidth: 200, background: "#16a34a", fontSize: 15, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => confirmarCuadro(false)}>
+            {ocupado ? "⏳ Generando..." : "✅ ESTÁ BIEN — GENERAR PDF"}
+          </button>
+          <button style={{ ...S.btnSec, flex: 1, minWidth: 140, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => confirmarCuadro(true)}>
+            {ocupado ? "⏳..." : "📊 PDF + Excel"}
+          </button>
+          <button style={{ ...S.btnSec, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => setPrevia(null)}>✖ Cancelar</button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ ...S.card, borderLeft: "5px solid #f59e0b" }}>
       <h3 style={{ color: "#075e75", marginBottom: 4 }}>📬 Registro de presupuestos</h3>
       <div style={{ fontSize: 13, color: "#64748b" }}>
-        A medida que respondan al mail, cargá acá cada proveedor: estado, precios y el PDF del presupuesto (queda guardado en el Drive del expediente). Cuando estén todos, generá el cuadro comparativo: se descarga a tu máquina en Word y PDF.
+        A medida que respondan al mail, cargá acá cada proveedor: estado, precios y el PDF del presupuesto (queda guardado en el Drive del expediente). Cuando estén todos, generá el cuadro comparativo: se descarga a tu máquina en Excel (editable) y PDF apaisado (para el SIGEDIG), calcado del formato real.
       </div>
 
       {consultados.map((nombre) => {
@@ -1198,8 +1715,19 @@ function RegistroPresupuestos({ exp }) {
         );
       })}
 
-      <button style={{ ...S.btn, marginTop: 18, width: "100%", fontSize: 16, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={generarCuadro}>
-        {ocupado ? "⏳ Procesando..." : "📊 GENERAR CUADRO COMPARATIVO (adjudica al menor precio)"}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 180px", gap: 10, marginTop: 14 }}>
+        <div>
+          <label style={{ ...S.label, marginTop: 0 }}>Cantidad (columna "PRESTACION" del cuadro — ej: 31 dias, 15 set, 12 hs diarias)</label>
+          <input style={S.input} value={cantTexto} onChange={(e) => setCantTexto(e.target.value)} placeholder="31 dias" />
+        </div>
+        <div>
+          <label style={{ ...S.label, marginTop: 0 }}>Cant. de hs/ses.</label>
+          <input style={S.input} value={cantNum} onChange={(e) => setCantNum(e.target.value)} placeholder="31" />
+        </div>
+      </div>
+
+      <button style={{ ...S.btn, marginTop: 14, width: "100%", fontSize: 16, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={abrirPrevia}>
+        {ocupado ? "⏳ Procesando..." : "👁️ GENERAR Y REVISAR EL CUADRO (adjudica al menor precio)"}
       </button>
     </div>
   );
@@ -1208,65 +1736,58 @@ function RegistroPresupuestos({ exp }) {
 /* ---------- Nota de afectación presupuestaria (Fase 2) ---------- */
 
 function GenerarNota({ exp }) {
-  const monto = (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6);
-  const [directora, setDirectora] = useState("Dra. Noellia Bottone");
-  const [imputacion, setImputacion] = useState(
-    "Jur: 67, U.O: 965, Fin/Fun: 314, Proy: 00, Subp: 00, Progr: 19, A/OB: 01, Part. Ppal.: 300, Subp: 322 – Fuente de financiamiento Nº 10 – Recursos Tesoro General de la Provincia – Presupuesto 2026"
-  );
-  const [ocupado, setOcupado] = useState(false);
+  const total = (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6);
+  const [monto, setMonto] = useState(exp.nota?.monto ?? total);
+  const [directora, setDirectora] = useState(exp.nota?.directora || "Dra. Noellia Bottone");
+  const [imputacion, setImputacion] = useState(exp.nota?.imputacion || IMPUTACION_NOTA_DEFECTO);
+  const [revisando, setRevisando] = useState(false);
 
-  const generar = async () => {
-    if (!exp.periodoTexto && !confirm("El expediente no tiene el período en texto (ej: Julio 2026 a Diciembre 2026). Podés cargarlo con ✏️ Editar datos. ¿Generar la nota igual?")) return;
-    setOcupado(true);
-    try {
-      const data = await llamarYDescargar({
-        accion: "generarNota",
-        nroExpediente: exp.nroExpediente, paciente: exp.paciente, dni: exp.dni,
-        modulo: exp.modulo, periodoTexto: exp.periodoTexto || "", periodoMeses: exp.periodoMeses,
-        monto, directora, imputacion,
-      });
-      await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
-        etapa: 4,
-        nota: {
-          fecha: new Date().toISOString(),
-          monto, montoLetras: data.montoLetras || "",
-          directora, imputacion,
-        },
-      });
-      alert("✅ Nota de afectación generada.\n\nSe descargaron a tu máquina el PDF y el Word.");
-    } catch (e) {
-      alert("❌ Error al generar la nota: " + e.message);
-    }
-    setOcupado(false);
-  };
+  if (revisando) {
+    return (
+      <VistaPrevia
+        construirPlantilla={(logos) => plantillaNota(datosNota(exp, { monto: Number(monto), directora, imputacion }), logos)}
+        onCerrar={() => setRevisando(false)}
+        onListo={async (data) => {
+          await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
+            etapa: Math.max(exp.etapa, 4),
+            nota: {
+              fecha: new Date().toISOString(),
+              monto: Number(monto), montoLetras: data.montoLetras || "",
+              directora, imputacion,
+            },
+          });
+        }}
+      />
+    );
+  }
 
   return (
     <div style={{ ...S.card, borderLeft: "5px solid #f59e0b" }}>
-      <h3 style={{ color: "#075e75", marginBottom: 4 }}>📄 Nota de afectación presupuestaria</h3>
+      <h3 style={{ color: "#075e75", marginBottom: 4 }}>💰 Nota de afectación presupuestaria</h3>
       <div style={{ fontSize: 13, color: "#64748b" }}>
-        Informa a la Dirección el gasto del período. El importe sale del cuadro comparativo y se escribe también en letras, automáticamente. Se descarga a tu máquina en Word (editable) y PDF (para el SIGEDIG); no queda copia en el Drive.
+        Con el formato oficial del Word real (Times New Roman). El importe sale del cuadro comparativo y las letras se escriben solas. Primero la revisás en pantalla, la corregís si hace falta, y recién ahí generás el PDF.
       </div>
 
-      <div style={{ background: "#e0f2fe", borderRadius: 8, padding: 10, marginTop: 12, fontSize: 14, color: "#075e75", fontWeight: 700 }}>
-        Importe total ({exp.periodoMeses} meses · {exp.cuadro?.adjudicado}): {formatoPesos(monto)}
+      <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 10 }}>
+        <div>
+          <label style={S.label}>Importe total ({exp.periodoMeses} meses)</label>
+          <input style={S.input} type="number" value={monto} onChange={(e) => setMonto(e.target.value)} />
+        </div>
+        <div>
+          <label style={S.label}>Directora del Programa</label>
+          <input style={S.input} value={directora} onChange={(e) => setDirectora(e.target.value)} />
+        </div>
       </div>
 
-      <label style={S.label}>Dirigida a (Directora del Programa)</label>
-      <input style={S.input} value={directora} onChange={(e) => setDirectora(e.target.value)} />
-
-      <label style={S.label}>Imputación presupuestaria (revisala si cambió el ejercicio)</label>
+      <label style={S.label}>Imputación presupuestaria</label>
       <textarea style={{ ...S.input, minHeight: 70 }} value={imputacion} onChange={(e) => setImputacion(e.target.value)} />
 
-      <button style={{ ...S.btn, marginTop: 16, width: "100%", fontSize: 16, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={generar}>
-        {ocupado ? "⏳ Generando..." : "📄 GENERAR NOTA DE AFECTACIÓN (PDF)"}
+      <button style={{ ...S.btn, marginTop: 16, width: "100%", fontSize: 16 }} onClick={() => setRevisando(true)}>
+        👁️ GENERAR Y REVISAR LA NOTA
       </button>
     </div>
   );
 }
-
-
-
-/* ---------- FASE 3: Pases, Resolución y Orden de Compra ---------- */
 
 function mesAnioActual() {
   const meses = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
@@ -1279,35 +1800,28 @@ function mesAnioActual() {
 function PaseLetrada({ exp }) {
   const [fechaTexto, setFechaTexto] = useState(mesAnioActual());
   const [anio, setAnio] = useState(String(new Date().getFullYear()));
-  const [ocupado, setOcupado] = useState(false);
+  const [revisando, setRevisando] = useState(false);
 
-  const generar = async () => {
-    setOcupado(true);
-    try {
-      await llamarYDescargar({
-        accion: "generarPase", tipo: "letrada",
-        nroExpediente: exp.nroExpediente, paciente: exp.paciente,
-        fechaTexto, anioPresupuesto: anio,
-      });
-      await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
-        etapa: 5,
-        paseLetrada: {
-          fecha: new Date().toISOString(),
-          fechaTexto, anio,
-        },
-      });
-      alert("✅ Pase a Asesoría Letrada generado.\n\nSe descargaron a tu máquina el PDF y el Word.");
-    } catch (e) {
-      alert("❌ Error al generar el pase: " + e.message);
-    }
-    setOcupado(false);
-  };
+  if (revisando) {
+    return (
+      <VistaPrevia
+        construirPlantilla={(logos) => plantillaPase(datosPaseLetrada(exp, { fechaTexto, anio }), logos)}
+        onCerrar={() => setRevisando(false)}
+        onListo={async () => {
+          await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
+            etapa: Math.max(exp.etapa, 5),
+            paseLetrada: { fecha: new Date().toISOString(), fechaTexto, anio },
+          });
+        }}
+      />
+    );
+  }
 
   return (
     <div style={{ ...S.card, borderLeft: "5px solid #f59e0b" }}>
       <h3 style={{ color: "#075e75", marginBottom: 4 }}>⚖️ Pase a Asesoría Letrada</h3>
       <div style={{ fontSize: 13, color: "#64748b" }}>
-        Genera la nota de pase para la intervención de Asesoría Letrada, con la firma de la Gerente, y la descarga a tu máquina en Word y PDF. Cuando vuelva el informe jurídico favorable, seguís con la resolución.
+        Nota de pase con la firma de la Gerente. La revisás en pantalla y generás el PDF. Cuando vuelva el informe jurídico favorable, seguís con la resolución.
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 10 }}>
@@ -1321,14 +1835,12 @@ function PaseLetrada({ exp }) {
         </div>
       </div>
 
-      <button style={{ ...S.btn, marginTop: 16, width: "100%", fontSize: 16, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={generar}>
-        {ocupado ? "⏳ Generando..." : "⚖️ GENERAR PASE A ASESORÍA LETRADA (PDF)"}
+      <button style={{ ...S.btn, marginTop: 16, width: "100%", fontSize: 16 }} onClick={() => setRevisando(true)}>
+        👁️ GENERAR Y REVISAR EL PASE
       </button>
     </div>
   );
 }
-
-/* ---------- Resolución Interna de contratación ---------- */
 
 function GenerarResolucion({ exp }) {
   const total = (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6);
@@ -1341,52 +1853,51 @@ function GenerarResolucion({ exp }) {
     fsDictamen: "",
     directora: "Dra. Noelia Soledad Bottone",
     anio: String(new Date().getFullYear()),
-    imputacion: exp.nota?.imputacion ||
-      "Jurisdicción 67 - Unid. Org. 965 - Recurso 10 - Finalidad/Función 314 - Programa 19 - Actividad 01 - Partida 300 - Subpartida 322",
+    imputacion: exp.resolucion?.imputacion || IMPUTACION_RESOLUCION_DEFECTO,
   });
-  const [ocupado, setOcupado] = useState(false);
+  const [revisando, setRevisando] = useState(false);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
 
-  const generar = async () => {
+  if (revisando) {
+    return (
+      <VistaPrevia
+        construirPlantilla={(logos) => plantillaResolucion(datosResolucion(exp, {
+          total, nroResolucion: f.nroResolucion, tipoTramite: f.tipoTramite,
+          fsSolicitud: f.fsSolicitud, fsPresupuesto: f.fsPresupuesto,
+          fsCuadro: f.fsCuadro, fsDictamen: f.fsDictamen,
+          directora: f.directora, imputacion: f.imputacion, anio: f.anio,
+        }), logos)}
+        onCerrar={() => setRevisando(false)}
+        onListo={async (data) => {
+          await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
+            etapa: Math.max(exp.etapa, 6),
+            resolucion: {
+              fecha: new Date().toISOString(),
+              nro: f.nroResolucion, tipoTramite: f.tipoTramite,
+              adjudicado: exp.cuadro?.adjudicado || "", total,
+              montoLetras: data.montoLetras || "",
+              fojas: { solicitud: f.fsSolicitud, presupuesto: f.fsPresupuesto, cuadro: f.fsCuadro, dictamen: f.fsDictamen },
+              directora: f.directora, imputacion: f.imputacion, anio: f.anio,
+            },
+          });
+        }}
+      />
+    );
+  }
+
+  const generar = () => {
     if (!f.nroResolucion) { alert("Cargá el N° de la resolución (ej: 3123/DGPRIS)."); return; }
     if (!f.fsPresupuesto || !f.fsCuadro || !f.fsDictamen) {
-      if (!confirm("Faltan números de fojas (presupuesto, cuadro o dictamen). El documento va a salir con esos espacios vacíos. ¿Generar igual?")) return;
+      if (!confirm("Faltan números de fojas (presupuesto, cuadro o dictamen). El documento va a salir con esos espacios vacíos — igual podés completarlos a mano en la vista previa. ¿Continuar?")) return;
     }
-    setOcupado(true);
-    try {
-      const data = await llamarYDescargar({
-        accion: "generarResolucion",
-        nroExpediente: exp.nroExpediente, paciente: exp.paciente,
-        modulo: exp.modulo, periodoTexto: exp.periodoTexto || "", periodoMeses: exp.periodoMeses,
-        adjudicado: exp.cuadro?.adjudicado || "", mensual: exp.cuadro?.mensual || 0, total,
-        nroResolucion: f.nroResolucion, tipoTramite: f.tipoTramite,
-        fsSolicitud: f.fsSolicitud, fsPresupuesto: f.fsPresupuesto,
-        fsCuadro: f.fsCuadro, fsDictamen: f.fsDictamen,
-        directora: f.directora, imputacion: f.imputacion, anioPresupuesto: f.anio,
-      });
-      await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
-        etapa: 6,
-        resolucion: {
-          fecha: new Date().toISOString(),
-          nro: f.nroResolucion, tipoTramite: f.tipoTramite,
-          adjudicado: exp.cuadro?.adjudicado || "", total,
-          montoLetras: data.montoLetras || "",
-          fojas: { solicitud: f.fsSolicitud, presupuesto: f.fsPresupuesto, cuadro: f.fsCuadro, dictamen: f.fsDictamen },
-          directora: f.directora, imputacion: f.imputacion, anio: f.anio,
-        },
-      });
-      alert("✅ Resolución Interna Nº " + f.nroResolucion + " generada.\n\nSe descargaron a tu máquina el PDF y el Word.");
-    } catch (e) {
-      alert("❌ Error al generar la resolución: " + e.message);
-    }
-    setOcupado(false);
+    setRevisando(true);
   };
 
   return (
     <div style={{ ...S.card, borderLeft: "5px solid #f59e0b" }}>
       <h3 style={{ color: "#075e75", marginBottom: 4 }}>📜 Resolución Interna de contratación</h3>
       <div style={{ fontSize: 13, color: "#64748b" }}>
-        El monto, las letras, el adjudicado y el período salen solos del expediente y se replican en todos los artículos. Vos solo cargás el N° de resolución y las fojas mirando el expediente físico. Se descarga en Word (editable) y PDF (para el SIGEDIG).
+        El monto, las letras, el adjudicado y el período salen solos del expediente y se replican en todos los artículos. Vos cargás el N° y las fojas, la revisás en pantalla, corregís lo que haga falta y generás el PDF.
       </div>
 
       <div style={{ background: "#e0f2fe", borderRadius: 8, padding: 10, marginTop: 12, fontSize: 14, color: "#075e75", fontWeight: 700 }}>
@@ -1441,56 +1952,47 @@ function GenerarResolucion({ exp }) {
       <label style={S.label}>Firma (Directora del Programa)</label>
       <input style={S.input} value={f.directora} onChange={set("directora")} />
 
-      <label style={S.label}>Imputación presupuestaria (Artículo 2º — revisala si cambió el ejercicio)</label>
+      <label style={S.label}>Imputación presupuestaria (Artículo 2º)</label>
       <textarea style={{ ...S.input, minHeight: 70 }} value={f.imputacion} onChange={set("imputacion")} />
 
-      <button style={{ ...S.btn, marginTop: 16, width: "100%", fontSize: 16, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={generar}>
-        {ocupado ? "⏳ Generando..." : "📜 GENERAR RESOLUCIÓN INTERNA (PDF)"}
+      <button style={{ ...S.btn, marginTop: 16, width: "100%", fontSize: 16 }} onClick={generar}>
+        👁️ GENERAR Y REVISAR LA RESOLUCIÓN
       </button>
     </div>
   );
 }
 
-/* ---------- Pase al Tribunal de Cuentas ---------- */
-
 function PaseTribunal({ exp }) {
-  const [ocupado, setOcupado] = useState(false);
+  const [revisando, setRevisando] = useState(false);
 
-  const generar = async () => {
-    setOcupado(true);
-    try {
-      await llamarYDescargar({
-        accion: "generarPase", tipo: "tribunal",
-        nroExpediente: exp.nroExpediente, paciente: exp.paciente,
-      });
-      await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
-        etapa: 7,
-        paseTribunal: {
-          fecha: new Date().toISOString(),
-        },
-      });
-      alert("✅ Pase al Tribunal de Cuentas generado.\n\nSe descargaron a tu máquina el PDF y el Word.");
-    } catch (e) {
-      alert("❌ Error al generar el pase: " + e.message);
-    }
-    setOcupado(false);
-  };
+  if (revisando) {
+    return (
+      <VistaPrevia
+        construirPlantilla={(logos) => plantillaPase(datosPaseTribunal(exp), logos)}
+        onCerrar={() => setRevisando(false)}
+        onListo={async () => {
+          await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
+            etapa: Math.max(exp.etapa, 7),
+            paseTribunal: { fecha: new Date().toISOString() },
+          });
+        }}
+      />
+    );
+  }
 
   return (
     <div style={{ ...S.card, borderLeft: "5px solid #f59e0b" }}>
       <h3 style={{ color: "#075e75", marginBottom: 4 }}>🏛️ Pase al Tribunal de Cuentas</h3>
       <div style={{ fontSize: 13, color: "#64748b" }}>
-        Genera la nota solicitando la intervención de competencia del Honorable Tribunal de Cuentas sobre el <b>Expediente {exp.nroExpediente}</b>, con fecha de hoy y la firma de la Gerente. Se descarga a tu máquina en Word y PDF.
+        Nota solicitando la intervención de competencia del Honorable Tribunal de Cuentas sobre el <b>Expediente {exp.nroExpediente}</b>, con fecha de hoy y la firma de la Gerente. La revisás en pantalla y generás el PDF.
       </div>
 
-      <button style={{ ...S.btn, marginTop: 16, width: "100%", fontSize: 16, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={generar}>
-        {ocupado ? "⏳ Generando..." : "🏛️ GENERAR PASE AL TRIBUNAL DE CUENTAS (PDF)"}
+      <button style={{ ...S.btn, marginTop: 16, width: "100%", fontSize: 16 }} onClick={() => setRevisando(true)}>
+        👁️ GENERAR Y REVISAR EL PASE
       </button>
     </div>
   );
 }
-
-/* ---------- Orden de compra + mail final al adjudicado ---------- */
 
 function generarCuerpoAdjudicacion(exp, nroOC, firmante) {
   return (
