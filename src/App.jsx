@@ -117,7 +117,7 @@ function diasHabilesDesde(iso) {
 
 function generarCuerpoMail(exp, firmante) {
   return (
-`Estimados: Desde la Gerencia Administrativa del Programa Integrado de Salud, se solicita presupuesto para la provisión de un Módulo: ${exp.modulo} Domiciliaria por el período de ${exp.periodoMeses} (${numeroEnLetrasSimple(exp.periodoMeses)}) meses, destinado al siguiente paciente:
+`*Estimados:* Desde la Gerencia Administrativa del Programa Integrado de Salud, se solicita presupuesto para la provisión de un Módulo: *${exp.modulo}* Domiciliaria por el *período de ${exp.periodoMeses} (${numeroEnLetrasSimple(exp.periodoMeses)}) meses*, destinado al siguiente paciente:
 
 • Paciente: ${exp.paciente.toUpperCase()}
 • DNI: ${exp.dni}
@@ -128,16 +128,16 @@ function generarCuerpoMail(exp, firmante) {
 • Teléfono: ${exp.telefono}
 • Receta y Síntesis de Historia Clínica: Se adjunta en archivo.
 
-Diagnóstico: ${exp.diagnostico}
+*Diagnóstico:* ${exp.diagnostico}
 
 El módulo a cotizar, conforme a lo autorizado por el Departamento de Auditoría Médica, debe contemplar los siguientes servicios mensuales:
 
 • ${exp.detalleServicios}
 
-Condiciones obligatorias de la presentación:
-Detalle de costos: El presupuesto (y la facturación posterior, de corresponder) debe estar detallado por provisión, indicando claramente el precio unitario y el precio total de cada ítem. Debe enviarse en formato PDF y contener CUIT, condición frente al IVA, nombre y apellido del paciente, y dirección y teléfono del proveedor. Caso contrario, se desestima el presupuesto por no ajustarse a normativas administrativas.
+*Condiciones obligatorias de la presentación:*
+*Detalle de costos:* El presupuesto (y la facturación posterior, de corresponder) debe estar detallado por provisión, indicando claramente el *precio unitario y el precio total de cada ítem*. Debe enviarse en formato PDF y contener CUIT, condición frente al IVA, nombre y apellido del paciente, y dirección y teléfono del proveedor. Caso contrario, se desestima el presupuesto por no ajustarse a normativas administrativas.
 
-Plazo de respuesta: Se otorgará un tiempo máximo de 5 (cinco) días hábiles a partir de la recepción del presente correo.
+*Plazo de respuesta:* Se otorgará un *tiempo máximo de 5 (cinco) días hábiles* a partir de la recepción del presente correo.
 
 Quedamos a la espera de su pronta respuesta.
 
@@ -1393,18 +1393,6 @@ function EnvioCotizacion({ exp, proveedores }) {
           paciente: exp.paciente,
           firmante,
           asunto, cuerpo, destinatarios, adjuntos,
-          expData: {
-            dni: exp.dni,
-            edad: exp.edad,
-            fechaNacimiento: formatearFechaCorta(exp.fechaNacimiento),
-            domicilio: exp.domicilio,
-            telefono: exp.telefono,
-            diagnostico: exp.diagnostico,
-            modulo: exp.modulo,
-            detalleServicios: exp.detalleServicios,
-            periodoMeses: exp.periodoMeses,
-            periodoLetras: numeroEnLetrasSimple(Number(exp.periodoMeses)),
-          },
         }),
       });
       const data = await res.json();
@@ -1467,7 +1455,7 @@ function EnvioCotizacion({ exp, proveedores }) {
       <label style={S.label}>Asunto</label>
       <input style={S.input} value={asunto} onChange={(e) => setAsunto(e.target.value)} />
 
-      <label style={S.label}>Cuerpo del mail (podés editar los textos; las negritas, viñetas y centrados del formato oficial se aplican automáticamente al enviar)</label>
+      <label style={S.label}>Cuerpo del mail — lo que ves acá es lo que sale. Para poner una palabra en NEGRITA encerrala entre asteriscos: *así*. Las viñetas (•) y los centrados del formato oficial se aplican solos.</label>
       <textarea style={{ ...S.input, minHeight: 260, fontFamily: "inherit", fontSize: 14 }} value={cuerpo} onChange={(e) => setCuerpo(e.target.value)} />
 
       <label style={S.label}>Adjuntos (historia clínica, pedido médico, etc. — PDF)</label>
@@ -2044,14 +2032,14 @@ function generarCuerpoAdjudicacion(exp, nroOC, firmante) {
   return (
 `Estimados:
 
-INICIO DE PRESTACIÓN expte ${exp.nroExpediente} ${exp.paciente.toUpperCase()}. ${(exp.modulo || "").toUpperCase()}. En la que se Adjudica a uds como Proveedores de la Prestación de Servicios.
+*INICIO DE PRESTACIÓN expte ${exp.nroExpediente} ${exp.paciente.toUpperCase()}. ${(exp.modulo || "").toUpperCase()}.* En la que se Adjudica a uds como Proveedores de la Prestación de Servicios.
 
-Se solicita se nos informe vía mail:
+*Se solicita se nos informe vía mail:*
 
-• RECEPCIÓN DEL MAIL.
-• FECHA DE INICIO EN LA QUE SE BRINDARÁ LA PRESTACIÓN.
+• *RECEPCIÓN DEL MAIL.*
+• *FECHA DE INICIO EN LA QUE SE BRINDARÁ LA PRESTACIÓN.*
 
-ENVÍO Nº DE ORDEN ${nroOC || "____"}.-
+ENVÍO *Nº DE ORDEN ${nroOC || "____"}*.-
 
 --
 Confirmar Recepción
@@ -2165,7 +2153,7 @@ function OrdenCompraEnvio({ exp, proveedores }) {
       <label style={S.label}>Asunto</label>
       <input style={S.input} value={asunto} onChange={(e) => setAsunto(e.target.value)} />
 
-      <label style={S.label}>Cuerpo del mail (podés editar los textos; las negritas y el formato oficial se aplican automáticamente al enviar)</label>
+      <label style={S.label}>Cuerpo del mail — lo que ves acá es lo que sale. Para NEGRITA encerrá la palabra entre asteriscos: *así*.</label>
       <textarea style={{ ...S.input, minHeight: 220, fontFamily: "inherit", fontSize: 14 }} value={cuerpo} onChange={(e) => setCuerpo(e.target.value)} />
 
       <button style={{ ...S.btn, marginTop: 18, width: "100%", fontSize: 16, opacity: enviando ? 0.6 : 1 }} disabled={enviando} onClick={enviar}>
