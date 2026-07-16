@@ -1044,7 +1044,7 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
         <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
           <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Cotización enviada</div>
           <div style={{ fontSize: 14, color: "#334155" }}>
-            <b>Fecha de envío:</b> {formatearFecha(exp.cotizacion.fecha)}<br />
+            <b>Fecha de envío:</b> {formatearFecha(exp.cotizacion.fecha)}{exp.cotizacion.manual && <span style={{ color: "#64748b" }}> (registrado manualmente — el mail salió por fuera del sistema)</span>}<br />
             {exp.cotizacion.firmante && (<><b>Enviado por:</b> {exp.cotizacion.firmante}<br /></>)}
             <b>Proveedores consultados:</b> {exp.cotizacion.proveedores}<br />
             <b>Plazo:</b>{" "}
@@ -1329,6 +1329,7 @@ function EnvioCotizacion({ exp, proveedores }) {
   const [cuerpo, setCuerpo] = useState(generarCuerpoMail(exp, firmaInicial));
   const [archivos, setArchivos] = useState([]);
   const [enviando, setEnviando] = useState(false);
+  const [fechaManual, setFechaManual] = useState(new Date().toISOString().slice(0, 10));
 
   const cambiarFirmante = (nuevo) => {
     setFirmante(nuevo);
@@ -1342,6 +1343,32 @@ function EnvioCotizacion({ exp, proveedores }) {
     setSeleccion(sel);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [proveedores.length]);
+
+  // Para cuando el mail ya salió por fuera del sistema (ej: bloqueo de red en la oficina):
+  // registra la cotización como enviada SIN mandar ningún mail, con la fecha real del envío.
+  const registrarManual = async () => {
+    const elegidos = activos.filter((p) => seleccion[p.id]);
+    if (elegidos.length === 0) { alert("Seleccioná los proveedores a los que les mandaste el mail."); return; }
+    if (!fechaManual) { alert("Cargá la fecha en que enviaste el mail."); return; }
+    if (!confirm(`REGISTRO MANUAL (no envía ningún mail)\n\nSe va a registrar que el pedido de cotización ya fue enviado por fuera del sistema:\n\n• Fecha: ${fechaManual.split("-").reverse().join("/")}\n• Enviado por: ${firmante}\n• Proveedores: ${elegidos.map((p) => p.nombre).join(", ")}\n\nEl expediente pasa a la etapa de Presupuestos. ¿Confirmás?`)) return;
+
+    setEnviando(true);
+    try {
+      await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
+        etapa: 1,
+        cotizacion: {
+          fecha: new Date(fechaManual + "T12:00:00").toISOString(),
+          firmante,
+          proveedores: elegidos.map((p) => p.nombre).join(", "),
+          manual: true,
+        },
+      });
+      alert("✅ Cotización registrada como enviada manualmente. El expediente pasó a la etapa de Presupuestos.");
+    } catch (e) {
+      alert("❌ Error al registrar: " + e.message);
+    }
+    setEnviando(false);
+  };
 
   const enviar = async () => {
     const elegidos = activos.filter((p) => seleccion[p.id]);
@@ -1454,6 +1481,22 @@ function EnvioCotizacion({ exp, proveedores }) {
       <button style={{ ...S.btn, marginTop: 18, width: "100%", fontSize: 16, opacity: enviando ? 0.6 : 1 }} onClick={enviar} disabled={enviando}>
         {enviando ? "⏳ Enviando mail y guardando en Drive..." : "📨 ENVIAR PEDIDO DE COTIZACIÓN"}
       </button>
+
+      <div style={{ marginTop: 16, padding: 12, background: "#f8fafc", borderRadius: 8, border: "1px dashed #94a3b8" }}>
+        <div style={{ fontWeight: 700, color: "#334155", fontSize: 14 }}>✔️ ¿Ya mandaste este mail a mano, por fuera del sistema?</div>
+        <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>
+          Registralo acá para que el expediente avance sin enviar nada: marcá arriba los proveedores a los que se lo mandaste, elegí quién lo envió, poné la fecha real (así el plazo de 5 días hábiles corre bien) y confirmá.
+        </div>
+        <div style={{ display: "flex", gap: 10, marginTop: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+          <div>
+            <label style={{ ...S.label, marginTop: 0 }}>Fecha en que lo enviaste</label>
+            <input type="date" style={S.input} value={fechaManual} onChange={(e) => setFechaManual(e.target.value)} />
+          </div>
+          <button style={{ ...S.btnSec, opacity: enviando ? 0.6 : 1, padding: "10px 16px" }} disabled={enviando} onClick={registrarManual}>
+            ✔️ Registrar como ya enviado (sin mandar mail)
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
