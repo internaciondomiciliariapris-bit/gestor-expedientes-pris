@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, Fragment } from "react";
 import { initializeApp } from "firebase/app";
 import {
   getFirestore, collection, addDoc, doc, updateDoc, deleteDoc, onSnapshot,
@@ -21,7 +21,10 @@ const firebaseConfig = {
 };
 
 // Apps Script del Gestor de Expedientes (Gmail + Drive)
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwXnUvwLx91Y88AX7wDT9M7sSkp76vJ888aErmcWMT7-E7csttQVho31TZfk1G6lPnk/exec";
+// La app habla con el puente /api/puente (mismo dominio de Vercel, no lo bloquea
+// la red de la oficina). El puente reenvía todo al Apps Script desde Vercel.
+// La URL real del Apps Script está en api/puente.js.
+const APPS_SCRIPT_URL = "/api/puente";
 const APPS_SCRIPT_CLAVE = "GESTORPRIS2026";
 
 // Contraseña de acceso (la misma del panel admin de visitas-siprosa)
@@ -295,9 +298,9 @@ function encabezadoDoc(logos) {
 
 const lineaAzulDoc = (m) => '<div style="border-bottom:2.2pt solid ' + AZUL + '; margin-top:' + m + 'pt; margin-bottom:6pt;"></div>';
 
-const envolverHtml = (css, body, apaisado) =>
+const envolverHtml = (css, body) =>
   '<!DOCTYPE html><html><head><meta charset="utf-8"><style>' +
-  "@page { size: A4" + (apaisado ? " landscape" : "") + "; margin: 0; } body { margin:0; padding:0; } " +
+  "@page { size: A4; margin: 0; } body { margin:0; padding:0; } " +
   ".pagina { page-break-after: always; } .pagina.ultima { page-break-after: auto; } " +
   css + "</style></head><body>" + body + "</body></html>";
 
@@ -468,172 +471,6 @@ function plantillaResolucion(d, logos) {
   };
 }
 
-/* ---------- CUADRO COMPARATIVO (Excel apaisado del modelo real → vista previa editable) ---------- */
-
-const fechaCortaHoy = () => {
-  const d = new Date();
-  return ("0" + d.getDate()).slice(-2) + "/" + ("0" + (d.getMonth() + 1)).slice(-2) + "/" + d.getFullYear();
-};
-
-// d.proveedores: solo los que respondieron (cotizó o negativa) — van en columnas
-// Calcado del Excel original: logos y título en recuadros con borde, cantidad en su
-// propia columna, recuadro de adjudicación del ancho de las primeras 4 columnas.
-function plantillaCuadro(d, logos) {
-  const provs = d.proveedores || [];
-  const anchoTabla = 194 + provs.length * 149; // pt: A(98)+B(48)+C(48) + 149 por proveedor
-  const celda = "border:1pt solid #000; padding:2pt 4pt; text-align:center; vertical-align:middle;";
-  const css =
-    ".hoja { font-family: Calibri, Arial, sans-serif; font-size:11pt; color:#000; } " +
-    ".hoja .pagina { padding: 30pt 30pt; } .hoja p { margin:0; } " +
-    ".hoja table.cc { border-collapse:collapse; table-layout:fixed; }";
-
-  let filaNombres = '<td colspan="3" style="' + celda + ' background:#F2F2F2; font-weight:bold; width:194pt;">DETALLE SOLICITADO</td>';
-  let filaEnc = '<td colspan="2" style="' + celda + ' font-weight:bold; width:146pt;">PRESTACION</td>' +
-    '<td style="' + celda + ' font-weight:bold; width:48pt;">CANT DE HS/SES.</td>';
-  let filaDatos =
-    '<td style="' + celda + ' width:98pt;" data-campo="prestacion">' + esc(d.modulo) + "</td>" +
-    '<td style="' + celda + ' width:48pt;" data-campo="cantTexto">' + esc(d.cantTexto) + "</td>" +
-    '<td style="' + celda + ' width:48pt;" data-campo="cantNum">' + esc(d.cantNum) + "</td>";
-
-  provs.forEach((p, i) => {
-    const fondo = i % 2 ? "#E7E6E6" : "#F2F2F2";
-    filaNombres += '<td colspan="2" style="' + celda + ' background:' + fondo + '; font-weight:bold; width:149pt;">' + esc(p.nombre).toUpperCase() + "</td>";
-    filaEnc += '<td style="' + celda + ' font-weight:bold; width:78pt;">P. UNITARIO</td>' +
-      '<td style="' + celda + ' font-weight:bold; width:71pt;">P. MENSUAL</td>';
-    const atr = ' data-prov="' + esc(p.nombre) + '" data-estado="' + p.estado + '"';
-    filaDatos +=
-      '<td style="' + celda + ' font-weight:bold;"' + atr + ' data-tipo="unitario">' +
-      (p.estado === "cotizo" ? formatoPesos(p.unitario) : "NO COTIZA") + "</td>" +
-      '<td style="' + celda + ' font-weight:bold;"' + atr + ' data-tipo="mensual">' +
-      (p.estado === "cotizo" ? formatoPesos(p.mensual) : "") + "</td>";
-  });
-
-  // Título compuesto en un solo recuadro, como el original:
-  // "EXPTE : ... - PTE ... (Periodo que corresponde a ...)      fecha de Adjudicacion dd/mm/aaaa"
-  const tituloCompuesto =
-    "EXPTE : " + esc(d.nroExpediente) + " - PTE " + esc(d.paciente).toUpperCase() +
-    (d.periodoTexto ? " (Periodo que corresponde a " + esc(d.periodoTexto) + ")" : "") +
-    "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;fecha de Adjudicacion " + esc(d.fechaAdj);
-
-  const body =
-    '<div class="pagina ultima">' +
-    '<div style="width:' + anchoTabla + 'pt; margin:0 auto;">' +
-    '<div style="border:1pt solid #000; padding:4pt 0; text-align:center;">' +
-    '<img src="' + logos.pris + '" style="height:32pt; vertical-align:middle; margin-right:10pt;">' +
-    '<img src="' + logos.gob + '" style="height:38pt; vertical-align:middle;"></div>' +
-    '<div style="border:1pt solid #000; border-top:none; padding:2pt 4pt; text-align:center; font-weight:bold;" data-campo="titulo">' +
-    tituloCompuesto + "</div>" +
-    '<table class="cc" style="width:100%;">' +
-    "<tr>" + filaNombres + "</tr>" +
-    '<tr style="height:28pt;">' + filaEnc + "</tr>" +
-    '<tr style="height:30pt;">' + filaDatos + "</tr>" +
-    "</table>" +
-    '<div style="width:272pt; box-sizing:border-box; background:#F2F2F2; border:1pt solid #000; margin-top:12pt; padding:3pt 5pt;" data-campo="adjudicacion">' +
-    esc(d.textoAdjudicacion) + "</div>" +
-    '<p style="margin-top:8pt; text-align:justify; line-height:1.3;" data-campo="constancia">' +
-    esc(d.textoConstancia) + "</p>" +
-    "<p style=\"margin-top:24pt; font-family:'Times New Roman', Times, serif; font-size:12pt; font-weight:bold; line-height:1.5;\">" +
-    "Firmado digitalmente:<br>C.P.N Mariela Agustina Castillo<br>Gerente Administrativo<br>Dirección Gral. Prog. Integrado de Salud<br>" +
-    '<span style="color:#0563C1; text-decoration:underline;">SI.PRO.SA</span></p>' +
-    "</div></div>";
-
-  return {
-    titulo: "CUADRO COMPARATIVO " + d.nroExpediente.replace(/\//g, "-") + " " + d.paciente.toUpperCase(),
-    css, body, apaisado: true,
-  };
-}
-
-// Lee del documento editado en pantalla los textos y precios (por si el usuario los corrigió)
-function extraerCuadroDeHoja(hoja) {
-  const leer = (sel, def = "") => {
-    const el = hoja && hoja.querySelector(sel);
-    return el ? el.innerText.replace(/\s+/g, " ").trim() : def;
-  };
-  const parsearPrecio = (t) => {
-    const n = Number(String(t || "").replace(/[^\d,]/g, "").replace(",", "."));
-    return isNaN(n) || n === 0 ? null : n;
-  };
-  const proveedores = [];
-  if (hoja) {
-    hoja.querySelectorAll('td[data-prov][data-tipo="unitario"]').forEach((td) => {
-      const nombre = td.getAttribute("data-prov");
-      const estado = td.getAttribute("data-estado") || "cotizo";
-      const tdM = hoja.querySelector('td[data-prov="' + CSS.escape(nombre) + '"][data-tipo="mensual"]');
-      proveedores.push({
-        nombre, estado,
-        unitario: estado === "cotizo" ? parsearPrecio(td.innerText) : null,
-        mensual: estado === "cotizo" ? parsearPrecio(tdM ? tdM.innerText : "") : null,
-      });
-    });
-  }
-  return {
-    cantNum: leer('[data-campo="cantNum"]'),
-    prestacion: leer('[data-campo="prestacion"]'),
-    textoAdjudicacion: leer('[data-campo="adjudicacion"]'),
-    textoConstancia: leer('[data-campo="constancia"]'),
-    proveedores,
-  };
-}
-
-// Datos del cuadro a partir del expediente guardado (para revisar / regenerar)
-const datosCuadro = (exp) => {
-  const consultados = (exp.cotizacion?.proveedores || "").split(",").map((s) => s.trim()).filter(Boolean);
-  const g = exp.presupuestos || {};
-  const c = exp.cuadro || {};
-  const lista = consultados.map((n) => ({
-    nombre: n,
-    estado: g[n]?.estado || "sin_respuesta",
-    unitario: g[n]?.unitario || null,
-    mensual: g[n]?.mensual || null,
-  }));
-  const responden = lista.filter((p) => p.estado === "cotizo" || p.estado === "desestimo");
-
-  // Reconstrucción de textos por defecto: si el expediente fue generado con una versión
-  // anterior que no los guardó, se rearman a partir de los proveedores (nunca quedan vacíos).
-  const adjudicado = c.adjudicado || (() => {
-    let win = null;
-    lista.forEach((p) => { if (p.estado === "cotizo" && p.mensual && (!win || p.mensual < win.mensual)) win = p; });
-    return win ? win.nombre : "";
-  })();
-  const cotizaron = lista.filter((p) => p.estado === "cotizo").map((p) => p.nombre.toUpperCase());
-  const negativas = lista.filter((p) => p.estado === "desestimo").map((p) => p.nombre.toUpperCase() + " (NEGATIVA)");
-  const textoAdjudicacion = c.textoAdjudicacion ||
-    ("CONFORME A LO DETALLADO EN EL CUADRO COMPARATIVO , SE ADJUDICA SERVICIO DE " +
-      (exp.modulo || "").toUpperCase() + (adjudicado ? " A LA FIRMA : " + adjudicado.toUpperCase() : ""));
-  const textoConstancia = c.textoConstancia ||
-    ("Se deja constancia que, habiendose solicitado cotizacion a " + lista.length +
-      " proveedores del rubro, unicamente las firmas comerciales: " + cotizaron.concat(negativas).join("/") +
-      " ; presentaron presupuestos dentro del plazo establecido. Los restantes proveedores convocados no remitieron " +
-      "cotizacion ni emitieron respuesta alguna al requerimiento efectuado a la fecha de adjudicacion.-");
-
-  return {
-    nroExpediente: exp.nroExpediente, paciente: exp.paciente,
-    periodoTexto: exp.periodoTexto, modulo: exp.modulo,
-    fechaAdj: c.fecha
-      ? (() => { const d = new Date(c.fecha); return ("0" + d.getDate()).slice(-2) + "/" + ("0" + (d.getMonth() + 1)).slice(-2) + "/" + d.getFullYear(); })()
-      : fechaCortaHoy(),
-    cantTexto: c.cantTexto || "", cantNum: c.cantNum || "",
-    proveedores: responden.length ? responden : lista,
-    textoAdjudicacion, textoConstancia,
-  };
-};
-
-// Descarga el Excel del cuadro (Sheets con el layout corregido), usando lo editado en pantalla
-async function descargarExcelCuadro(exp, hoja) {
-  const e = extraerCuadroDeHoja(hoja);
-  await llamarYDescargar({
-    accion: "generarCuadro", soloExcel: true,
-    nroExpediente: exp.nroExpediente, paciente: exp.paciente,
-    modulo: exp.modulo, periodoTexto: exp.periodoTexto, periodoMeses: exp.periodoMeses,
-    cantTexto: hoja ? (hoja.querySelector('[data-campo="cantTexto"]')?.innerText || "").trim() : (exp.cuadro?.cantTexto || ""),
-    cantNum: e.cantNum,
-    prestacionTexto: e.prestacion,
-    fechaAdj: hoja ? (hoja.querySelector('[data-campo="fechaAdj"]')?.innerText || "").replace(/.*?:\s*/, "").trim() : "",
-    textoAdjudicacion: e.textoAdjudicacion, textoConstancia: e.textoConstancia,
-    proveedores: e.proveedores,
-  });
-}
-
 /* ---------- Datos por defecto de cada documento (para generar y para revisar de nuevo) ---------- */
 
 const IMPUTACION_NOTA_DEFECTO =
@@ -694,6 +531,27 @@ const datosResolucion = (exp, extra = {}) => {
     imputacion: extra.imputacion ?? r.imputacion ?? IMPUTACION_RESOLUCION_DEFECTO,
     anioPresupuesto: extra.anio ?? r.anio ?? String(new Date().getFullYear()),
     fechaTexto: fechaLargaHoy(),
+  };
+};
+
+const payloadCuadro = (exp) => {
+  const consultados = (exp.cotizacion?.proveedores || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const guardados = exp.presupuestos || {};
+  const c = exp.cuadro || {};
+  return {
+    accion: "generarCuadro",
+    nroExpediente: exp.nroExpediente, paciente: exp.paciente,
+    modulo: exp.modulo, detalleServicios: exp.detalleServicios,
+    periodoTexto: exp.periodoTexto, periodoMeses: exp.periodoMeses,
+    cantTexto: c.cantTexto || "", cantNum: c.cantNum || "",
+    textoAdjudicacion: c.textoAdjudicacion || "", textoConstancia: c.textoConstancia || "",
+    proveedores: consultados.map((n) => ({
+      nombre: n,
+      estado: guardados[n]?.estado || "sin_respuesta",
+      unitario: guardados[n]?.unitario || null,
+      mensual: guardados[n]?.mensual || null,
+    })),
+    adjudicado: { nombre: c.adjudicado, unitario: c.unitario, mensual: c.mensual, total: c.total },
   };
 };
 
@@ -1211,11 +1069,7 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
             <b>Fecha de adjudicación:</b> {formatearFecha(exp.cuadro.fecha)}<br />
             <b>Precio mensual:</b> {formatoPesos(exp.cuadro.mensual)} · <b>Total {exp.periodoMeses} meses:</b> {formatoPesos(exp.cuadro.total)}
           </div>
-          <BotonRevisar
-            etiqueta="👁️ Revisar / descargar de nuevo (PDF o Excel)"
-            construirPlantilla={(logos) => plantillaCuadro(datosCuadro(exp), logos)}
-            excelExtra={(hoja) => descargarExcelCuadro(exp, hoja)}
-          />
+          <BotonRedescargar construirPayload={() => payloadCuadro(exp)} />
         </div>
       )}
 
@@ -1311,9 +1165,27 @@ function BotonEliminar({ exp, volver }) {
   );
 }
 
+/* ---------- Botón para volver a descargar un documento ya generado ---------- */
+
+function BotonRedescargar({ construirPayload }) {
+  const [ocupado, setOcupado] = useState(false);
+  return (
+    <button
+      style={{ ...S.btnSec, marginTop: 10, opacity: ocupado ? 0.6 : 1 }}
+      disabled={ocupado}
+      onClick={async () => {
+        setOcupado(true);
+        try { await llamarYDescargar(construirPayload()); }
+        catch (e) { alert("\u274c Error al descargar: " + e.message); }
+        setOcupado(false);
+      }}
+    >{ocupado ? "\u23f3 Generando..." : "\u2b07\ufe0f Descargar de nuevo (Excel + PDF)"}</button>
+  );
+}
+
 /* ---------- Vista previa editable de documentos ---------- */
 
-function VistaPrevia({ construirPlantilla, onListo, onCerrar, excelExtra }) {
+function VistaPrevia({ construirPlantilla, onListo, onCerrar }) {
   const [plantilla, setPlantilla] = useState(null);
   const [ocupado, setOcupado] = useState(false);
   const hojaRef = useRef(null);
@@ -1324,21 +1196,19 @@ function VistaPrevia({ construirPlantilla, onListo, onCerrar, excelExtra }) {
     return () => { vivo = false; };
   }, []);
 
-  const generar = async (conEditable) => {
+  const generar = async (conWord) => {
     setOcupado(true);
     try {
       const body = hojaRef.current.innerHTML;
       const payload = {
         accion: "htmlAPdf",
         titulo: plantilla.titulo,
-        html: envolverHtml(plantilla.css, '<div class="hoja">' + body + "</div>", plantilla.apaisado),
+        html: envolverHtml(plantilla.css, '<div class="hoja">' + body + "</div>"),
       };
-      if (conEditable && !excelExtra) payload.htmlWord = envolverHtml(plantilla.css, '<div class="hoja">' + logosAUrl(body) + "</div>", plantilla.apaisado);
+      if (conWord) payload.htmlWord = envolverHtml(plantilla.css, '<div class="hoja">' + logosAUrl(body) + "</div>");
       const data = await llamarYDescargar(payload);
-      if (conEditable && excelExtra) await excelExtra(hojaRef.current);
-      if (onListo) await onListo({ ...data, montoLetras: plantilla.montoLetras || "", hoja: hojaRef.current });
-      alert("✅ PDF generado y descargado a tu máquina." +
-        (conEditable ? (excelExtra ? "\n📊 También se descargó el Excel editable." : "\n📄 También se descargó la versión Word.") : ""));
+      if (onListo) await onListo({ ...data, montoLetras: plantilla.montoLetras || "" });
+      alert("✅ PDF generado y descargado a tu máquina." + (conWord ? "\n📄 También se descargó la versión Word." : ""));
       if (onCerrar) onCerrar();
     } catch (e) {
       alert("❌ Error al generar el PDF: " + e.message);
@@ -1350,16 +1220,13 @@ function VistaPrevia({ construirPlantilla, onListo, onCerrar, excelExtra }) {
     return <div style={{ ...S.card, textAlign: "center", color: "#64748b" }}>⏳ Preparando la vista previa...</div>;
   }
 
-  const anchoPag = plantilla.apaisado ? 1122 : 794;
-  const altoPag = plantilla.apaisado ? 794 : 1122;
-
   return (
     <div style={{ ...S.card, borderLeft: "5px solid #0891b2", background: "#f8fafc" }}>
       <div style={{ fontWeight: 800, color: "#075e75", marginBottom: 4 }}>👁️ Revisión del documento</div>
       <div style={{ fontSize: 13, color: "#64748b", marginBottom: 10 }}>
         Así va a salir el PDF. <b>Si hay algo que corregir, hacé clic sobre el texto y editalo directamente acá</b> — nombres, fechas, fojas, montos, lo que sea. Cuando esté bien, apretá el botón verde.
       </div>
-      <style>{plantilla.css + " .hoja .pagina { background:#fff; box-shadow:0 1px 6px rgba(0,0,0,0.3); margin:0 auto 14px; width:" + anchoPag + "px; min-height:" + altoPag + "px; box-sizing:border-box; }"}</style>
+      <style>{plantilla.css + " .hoja .pagina { background:#fff; box-shadow:0 1px 6px rgba(0,0,0,0.3); margin:0 auto 14px; width:794px; min-height:1122px; box-sizing:border-box; }"}</style>
       <div style={{ overflowX: "auto", background: "#cbd5e1", padding: 12, borderRadius: 8 }}>
         <div
           className="hoja"
@@ -1367,7 +1234,7 @@ function VistaPrevia({ construirPlantilla, onListo, onCerrar, excelExtra }) {
           contentEditable
           suppressContentEditableWarning
           spellCheck={false}
-          style={{ outline: "none", minWidth: anchoPag }}
+          style={{ outline: "none", minWidth: 794 }}
           dangerouslySetInnerHTML={{ __html: plantilla.body }}
         />
       </div>
@@ -1376,7 +1243,7 @@ function VistaPrevia({ construirPlantilla, onListo, onCerrar, excelExtra }) {
           {ocupado ? "⏳ Generando..." : "✅ ESTÁ BIEN — GENERAR PDF"}
         </button>
         <button style={{ ...S.btnSec, flex: 1, minWidth: 130, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => generar(true)}>
-          {ocupado ? "⏳..." : excelExtra ? "📊 PDF + Excel" : "📄 PDF + Word"}
+          {ocupado ? "⏳..." : "📄 PDF + Word"}
         </button>
         {onCerrar && (
           <button style={{ ...S.btnSec, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={onCerrar}>✖ Cancelar</button>
@@ -1386,7 +1253,7 @@ function VistaPrevia({ construirPlantilla, onListo, onCerrar, excelExtra }) {
   );
 }
 
-function BotonRevisar({ construirPlantilla, etiqueta, excelExtra, onListo }) {
+function BotonRevisar({ construirPlantilla, etiqueta }) {
   const [abierto, setAbierto] = useState(false);
   if (!abierto) {
     return (
@@ -1395,7 +1262,7 @@ function BotonRevisar({ construirPlantilla, etiqueta, excelExtra, onListo }) {
       </button>
     );
   }
-  return <VistaPrevia construirPlantilla={construirPlantilla} excelExtra={excelExtra} onListo={onListo} onCerrar={() => setAbierto(false)} />;
+  return <VistaPrevia construirPlantilla={construirPlantilla} onCerrar={() => setAbierto(false)} />;
 }
 
 /* ---------- Pase a Auditoría Médica (documento del inicio del trámite) ---------- */
@@ -1689,45 +1556,101 @@ function RegistroPresupuestos({ exp }) {
     });
   };
 
-  // Al confirmar (desde la vista previa editable): guarda en el expediente lo que quedó en pantalla
-  const guardarCuadro = async ({ hoja }) => {
-    const e = extraerCuadroDeHoja(hoja);
-    // ganador: menor precio mensual entre los que cotizaron (con los precios ya corregidos en pantalla)
-    let ganador = null;
-    e.proveedores.forEach((p) => {
-      if (p.estado === "cotizo" && p.mensual && (!ganador || p.mensual < ganador.mensual)) ganador = p;
-    });
-    if (!ganador) ganador = { nombre: previa.ganador, unitario: previa.g.unitario, mensual: previa.g.mensual };
-    const total = ganador.mensual * Number(exp.periodoMeses || 6);
-    await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
-      etapa: 3,
-      cuadro: {
-        fecha: new Date().toISOString(),
-        adjudicado: ganador.nombre,
-        unitario: ganador.unitario, mensual: ganador.mensual, total,
-        cantTexto, cantNum: e.cantNum || cantNum,
-        textoAdjudicacion: e.textoAdjudicacion || previa.textoAdjudicacion,
-        textoConstancia: e.textoConstancia || previa.textoConstancia,
-      },
-    });
+  const confirmarCuadro = async (conExcel) => {
+    setOcupado(true);
+    try {
+      await llamarYDescargar({
+        accion: "generarCuadro",
+        nroExpediente: exp.nroExpediente, paciente: exp.paciente,
+        modulo: exp.modulo, detalleServicios: exp.detalleServicios,
+        periodoTexto: exp.periodoTexto, periodoMeses: exp.periodoMeses,
+        cantTexto, cantNum,
+        textoAdjudicacion: previa.textoAdjudicacion, textoConstancia: previa.textoConstancia,
+        proveedores: previa.lista,
+        adjudicado: { nombre: previa.ganador, unitario: previa.g.unitario, mensual: previa.g.mensual, total: previa.total },
+      }, conExcel);
+      await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
+        etapa: 3,
+        cuadro: {
+          fecha: new Date().toISOString(),
+          adjudicado: previa.ganador,
+          unitario: previa.g.unitario, mensual: previa.g.mensual, total: previa.total,
+          cantTexto, cantNum,
+          textoAdjudicacion: previa.textoAdjudicacion, textoConstancia: previa.textoConstancia,
+        },
+      });
+      alert("✅ Cuadro comparativo generado. Adjudicado: " + previa.ganador +
+        "\n\nSe descargó el PDF apaisado (para el SIGEDIG)" + (conExcel ? " y el Excel editable." : "."));
+      setPrevia(null);
+    } catch (e) {
+      alert("❌ Error al generar el cuadro: " + e.message);
+    }
+    setOcupado(false);
   };
 
   if (previa) {
     return (
-      <VistaPrevia
-        construirPlantilla={(logos) => plantillaCuadro({
-          nroExpediente: exp.nroExpediente, paciente: exp.paciente,
-          periodoTexto: exp.periodoTexto, modulo: exp.modulo,
-          fechaAdj: fechaCortaHoy(),
-          cantTexto, cantNum,
-          proveedores: previa.lista.filter((p) => p.estado !== "sin_respuesta"),
-          textoAdjudicacion: previa.textoAdjudicacion,
-          textoConstancia: previa.textoConstancia,
-        }, logos)}
-        excelExtra={(hoja) => descargarExcelCuadro(exp, hoja)}
-        onListo={guardarCuadro}
-        onCerrar={() => setPrevia(null)}
-      />
+      <div style={{ ...S.card, borderLeft: "5px solid #0891b2", background: "#f8fafc" }}>
+        <div style={{ fontWeight: 800, color: "#075e75", marginBottom: 4 }}>👁️ Revisión del cuadro comparativo</div>
+        <div style={{ fontSize: 13, color: "#64748b", marginBottom: 10 }}>
+          Revisá los precios de la tabla y corregí los textos si hace falta. Cuando esté bien, generá el PDF (apaisado, formato Excel oficial).
+        </div>
+
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13, background: "#fff" }}>
+            <thead>
+              <tr>
+                <th style={{ border: "1px solid #334155", padding: 6, background: "#F2F2F2" }}>DETALLE SOLICITADO</th>
+                {previa.lista.filter((p) => p.estado !== "sin_respuesta").map((p, i) => (
+                  <th key={p.nombre} colSpan={2} style={{ border: "1px solid #334155", padding: 6, background: i % 2 ? "#E7E6E6" : "#F2F2F2" }}>{p.nombre.toUpperCase()}</th>
+                ))}
+              </tr>
+              <tr>
+                <th style={{ border: "1px solid #334155", padding: 6 }}>PRESTACION ({cantTexto || "-"} / {cantNum || "-"})</th>
+                {previa.lista.filter((p) => p.estado !== "sin_respuesta").map((p) => (
+                  <Fragment key={p.nombre}>
+                    <th style={{ border: "1px solid #334155", padding: 6 }}>P. UNITARIO</th>
+                    <th style={{ border: "1px solid #334155", padding: 6 }}>P. MENSUAL</th>
+                  </Fragment>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style={{ border: "1px solid #334155", padding: 6 }}>{exp.modulo}</td>
+                {previa.lista.filter((p) => p.estado !== "sin_respuesta").map((p) => (
+                  <Fragment key={p.nombre}>
+                    <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 700 }}>
+                      {p.estado === "cotizo" ? formatoPesos(p.unitario) : "NO COTIZA"}
+                    </td>
+                    <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 700 }}>
+                      {p.estado === "cotizo" ? formatoPesos(p.mensual) : ""}
+                    </td>
+                  </Fragment>
+                ))}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <label style={S.label}>Texto de adjudicación (recuadro gris del cuadro)</label>
+        <textarea style={{ ...S.input, minHeight: 60 }} value={previa.textoAdjudicacion}
+          onChange={(e) => setPrevia({ ...previa, textoAdjudicacion: e.target.value })} />
+
+        <label style={S.label}>Texto de constancia (proveedores consultados)</label>
+        <textarea style={{ ...S.input, minHeight: 90 }} value={previa.textoConstancia}
+          onChange={(e) => setPrevia({ ...previa, textoConstancia: e.target.value })} />
+
+        <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+          <button style={{ ...S.btn, flex: 2, minWidth: 200, background: "#16a34a", fontSize: 15, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => confirmarCuadro(false)}>
+            {ocupado ? "⏳ Generando..." : "✅ ESTÁ BIEN — GENERAR PDF"}
+          </button>
+          <button style={{ ...S.btnSec, flex: 1, minWidth: 140, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => confirmarCuadro(true)}>
+            {ocupado ? "⏳..." : "📊 PDF + Excel"}
+          </button>
+          <button style={{ ...S.btnSec, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => setPrevia(null)}>✖ Cancelar</button>
+        </div>
+      </div>
     );
   }
 
@@ -1735,7 +1658,7 @@ function RegistroPresupuestos({ exp }) {
     <div style={{ ...S.card, borderLeft: "5px solid #f59e0b" }}>
       <h3 style={{ color: "#075e75", marginBottom: 4 }}>📬 Registro de presupuestos</h3>
       <div style={{ fontSize: 13, color: "#64748b" }}>
-        A medida que respondan al mail, cargá acá cada proveedor: estado, precios y el PDF del presupuesto (queda guardado en el Drive del expediente). Cuando estén todos, generá el cuadro comparativo: primero lo revisás en pantalla tal como va a salir, lo corregís si hace falta, y recién ahí se descarga el PDF apaisado (para el SIGEDIG) y, si querés, el Excel editable.
+        A medida que respondan al mail, cargá acá cada proveedor: estado, precios y el PDF del presupuesto (queda guardado en el Drive del expediente). Cuando estén todos, generá el cuadro comparativo: se descarga a tu máquina en Excel (editable) y PDF apaisado (para el SIGEDIG), calcado del formato real.
       </div>
 
       {consultados.map((nombre) => {
