@@ -1502,20 +1502,28 @@ function RegistroPresupuestos({ exp }) {
   const guardados = exp.presupuestos || {};
 
   // ---- Ítems del módulo (una fila del cuadro por cada uno) ----
-  const itemsIniciales = () => {
-    if (exp.itemsPrestacion?.length) return exp.itemsPrestacion;
-    // primera vez: se proponen desde el detalle de servicios del expediente
-    const lineas = String(exp.detalleServicios || "").split("\n").map((l) => l.replace(/^[-•*\s]+/, "").replace(/\*/g, "").trim()).filter(Boolean);
-    if (lineas.length > 1) {
-      return lineas.map((l) => {
-        const i = l.indexOf(":");
-        return i > 0
-          ? { nombre: l.slice(0, i).trim(), cantTexto: l.slice(i + 1).trim().replace(/\.$/, ""), cantNum: "" }
-          : { nombre: l, cantTexto: "", cantNum: "" };
-      });
-    }
-    return [{ nombre: exp.modulo || "", cantTexto: "31 dias", cantNum: "31" }];
+  // Saca las prestaciones de lo que ya cargaste para el mail de cotización:
+  // solo toma las líneas tipo "Nombre: cantidad" (descarta encabezados y frases largas)
+  // y deduce el número de hs/sesiones del texto de la cantidad.
+  const proponerItems = () => {
+    const lineas = String(exp.detalleServicios || "").split("\n")
+      .map((l) => l.replace(/^[-•*\s]+/, "").replace(/\*/g, "").trim())
+      .filter(Boolean);
+    const propuestos = [];
+    lineas.forEach((l) => {
+      const i = l.indexOf(":");
+      if (i > 0 && i <= 45) {
+        const nombre = l.slice(0, i).trim();
+        const resto = l.slice(i + 1).trim().replace(/\.\s*$/, "");
+        // Hs/Ses. queda siempre vacío: se llena a mano solo si hace falta
+        // (varía según el mes calendario y lo que autorice Auditoría Médica)
+        propuestos.push({ nombre, cantTexto: resto, cantNum: "" });
+      }
+    });
+    if (propuestos.length === 0) propuestos.push({ nombre: exp.modulo || "", cantTexto: "", cantNum: "" });
+    return propuestos;
   };
+  const itemsIniciales = () => (exp.itemsPrestacion?.length ? exp.itemsPrestacion : proponerItems());
   const [items, setItems] = useState(itemsIniciales);
   const [editandoItems, setEditandoItems] = useState(false);
 
@@ -1821,13 +1829,25 @@ function RegistroPresupuestos({ exp }) {
                   <input style={S.input} value={it.cantTexto} onChange={(e) => setItem(i, "cantTexto", e.target.value)} placeholder="31 dias" />
                 </div>
                 <div>
-                  {i === 0 && <label style={{ ...S.label, marginTop: 0 }}>Hs/Ses.</label>}
-                  <input style={S.input} value={it.cantNum} onChange={(e) => setItem(i, "cantNum", e.target.value)} placeholder="31" />
+                  {i === 0 && <label style={{ ...S.label, marginTop: 0 }}>Hs/Ses. (opcional)</label>}
+                  <input style={S.input} value={it.cantNum} onChange={(e) => setItem(i, "cantNum", e.target.value)} placeholder="—" />
                 </div>
                 <button style={{ ...S.btnSec, padding: "10px 0", color: "#b91c1c", borderColor: "#fca5a5" }} title="Quitar ítem" onClick={() => quitarItem(i)}>🗑</button>
               </div>
             ))}
-            <button style={{ ...S.btnSec, marginTop: 4 }} onClick={agregarItem}>➕ Agregar ítem</button>
+            <div style={{ display: "flex", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
+              <button style={S.btnSec} onClick={agregarItem}>➕ Agregar ítem</button>
+              <button style={S.btnSec} onClick={() => {
+                const propuestos = proponerItems();
+                if (!confirm(`Se van a reemplazar los ítems actuales por los del pedido de cotización:\n\n${propuestos.map((p) => "• " + p.nombre + (p.cantTexto ? " (" + p.cantTexto + ")" : "")).join("\n")}\n\nLos precios ya cargados por ítem se limpian (los estados de los proveedores se mantienen). ¿Continuar?`)) return;
+                setItems(propuestos);
+                setDatos((d) => {
+                  const nd = {};
+                  Object.keys(d).forEach((n) => { nd[n] = { ...d[n], items: [] }; });
+                  return nd;
+                });
+              }}>🔁 Recargar desde el pedido de cotización</button>
+            </div>
           </div>
         )}
       </div>
