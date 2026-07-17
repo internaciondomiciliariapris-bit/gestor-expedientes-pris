@@ -1931,7 +1931,10 @@ function RegistroPresupuestos({ exp }) {
               <div style={{ marginTop: 10 }}>
                 {items.map((it, i) => (
                   <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 150px 150px", gap: 8, marginBottom: 6, alignItems: "center" }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: "#334155" }}>{it.nombre || "Ítem " + (i + 1)}</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "#334155" }}>
+                      {it.nombre || "Ítem " + (i + 1)}
+                      {it.cantTexto && <span style={{ color: "#94a3b8", fontWeight: 500 }}> — {it.cantTexto}</span>}
+                    </div>
                     <input style={S.input} type="number" placeholder="P. unitario ($)" value={d.items?.[i]?.unitario ?? ""}
                       onChange={(e) => setProvItem(nombre, i, "unitario", e.target.value)} />
                     <input style={S.input} type="number" placeholder="P. mensual ($)" value={d.items?.[i]?.mensual ?? ""}
