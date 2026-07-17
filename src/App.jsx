@@ -1106,7 +1106,29 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
             <b>Fecha de adjudicación:</b> {formatearFecha(exp.cuadro.fecha)}<br />
             <b>Precio mensual:</b> {formatoPesos(exp.cuadro.mensual)} · <b>Total {exp.periodoMeses} meses:</b> {formatoPesos(exp.cuadro.total)}
           </div>
-          <BotonRedescargar construirPayload={() => payloadCuadro(exp)} />
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <BotonRedescargar construirPayload={() => payloadCuadro(exp)} />
+            <button
+              style={{ ...S.btnSec, marginTop: 10, color: "#b91c1c", borderColor: "#fca5a5" }}
+              onClick={async () => {
+                if (!confirm(
+                  "↩️ REABRIR PRESUPUESTOS\n\n" +
+                  "El expediente vuelve a la etapa de Presupuestos para modificar estados o precios " +
+                  "(ej: un proveedor que mandó negativa y después se arrepintió y cotizó).\n\n" +
+                  "• Todo lo ya cargado se mantiene (precios, ítems, PDFs, estados)\n" +
+                  "• El cuadro comparativo ya generado queda DESACTUALIZADO: cuando termines, generalo de nuevo\n" +
+                  (exp.etapa >= 4 ? "• ⚠️ OJO: este expediente ya avanzó a etapas posteriores (nota/pases/resolución). Al reabrir, esas etapas se vuelven a recorrer y esos documentos también habrá que regenerarlos si cambia la adjudicación.\n" : "") +
+                  "\n¿Confirmás la reapertura?"
+                )) return;
+                try {
+                  await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), { etapa: 1 });
+                  alert("✅ Presupuestos reabiertos. Modificá lo que necesites y volvé a generar el cuadro.");
+                } catch (e) {
+                  alert("❌ Error al reabrir: " + e.message);
+                }
+              }}
+            >↩️ Reabrir presupuestos</button>
+          </div>
         </div>
       )}
 
@@ -1681,7 +1703,7 @@ function RegistroPresupuestos({ exp }) {
           body: JSON.stringify({
             accion: "subirPresupuesto", clave: APPS_SCRIPT_CLAVE,
             nroExpediente: exp.nroExpediente, paciente: exp.paciente,
-            proveedor: nombre,
+            proveedor: nombre, esNegativa: d.estado === "desestimo",
             adjunto: { nombre: archivo.name, mimeType: archivo.type || "application/pdf", base64 },
           }),
         });
@@ -1833,7 +1855,7 @@ function RegistroPresupuestos({ exp }) {
                   {listaVisible.map((p) => (
                     <Fragment key={p.nombre}>
                       <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 700 }}>
-                        {p.estado === "cotizo" ? formatoPesos(p.items[i]?.unitario) : i === 0 ? "NO COTIZA" : ""}
+                        {p.estado === "cotizo" ? formatoPesos(p.items[i]?.unitario) : i === 0 ? "NO COTIZÓ" : ""}
                       </td>
                       <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 700 }}>
                         {p.estado === "cotizo" ? formatoPesos(p.items[i]?.mensual) : ""}
@@ -1966,7 +1988,7 @@ function RegistroPresupuestos({ exp }) {
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontWeight: 800, color: "#075e75" }}>
               {nombre}{" "}
               {guardados[nombre]?.estado === "cotizo" && <span style={{ color: "#16a34a" }}>✅ Cotizó: {formatoPesos(guardados[nombre].mensual)}/mes · {formatoPesos((guardados[nombre].mensual || 0) * Number(exp.periodoMeses || 6))} por {exp.periodoMeses} meses</span>}
-              {guardados[nombre]?.estado === "desestimo" && <span style={{ color: "#b91c1c" }}>🚫 Desestimó</span>}
+              {guardados[nombre]?.estado === "desestimo" && <span style={{ color: "#b91c1c" }}>🚫 No cotizó (negativa){guardados[nombre]?.pdfNombre ? " 📎" : ""}</span>}
               {guardados[nombre]?.estado === "sin_respuesta" && <span style={{ color: "#64748b" }}>⏳ No respondió</span>}
               <div style={{ flex: 1 }} />
               <button style={S.btnSec} onClick={() => setAbiertos({ ...abiertos, [nombre]: !abierto })}>
@@ -1975,7 +1997,7 @@ function RegistroPresupuestos({ exp }) {
             </div>
             {abierto && (<>
             <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-              {[["cotizo", "💰 Cotizó"], ["desestimo", "🚫 Desestimó"], ["sin_respuesta", "⏳ No respondió"]].map(([v, t]) => (
+              {[["cotizo", "💰 Cotizó"], ["desestimo", "🚫 No cotizó (mandó negativa)"], ["sin_respuesta", "⏳ No respondió"]].map(([v, t]) => (
                 <label key={v} style={{
                   display: "flex", alignItems: "center", gap: 6, padding: "6px 12px",
                   borderRadius: 8, border: "1.5px solid " + (d.estado === v ? "#0891b2" : "#cbd5e1"),
@@ -1987,9 +2009,9 @@ function RegistroPresupuestos({ exp }) {
               ))}
             </div>
 
-            {d.estado === "cotizo" && (
+            {(d.estado === "cotizo" || d.estado === "desestimo") && (
               <div style={{ marginTop: 10 }}>
-                {items.map((it, i) => (
+                {d.estado === "cotizo" && items.map((it, i) => (
                   <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 150px 150px", gap: 8, marginBottom: 6, alignItems: "center" }}>
                     <div style={{ fontSize: 13, fontWeight: 600, color: "#334155" }}>
                       {it.nombre || "Ítem " + (i + 1)}
@@ -2001,10 +2023,12 @@ function RegistroPresupuestos({ exp }) {
                       onChange={(e) => setProvItem(nombre, i, "mensual", e.target.value)} />
                   </div>
                 ))}
-                <div style={{ textAlign: "right", fontWeight: 800, color: "#075e75", fontSize: 14, marginTop: 4 }}>
-                  Mensual total: {formatoPesos(mensualTotal)} · Total por {exp.periodoMeses} meses: {formatoPesos(mensualTotal * Number(exp.periodoMeses || 6))}
-                </div>
-                <label style={{ ...S.label }}>PDF del presupuesto{d.pdfNombre ? ` — guardado: ${d.pdfNombre}` : ""}</label>
+                {d.estado === "cotizo" && (
+                  <div style={{ textAlign: "right", fontWeight: 800, color: "#075e75", fontSize: 14, marginTop: 4 }}>
+                    Mensual total: {formatoPesos(mensualTotal)} · Total por {exp.periodoMeses} meses: {formatoPesos(mensualTotal * Number(exp.periodoMeses || 6))}
+                  </div>
+                )}
+                <label style={{ ...S.label }}>{d.estado === "desestimo" ? "PDF de la respuesta (mail con la negativa)" : "PDF del presupuesto"}{d.pdfNombre ? ` — guardado: ${d.pdfNombre}` : ""}</label>
                 <input type="file" accept="application/pdf" style={{ marginTop: 4 }}
                   onChange={(e) => setArchivos({ ...archivos, [nombre]: e.target.files[0] })} />
               </div>
