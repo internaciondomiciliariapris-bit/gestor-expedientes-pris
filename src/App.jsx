@@ -1596,6 +1596,10 @@ function RegistroPresupuestos({ exp }) {
   });
   const [archivos, setArchivos] = useState({});
   const [ocupado, setOcupado] = useState(false);
+  const [abiertos, setAbiertos] = useState({});
+  const [autoInfo, setAutoInfo] = useState("");
+  const primerRender = useRef(true);
+  const timerAuto = useRef(null);
 
   const setProv = (nombre, campo, valor) =>
     setDatos({ ...datos, [nombre]: { ...datos[nombre], [campo]: valor } });
@@ -1609,6 +1613,50 @@ function RegistroPresupuestos({ exp }) {
   };
 
   const sumaMensual = (arrItems) => (arrItems || []).reduce((s, it) => s + (Number(it?.mensual) || 0), 0);
+
+  // Registro parcial de un proveedor con lo tipeado hasta ahora (para el autoguardado)
+  const registroParcial = (nombre) => {
+    const d = datos[nombre] || {};
+    if (!d.estado) return null;
+    const its = d.estado === "cotizo"
+      ? items.map((it, i) => ({
+          nombre: it.nombre,
+          unitario: d.items?.[i]?.unitario !== "" && d.items?.[i]?.unitario != null ? Number(d.items[i].unitario) : null,
+          mensual: d.items?.[i]?.mensual !== "" && d.items?.[i]?.mensual != null ? Number(d.items[i].mensual) : null,
+        }))
+      : [];
+    const cargados = its.filter((it) => it.mensual != null);
+    return {
+      estado: d.estado,
+      items: its,
+      mensual: d.estado === "cotizo" && cargados.length ? cargados.reduce((s, it) => s + it.mensual, 0) : null,
+      unitario: d.estado === "cotizo" && its.length === 1 && its[0].unitario != null ? its[0].unitario : null,
+      pdfNombre: d.pdfNombre || "",
+      fecha: guardados[nombre]?.fecha || new Date().toISOString(),
+    };
+  };
+
+  // 💾 GUARDADO AUTOMÁTICO: todo lo que se tipea (ítems, estados y precios)
+  // se graba solo en la base ~1,5 s después del último cambio.
+  useEffect(() => {
+    if (primerRender.current) { primerRender.current = false; return; }
+    if (timerAuto.current) clearTimeout(timerAuto.current);
+    setAutoInfo("💾 Guardando...");
+    timerAuto.current = setTimeout(async () => {
+      try {
+        const cambios = { itemsPrestacion: items };
+        consultados.forEach((n) => {
+          const r = registroParcial(n);
+          if (r) cambios["presupuestos." + n] = r;
+        });
+        await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), cambios);
+        setAutoInfo("✓ Guardado automáticamente " + new Date().toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }));
+      } catch (e) {
+        setAutoInfo("⚠️ No se pudo autoguardar — usá los botones Guardar");
+      }
+    }, 1500);
+    return () => { if (timerAuto.current) clearTimeout(timerAuto.current); };
+  }, [datos, items]);
 
   const guardarProveedor = async (nombre) => {
     const d = datos[nombre];
@@ -1661,6 +1709,7 @@ function RegistroPresupuestos({ exp }) {
         itemsPrestacion: items,
       });
       setDatos({ ...datos, [nombre]: { ...d, pdfNombre } });
+      setAbiertos({ ...abiertos, [nombre]: false });
       alert("✅ Guardado: " + nombre + (d.estado === "cotizo" ? " — Mensual total: " + formatoPesos(registro.mensual) : ""));
     } catch (e) {
       alert("❌ Error: " + e.message);
@@ -1682,6 +1731,11 @@ function RegistroPresupuestos({ exp }) {
   const abrirPrevia = () => {
     if (cotizantes.length === 0) { alert("Todavía no hay ningún proveedor con presupuesto cargado (Cotizó)."); return; }
     if (pendientes.length > 0 && !confirm(`Hay proveedores sin marcar: ${pendientes.join(", ")}.\n\nSi seguís, quedarán registrados como SIN RESPUESTA. ¿Continuar?`)) return;
+    for (const n of cotizantes) {
+      const its = itemsDeGuardado(guardados[n]);
+      const incompletos = items.some((_, i) => its[i]?.mensual == null || isNaN(Number(its[i]?.mensual)));
+      if (incompletos) { alert(`A ${n} le faltan precios por ítem. Completá el mensual de cada prestación antes de generar el cuadro.`); return; }
+    }
 
     // ganador: menor mensual TOTAL (suma de todos los ítems) entre los que cotizaron
     let ganador = null;
@@ -1834,7 +1888,7 @@ function RegistroPresupuestos({ exp }) {
     <div style={{ ...S.card, borderLeft: "5px solid #f59e0b" }}>
       <h3 style={{ color: "#075e75", marginBottom: 4 }}>📬 Registro de presupuestos</h3>
       <div style={{ fontSize: 13, color: "#64748b" }}>
-        Primero definí los <b>ítems del módulo</b> (una fila del cuadro por cada prestación: bomba, enfermería, visita médica, etc.). Después cargá los precios de cada proveedor <b>por ítem</b> — el mensual total se suma solo y se adjudica al total más bajo. El PDF del presupuesto queda guardado en el Drive del expediente.
+        Primero definí los <b>ítems del módulo</b> (una fila del cuadro por cada prestación: bomba, enfermería, visita médica, etc.). Después cargá los precios de cada proveedor <b>por ítem</b> — el mensual total se suma solo y se adjudica al total más bajo. <b>Todo se va guardando automáticamente mientras cargás</b>; el botón Guardar de cada proveedor sube además el PDF del presupuesto al Drive.
       </div>
 
       <div style={{ background: "#f8fafc", borderRadius: 8, padding: "10px 12px", marginTop: 12, border: "1px solid #e2e8f0" }}>
@@ -1906,14 +1960,20 @@ function RegistroPresupuestos({ exp }) {
       {consultados.map((nombre) => {
         const d = datos[nombre] || { estado: "", items: [] };
         const mensualTotal = sumaMensual(d.items);
+        const abierto = abiertos[nombre] ?? !guardados[nombre]?.estado;
         return (
           <div key={nombre} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 12, marginTop: 12 }}>
-            <div style={{ fontWeight: 800, color: "#075e75" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontWeight: 800, color: "#075e75" }}>
               {nombre}{" "}
               {guardados[nombre]?.estado === "cotizo" && <span style={{ color: "#16a34a" }}>✅ Cotizó: {formatoPesos(guardados[nombre].mensual)}/mes · {formatoPesos((guardados[nombre].mensual || 0) * Number(exp.periodoMeses || 6))} por {exp.periodoMeses} meses</span>}
               {guardados[nombre]?.estado === "desestimo" && <span style={{ color: "#b91c1c" }}>🚫 Desestimó</span>}
               {guardados[nombre]?.estado === "sin_respuesta" && <span style={{ color: "#64748b" }}>⏳ No respondió</span>}
+              <div style={{ flex: 1 }} />
+              <button style={S.btnSec} onClick={() => setAbiertos({ ...abiertos, [nombre]: !abierto })}>
+                {abierto ? "▲ Cerrar" : "▼ Editar"}
+              </button>
             </div>
+            {abierto && (<>
             <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
               {[["cotizo", "💰 Cotizó"], ["desestimo", "🚫 Desestimó"], ["sin_respuesta", "⏳ No respondió"]].map(([v, t]) => (
                 <label key={v} style={{
@@ -1951,13 +2011,18 @@ function RegistroPresupuestos({ exp }) {
             )}
 
             <button style={{ ...S.btnSec, marginTop: 10, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => guardarProveedor(nombre)}>
-              💾 Guardar {nombre}
+              💾 Guardar {nombre}{archivos[nombre] ? " (sube el PDF)" : ""}
             </button>
+            </>)}
           </div>
         );
       })}
 
-      <button style={{ ...S.btn, marginTop: 18, width: "100%", fontSize: 16, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={abrirPrevia}>
+      {autoInfo && (
+        <div style={{ textAlign: "right", fontSize: 12, color: autoInfo.startsWith("⚠️") ? "#b45309" : "#16a34a", marginTop: 8 }}>{autoInfo}</div>
+      )}
+
+      <button style={{ ...S.btn, marginTop: 10, width: "100%", fontSize: 16, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={abrirPrevia}>
         {ocupado ? "⏳ Procesando..." : "👁️ GENERAR Y REVISAR EL CUADRO (adjudica al menor total)"}
       </button>
     </div>
