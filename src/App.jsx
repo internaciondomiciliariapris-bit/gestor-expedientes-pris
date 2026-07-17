@@ -1505,18 +1505,19 @@ function RegistroPresupuestos({ exp }) {
   const itemsIniciales = () => {
     if (exp.itemsPrestacion?.length) return exp.itemsPrestacion;
     // primera vez: se proponen desde el detalle de servicios del expediente
-    const lineas = String(exp.detalleServicios || "").split("\n").map((l) => l.replace(/^[-•]\s*/, "").trim()).filter(Boolean);
+    const lineas = String(exp.detalleServicios || "").split("\n").map((l) => l.replace(/^[-•*\s]+/, "").replace(/\*/g, "").trim()).filter(Boolean);
     if (lineas.length > 1) {
       return lineas.map((l) => {
         const i = l.indexOf(":");
         return i > 0
-          ? { nombre: l.slice(0, i).trim(), cantTexto: l.slice(i + 1).trim(), cantNum: "" }
+          ? { nombre: l.slice(0, i).trim(), cantTexto: l.slice(i + 1).trim().replace(/\.$/, ""), cantNum: "" }
           : { nombre: l, cantTexto: "", cantNum: "" };
       });
     }
     return [{ nombre: exp.modulo || "", cantTexto: "31 dias", cantNum: "31" }];
   };
   const [items, setItems] = useState(itemsIniciales);
+  const [editandoItems, setEditandoItems] = useState(false);
 
   const setItem = (i, campo, valor) => {
     const nuevos = items.map((it, idx) => (idx === i ? { ...it, [campo]: valor } : it));
@@ -1796,26 +1797,39 @@ function RegistroPresupuestos({ exp }) {
         Primero definí los <b>ítems del módulo</b> (una fila del cuadro por cada prestación: bomba, enfermería, visita médica, etc.). Después cargá los precios de cada proveedor <b>por ítem</b> — el mensual total se suma solo y se adjudica al total más bajo. El PDF del presupuesto queda guardado en el Drive del expediente.
       </div>
 
-      <div style={{ background: "#f8fafc", borderRadius: 8, padding: 12, marginTop: 12, border: "1px solid #e2e8f0" }}>
-        <div style={{ fontWeight: 800, color: "#334155", marginBottom: 8 }}>🧩 Ítems del módulo (filas del cuadro comparativo)</div>
-        {items.map((it, i) => (
-          <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 170px 90px 40px", gap: 8, marginBottom: 8, alignItems: "end" }}>
-            <div>
-              {i === 0 && <label style={{ ...S.label, marginTop: 0 }}>Prestación</label>}
-              <input style={S.input} value={it.nombre} onChange={(e) => setItem(i, "nombre", e.target.value)} placeholder="Ej: Enfermería 12 hs diarias" />
-            </div>
-            <div>
-              {i === 0 && <label style={{ ...S.label, marginTop: 0 }}>Cantidad (texto)</label>}
-              <input style={S.input} value={it.cantTexto} onChange={(e) => setItem(i, "cantTexto", e.target.value)} placeholder="31 dias" />
-            </div>
-            <div>
-              {i === 0 && <label style={{ ...S.label, marginTop: 0 }}>Hs/Ses.</label>}
-              <input style={S.input} value={it.cantNum} onChange={(e) => setItem(i, "cantNum", e.target.value)} placeholder="31" />
-            </div>
-            <button style={{ ...S.btnSec, padding: "10px 0", color: "#b91c1c", borderColor: "#fca5a5" }} title="Quitar ítem" onClick={() => quitarItem(i)}>🗑</button>
+      <div style={{ background: "#f8fafc", borderRadius: 8, padding: "10px 12px", marginTop: 12, border: "1px solid #e2e8f0" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ fontWeight: 800, color: "#334155" }}>🧩 Ítems del módulo ({items.length})</div>
+          <div style={{ flex: 1, fontSize: 13, color: "#64748b", minWidth: 180 }}>
+            {items.map((it) => it.nombre).filter(Boolean).join(" · ") || "sin definir"}
           </div>
-        ))}
-        <button style={{ ...S.btnSec, marginTop: 4 }} onClick={agregarItem}>➕ Agregar ítem</button>
+          <button style={S.btnSec} onClick={() => setEditandoItems(!editandoItems)}>
+            {editandoItems ? "▲ Listo" : "✏️ Editar ítems"}
+          </button>
+        </div>
+
+        {editandoItems && (
+          <div style={{ marginTop: 12, borderTop: "1px solid #e2e8f0", paddingTop: 12 }}>
+            {items.map((it, i) => (
+              <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 170px 90px 40px", gap: 8, marginBottom: 8, alignItems: "end" }}>
+                <div>
+                  {i === 0 && <label style={{ ...S.label, marginTop: 0 }}>Prestación</label>}
+                  <input style={S.input} value={it.nombre} onChange={(e) => setItem(i, "nombre", e.target.value)} placeholder="Ej: Enfermería 12 hs diarias" />
+                </div>
+                <div>
+                  {i === 0 && <label style={{ ...S.label, marginTop: 0 }}>Cantidad (texto)</label>}
+                  <input style={S.input} value={it.cantTexto} onChange={(e) => setItem(i, "cantTexto", e.target.value)} placeholder="31 dias" />
+                </div>
+                <div>
+                  {i === 0 && <label style={{ ...S.label, marginTop: 0 }}>Hs/Ses.</label>}
+                  <input style={S.input} value={it.cantNum} onChange={(e) => setItem(i, "cantNum", e.target.value)} placeholder="31" />
+                </div>
+                <button style={{ ...S.btnSec, padding: "10px 0", color: "#b91c1c", borderColor: "#fca5a5" }} title="Quitar ítem" onClick={() => quitarItem(i)}>🗑</button>
+              </div>
+            ))}
+            <button style={{ ...S.btnSec, marginTop: 4 }} onClick={agregarItem}>➕ Agregar ítem</button>
+          </div>
+        )}
       </div>
 
       {consultados.map((nombre) => {
@@ -1825,7 +1839,7 @@ function RegistroPresupuestos({ exp }) {
           <div key={nombre} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 12, marginTop: 12 }}>
             <div style={{ fontWeight: 800, color: "#075e75" }}>
               {nombre}{" "}
-              {guardados[nombre]?.estado === "cotizo" && <span style={{ color: "#16a34a" }}>✅ Cotizó: {formatoPesos(guardados[nombre].mensual)}/mes</span>}
+              {guardados[nombre]?.estado === "cotizo" && <span style={{ color: "#16a34a" }}>✅ Cotizó: {formatoPesos(guardados[nombre].mensual)}/mes · {formatoPesos((guardados[nombre].mensual || 0) * Number(exp.periodoMeses || 6))} por {exp.periodoMeses} meses</span>}
               {guardados[nombre]?.estado === "desestimo" && <span style={{ color: "#b91c1c" }}>🚫 Desestimó</span>}
               {guardados[nombre]?.estado === "sin_respuesta" && <span style={{ color: "#64748b" }}>⏳ No respondió</span>}
             </div>
@@ -1853,11 +1867,9 @@ function RegistroPresupuestos({ exp }) {
                       onChange={(e) => setProvItem(nombre, i, "mensual", e.target.value)} />
                   </div>
                 ))}
-                {items.length > 1 && (
-                  <div style={{ textAlign: "right", fontWeight: 800, color: "#075e75", fontSize: 14, marginTop: 4 }}>
-                    Mensual total: {formatoPesos(mensualTotal)}
-                  </div>
-                )}
+                <div style={{ textAlign: "right", fontWeight: 800, color: "#075e75", fontSize: 14, marginTop: 4 }}>
+                  Mensual total: {formatoPesos(mensualTotal)} · Total por {exp.periodoMeses} meses: {formatoPesos(mensualTotal * Number(exp.periodoMeses || 6))}
+                </div>
                 <label style={{ ...S.label }}>PDF del presupuesto{d.pdfNombre ? ` — guardado: ${d.pdfNombre}` : ""}</label>
                 <input type="file" accept="application/pdf" style={{ marginTop: 4 }}
                   onChange={(e) => setArchivos({ ...archivos, [nombre]: e.target.files[0] })} />
