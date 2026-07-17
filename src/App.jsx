@@ -534,6 +534,25 @@ const datosResolucion = (exp, extra = {}) => {
   };
 };
 
+// Extrae prestaciones de un texto: toma solo las líneas tipo "Nombre: cantidad"
+// (nombre corto), descartando encabezados y frases largas. Hs/Ses. queda vacío
+// para carga manual (varía según el mes y lo autorizado por Auditoría Médica).
+function extraerItemsDeTexto(texto) {
+  const lineas = String(texto || "").split("\n")
+    .map((l) => l.replace(/^[-•*\s]+/, "").replace(/\*/g, "").trim())
+    .filter(Boolean);
+  const items = [];
+  lineas.forEach((l) => {
+    const i = l.indexOf(":");
+    if (i > 0 && i <= 45) {
+      const nombre = l.slice(0, i).trim();
+      const resto = l.slice(i + 1).trim().replace(/\.\s*$/, "");
+      items.push({ nombre, cantTexto: resto, cantNum: "" });
+    }
+  });
+  return items;
+}
+
 const payloadCuadro = (exp) => {
   const consultados = (exp.cotizacion?.proveedores || "").split(",").map((s) => s.trim()).filter(Boolean);
   const guardados = exp.presupuestos || {};
@@ -1505,33 +1524,34 @@ function RegistroPresupuestos({ exp }) {
   // Saca las prestaciones de lo que ya cargaste para el mail de cotización:
   // solo toma las líneas tipo "Nombre: cantidad" (descarta encabezados y frases largas)
   // y deduce el número de hs/sesiones del texto de la cantidad.
+  // Propone las prestaciones desde el detalle de servicios cargado para el mail
   const proponerItems = () => {
-    const lineas = String(exp.detalleServicios || "").split("\n")
-      .map((l) => l.replace(/^[-•*\s]+/, "").replace(/\*/g, "").trim())
-      .filter(Boolean);
-    const propuestos = [];
-    lineas.forEach((l) => {
-      const i = l.indexOf(":");
-      if (i > 0 && i <= 45) {
-        const nombre = l.slice(0, i).trim();
-        const resto = l.slice(i + 1).trim().replace(/\.\s*$/, "");
-        // Hs/Ses. queda siempre vacío: se llena a mano solo si hace falta
-        // (varía según el mes calendario y lo que autorice Auditoría Médica)
-        propuestos.push({ nombre, cantTexto: resto, cantNum: "" });
-      }
-    });
+    const propuestos = extraerItemsDeTexto(exp.detalleServicios);
     if (propuestos.length === 0) propuestos.push({ nombre: exp.modulo || "", cantTexto: "", cantNum: "" });
     return propuestos;
   };
   const itemsIniciales = () => (exp.itemsPrestacion?.length ? exp.itemsPrestacion : proponerItems());
   const [items, setItems] = useState(itemsIniciales);
   const [editandoItems, setEditandoItems] = useState(false);
+  const [pegando, setPegando] = useState(false);
+  const [textoPegado, setTextoPegado] = useState("");
 
   const setItem = (i, campo, valor) => {
     const nuevos = items.map((it, idx) => (idx === i ? { ...it, [campo]: valor } : it));
     setItems(nuevos);
   };
   const agregarItem = () => setItems([...items, { nombre: "", cantTexto: "", cantNum: "" }]);
+
+  const aplicarItemsNuevos = (nuevos, origen) => {
+    if (!confirm(`Se van a reemplazar los ítems actuales por los extraídos ${origen}:\n\n${nuevos.map((p) => "• " + p.nombre + (p.cantTexto ? " (" + p.cantTexto + ")" : "")).join("\n")}\n\nLos precios ya cargados por ítem se limpian (los estados de los proveedores se mantienen). ¿Continuar?`)) return false;
+    setItems(nuevos);
+    setDatos((d) => {
+      const nd = {};
+      Object.keys(d).forEach((n) => { nd[n] = { ...d[n], items: [] }; });
+      return nd;
+    });
+    return true;
+  };
   const quitarItem = (i) => {
     if (items.length === 1) { alert("Tiene que quedar al menos un ítem."); return; }
     if (!confirm(`¿Quitar el ítem "${items[i].nombre || "(sin nombre)"}"? Se borran también los precios cargados en esa fila.`)) return;
@@ -1839,15 +1859,34 @@ function RegistroPresupuestos({ exp }) {
               <button style={S.btnSec} onClick={agregarItem}>➕ Agregar ítem</button>
               <button style={S.btnSec} onClick={() => {
                 const propuestos = proponerItems();
-                if (!confirm(`Se van a reemplazar los ítems actuales por los del pedido de cotización:\n\n${propuestos.map((p) => "• " + p.nombre + (p.cantTexto ? " (" + p.cantTexto + ")" : "")).join("\n")}\n\nLos precios ya cargados por ítem se limpian (los estados de los proveedores se mantienen). ¿Continuar?`)) return;
-                setItems(propuestos);
-                setDatos((d) => {
-                  const nd = {};
-                  Object.keys(d).forEach((n) => { nd[n] = { ...d[n], items: [] }; });
-                  return nd;
-                });
+                aplicarItemsNuevos(propuestos, "del pedido de cotización");
               }}>🔁 Recargar desde el pedido de cotización</button>
+              <button style={S.btnSec} onClick={() => setPegando(!pegando)}>
+                📋 Pegar desde el mail
+              </button>
             </div>
+
+            {pegando && (
+              <div style={{ marginTop: 10, padding: 10, background: "#fffbeb", border: "1px dashed #f59e0b", borderRadius: 8 }}>
+                <div style={{ fontSize: 13, color: "#92400e", marginBottom: 6 }}>
+                  Abrí el mail enviado en Gmail, <b>copiá el bloque de los servicios</b> (las líneas tipo "Enfermería: 24hs por día") y pegalo acá. El sistema extrae las prestaciones automáticamente — las líneas que no sean servicios se descartan solas.
+                </div>
+                <textarea style={{ ...S.input, minHeight: 110 }} value={textoPegado}
+                  onChange={(e) => setTextoPegado(e.target.value)}
+                  placeholder={"Ej:\n• Enfermería: 24hs por día.\n• Kinesiología Motora: 2 sesiones por semana.\n• Visita médica: 1 visita semanal."} />
+                <button style={{ ...S.btn, marginTop: 8 }} onClick={() => {
+                  const extraidos = extraerItemsDeTexto(textoPegado);
+                  if (extraidos.length === 0) {
+                    alert("No encontré líneas de servicios en el texto pegado.\n\nTienen que tener el formato \"Nombre: cantidad\" (ej: Enfermería: 24hs por día). Revisá lo copiado e intentá de nuevo.");
+                    return;
+                  }
+                  if (aplicarItemsNuevos(extraidos, "del texto pegado")) {
+                    setPegando(false);
+                    setTextoPegado("");
+                  }
+                }}>✅ Extraer ítems del texto</button>
+              </div>
+            )}
           </div>
         )}
       </div>
