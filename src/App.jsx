@@ -1832,8 +1832,8 @@ function RegistroPresupuestos({ exp }) {
               <tr>
                 <th style={{ border: "1px solid #334155", padding: 6, background: "#F2F2F2" }}>PRESTACION</th>
                 <th style={{ border: "1px solid #334155", padding: 6, background: "#F2F2F2" }}>CANT</th>
-                {listaVisible.map((p, i) => (
-                  <th key={p.nombre} colSpan={2} style={{ border: "1px solid #334155", padding: 6, background: i % 2 ? "#E7E6E6" : "#F2F2F2" }}>{p.nombre.toUpperCase()}</th>
+                {listaVisible.map((p) => (
+                  <th key={p.nombre} colSpan={2} style={{ border: "1px solid #334155", padding: 6, background: p.nombre === previa.ganador ? "#D9D9D9" : "#F2F2F2" }}>{p.nombre.toUpperCase()}{p.nombre === previa.ganador ? " 🏆" : ""}</th>
                 ))}
               </tr>
               <tr>
@@ -1854,10 +1854,10 @@ function RegistroPresupuestos({ exp }) {
                   <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center" }}>{[it.cantTexto, it.cantNum].filter(Boolean).join(" / ")}</td>
                   {listaVisible.map((p) => (
                     <Fragment key={p.nombre}>
-                      <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 700 }}>
+                      <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 700, background: p.nombre === previa.ganador ? "#E7E6E6" : "#fff" }}>
                         {p.estado === "cotizo" ? formatoPesos(p.items[i]?.unitario) : i === 0 ? "NO COTIZÓ" : ""}
                       </td>
-                      <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 700 }}>
+                      <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 700, background: p.nombre === previa.ganador ? "#E7E6E6" : "#fff" }}>
                         {p.estado === "cotizo" ? formatoPesos(p.items[i]?.mensual) : ""}
                       </td>
                     </Fragment>
@@ -1869,8 +1869,8 @@ function RegistroPresupuestos({ exp }) {
                   <td colSpan={2} style={{ border: "1px solid #334155", padding: 6, fontWeight: 800 }}>TOTAL MENSUAL</td>
                   {listaVisible.map((p) => (
                     <Fragment key={p.nombre}>
-                      <td style={{ border: "1px solid #334155", padding: 6 }}></td>
-                      <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 800 }}>
+                      <td style={{ border: "1px solid #334155", padding: 6, background: p.nombre === previa.ganador ? "#E7E6E6" : "#fff" }}></td>
+                      <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 800, background: p.nombre === previa.ganador ? "#E7E6E6" : "#fff" }}>
                         {p.estado === "cotizo" ? formatoPesos(p.mensual) : ""}
                       </td>
                     </Fragment>
