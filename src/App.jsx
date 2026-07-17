@@ -538,20 +538,26 @@ const payloadCuadro = (exp) => {
   const consultados = (exp.cotizacion?.proveedores || "").split(",").map((s) => s.trim()).filter(Boolean);
   const guardados = exp.presupuestos || {};
   const c = exp.cuadro || {};
+  const items = exp.itemsPrestacion?.length ? exp.itemsPrestacion : [{ nombre: exp.modulo || "", cantTexto: c.cantTexto || "", cantNum: c.cantNum || "" }];
+  const itemsDe = (g) => {
+    if (g?.items?.length) return g.items;
+    if (g?.mensual != null) return [{ nombre: items[0].nombre, unitario: g.unitario, mensual: g.mensual }];
+    return [];
+  };
   return {
     accion: "generarCuadro",
     nroExpediente: exp.nroExpediente, paciente: exp.paciente,
     modulo: exp.modulo, detalleServicios: exp.detalleServicios,
     periodoTexto: exp.periodoTexto, periodoMeses: exp.periodoMeses,
-    cantTexto: c.cantTexto || "", cantNum: c.cantNum || "",
+    items,
     textoAdjudicacion: c.textoAdjudicacion || "", textoConstancia: c.textoConstancia || "",
     proveedores: consultados.map((n) => ({
       nombre: n,
       estado: guardados[n]?.estado || "sin_respuesta",
-      unitario: guardados[n]?.unitario || null,
-      mensual: guardados[n]?.mensual || null,
+      mensual: guardados[n]?.mensual ?? null,
+      items: itemsDe(guardados[n]),
     })),
-    adjudicado: { nombre: c.adjudicado, unitario: c.unitario, mensual: c.mensual, total: c.total },
+    adjudicado: { nombre: c.adjudicado, mensual: c.mensual, total: c.total },
   };
 };
 
@@ -1494,26 +1500,86 @@ function EnvioCotizacion({ exp, proveedores }) {
 function RegistroPresupuestos({ exp }) {
   const consultados = (exp.cotizacion?.proveedores || "").split(",").map((s) => s.trim()).filter(Boolean);
   const guardados = exp.presupuestos || {};
+
+  // ---- Ítems del módulo (una fila del cuadro por cada uno) ----
+  const itemsIniciales = () => {
+    if (exp.itemsPrestacion?.length) return exp.itemsPrestacion;
+    // primera vez: se proponen desde el detalle de servicios del expediente
+    const lineas = String(exp.detalleServicios || "").split("\n").map((l) => l.replace(/^[-•]\s*/, "").trim()).filter(Boolean);
+    if (lineas.length > 1) {
+      return lineas.map((l) => {
+        const i = l.indexOf(":");
+        return i > 0
+          ? { nombre: l.slice(0, i).trim(), cantTexto: l.slice(i + 1).trim(), cantNum: "" }
+          : { nombre: l, cantTexto: "", cantNum: "" };
+      });
+    }
+    return [{ nombre: exp.modulo || "", cantTexto: "31 dias", cantNum: "31" }];
+  };
+  const [items, setItems] = useState(itemsIniciales);
+
+  const setItem = (i, campo, valor) => {
+    const nuevos = items.map((it, idx) => (idx === i ? { ...it, [campo]: valor } : it));
+    setItems(nuevos);
+  };
+  const agregarItem = () => setItems([...items, { nombre: "", cantTexto: "", cantNum: "" }]);
+  const quitarItem = (i) => {
+    if (items.length === 1) { alert("Tiene que quedar al menos un ítem."); return; }
+    if (!confirm(`¿Quitar el ítem "${items[i].nombre || "(sin nombre)"}"? Se borran también los precios cargados en esa fila.`)) return;
+    setItems(items.filter((_, idx) => idx !== i));
+    setDatos((d) => {
+      const nd = {};
+      Object.keys(d).forEach((n) => {
+        nd[n] = { ...d[n], items: (d[n].items || []).filter((_, idx) => idx !== i) };
+      });
+      return nd;
+    });
+  };
+
+  // ---- Datos por proveedor: precios por ítem ----
+  const itemsProveedorIniciales = (g) => {
+    if (g?.items?.length) return g.items.map((it) => ({ unitario: it.unitario ?? "", mensual: it.mensual ?? "" }));
+    if (g?.mensual != null) return [{ unitario: g.unitario ?? "", mensual: g.mensual ?? "" }]; // compatibilidad con lo cargado antes
+    return [];
+  };
   const [datos, setDatos] = useState(() => {
     const d = {};
     consultados.forEach((n) => {
-      d[n] = guardados[n] || { estado: "", unitario: "", mensual: "", pdfNombre: "" };
+      d[n] = {
+        estado: guardados[n]?.estado || "",
+        pdfNombre: guardados[n]?.pdfNombre || "",
+        items: itemsProveedorIniciales(guardados[n]),
+      };
     });
     return d;
   });
   const [archivos, setArchivos] = useState({});
   const [ocupado, setOcupado] = useState(false);
-  const [cantTexto, setCantTexto] = useState(exp.cuadro?.cantTexto || "31 dias");
-  const [cantNum, setCantNum] = useState(exp.cuadro?.cantNum || "31");
 
   const setProv = (nombre, campo, valor) =>
     setDatos({ ...datos, [nombre]: { ...datos[nombre], [campo]: valor } });
 
+  const setProvItem = (nombre, i, campo, valor) => {
+    const d = datos[nombre];
+    const arr = [];
+    for (let k = 0; k < items.length; k++) arr[k] = d.items?.[k] || { unitario: "", mensual: "" };
+    arr[i] = { ...arr[i], [campo]: valor };
+    setDatos({ ...datos, [nombre]: { ...d, items: arr } });
+  };
+
+  const sumaMensual = (arrItems) => (arrItems || []).reduce((s, it) => s + (Number(it?.mensual) || 0), 0);
+
   const guardarProveedor = async (nombre) => {
     const d = datos[nombre];
     if (!d.estado) { alert("Marcá el estado del presupuesto de " + nombre); return; }
-    if (d.estado === "cotizo" && (!d.unitario || !d.mensual)) {
-      alert("Cargá el precio unitario y el precio mensual de " + nombre); return;
+    if (d.estado === "cotizo") {
+      for (let i = 0; i < items.length; i++) {
+        const it = d.items?.[i];
+        if (!it || it.unitario === "" || it.mensual === "") {
+          alert(`Cargá el precio unitario y el mensual de "${items[i].nombre || "ítem " + (i + 1)}" para ${nombre}.`);
+          return;
+        }
+      }
     }
     setOcupado(true);
     try {
@@ -1534,16 +1600,27 @@ function RegistroPresupuestos({ exp }) {
         if (!data.ok) throw new Error(data.error || "Error al subir el PDF");
         pdfNombre = archivo.name;
       }
+      const itemsRegistro = d.estado === "cotizo"
+        ? items.map((it, i) => ({
+            nombre: it.nombre,
+            unitario: Number(d.items[i].unitario),
+            mensual: Number(d.items[i].mensual),
+          }))
+        : [];
       const registro = {
         estado: d.estado,
-        unitario: d.estado === "cotizo" ? Number(d.unitario) : null,
-        mensual: d.estado === "cotizo" ? Number(d.mensual) : null,
+        items: itemsRegistro,
+        mensual: d.estado === "cotizo" ? sumaMensual(itemsRegistro) : null,
+        unitario: d.estado === "cotizo" && itemsRegistro.length === 1 ? itemsRegistro[0].unitario : null,
         pdfNombre,
         fecha: new Date().toISOString(),
       };
-      await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), { ["presupuestos." + nombre]: registro });
+      await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
+        ["presupuestos." + nombre]: registro,
+        itemsPrestacion: items,
+      });
       setDatos({ ...datos, [nombre]: { ...d, pdfNombre } });
-      alert("✅ Guardado: " + nombre);
+      alert("✅ Guardado: " + nombre + (d.estado === "cotizo" ? " — Mensual total: " + formatoPesos(registro.mensual) : ""));
     } catch (e) {
       alert("❌ Error: " + e.message);
     }
@@ -1555,23 +1632,28 @@ function RegistroPresupuestos({ exp }) {
 
   const [previa, setPrevia] = useState(null);
 
+  const itemsDeGuardado = (g) => {
+    if (g?.items?.length) return g.items;
+    if (g?.mensual != null) return [{ nombre: items[0]?.nombre || exp.modulo, unitario: g.unitario, mensual: g.mensual }];
+    return [];
+  };
+
   const abrirPrevia = () => {
     if (cotizantes.length === 0) { alert("Todavía no hay ningún proveedor con presupuesto cargado (Cotizó)."); return; }
     if (pendientes.length > 0 && !confirm(`Hay proveedores sin marcar: ${pendientes.join(", ")}.\n\nSi seguís, quedarán registrados como SIN RESPUESTA. ¿Continuar?`)) return;
 
-    // ganador: menor precio mensual entre los que cotizaron
+    // ganador: menor mensual TOTAL (suma de todos los ítems) entre los que cotizaron
     let ganador = null;
     cotizantes.forEach((n) => {
-      const p = guardados[n];
-      if (!ganador || p.mensual < guardados[ganador].mensual) ganador = n;
+      if (!ganador || (guardados[n].mensual ?? Infinity) < (guardados[ganador].mensual ?? Infinity)) ganador = n;
     });
     const g = guardados[ganador];
-    const total = g.mensual * Number(exp.periodoMeses || 6);
+    const total = (g.mensual || 0) * Number(exp.periodoMeses || 6);
     const lista = consultados.map((n) => ({
       nombre: n,
       estado: guardados[n]?.estado || "sin_respuesta",
-      unitario: guardados[n]?.unitario || null,
-      mensual: guardados[n]?.mensual || null,
+      mensual: guardados[n]?.mensual ?? null,
+      items: itemsDeGuardado(guardados[n]),
     }));
     const cotizaron = lista.filter((p) => p.estado === "cotizo").map((p) => p.nombre.toUpperCase());
     const negativas = lista.filter((p) => p.estado === "desestimo").map((p) => p.nombre.toUpperCase() + " (NEGATIVA)");
@@ -1595,24 +1677,23 @@ function RegistroPresupuestos({ exp }) {
         nroExpediente: exp.nroExpediente, paciente: exp.paciente,
         modulo: exp.modulo, detalleServicios: exp.detalleServicios,
         periodoTexto: exp.periodoTexto, periodoMeses: exp.periodoMeses,
-        cantTexto, cantNum,
+        items,
         textoAdjudicacion: previa.textoAdjudicacion, textoConstancia: previa.textoConstancia,
         proveedores: previa.lista,
-        adjudicado: { nombre: previa.ganador, unitario: previa.g.unitario, mensual: previa.g.mensual, total: previa.total },
+        adjudicado: { nombre: previa.ganador, mensual: previa.g.mensual, total: previa.total },
       }, conExcel);
       await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
         etapa: 3,
+        itemsPrestacion: items,
         cuadro: {
           fecha: new Date().toISOString(),
           adjudicado: previa.ganador,
-          unitario: previa.g.unitario, mensual: previa.g.mensual, total: previa.total,
-          cantTexto, cantNum,
+          mensual: previa.g.mensual, total: previa.total,
           textoAdjudicacion: previa.textoAdjudicacion, textoConstancia: previa.textoConstancia,
         },
       });
       alert("✅ Cuadro comparativo generado. Adjudicado: " + previa.ganador +
         "\n\nSe descargó el PDF apaisado (para el SIGEDIG)" + (conExcel ? " y el Excel editable." : "."));
-      setPrevia(null);
     } catch (e) {
       alert("❌ Error al generar el cuadro: " + e.message);
     }
@@ -1620,25 +1701,28 @@ function RegistroPresupuestos({ exp }) {
   };
 
   if (previa) {
+    const listaVisible = previa.lista.filter((p) => p.estado !== "sin_respuesta");
     return (
       <div style={{ ...S.card, borderLeft: "5px solid #0891b2", background: "#f8fafc" }}>
         <div style={{ fontWeight: 800, color: "#075e75", marginBottom: 4 }}>👁️ Revisión del cuadro comparativo</div>
         <div style={{ fontSize: 13, color: "#64748b", marginBottom: 10 }}>
-          Revisá los precios de la tabla y corregí los textos si hace falta. Cuando esté bien, generá el PDF (apaisado, formato Excel oficial).
+          Una fila por prestación y el total mensual abajo. Revisá los precios y corregí los textos si hace falta.
         </div>
 
         <div style={{ overflowX: "auto" }}>
           <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13, background: "#fff" }}>
             <thead>
               <tr>
-                <th style={{ border: "1px solid #334155", padding: 6, background: "#F2F2F2" }}>DETALLE SOLICITADO</th>
-                {previa.lista.filter((p) => p.estado !== "sin_respuesta").map((p, i) => (
+                <th style={{ border: "1px solid #334155", padding: 6, background: "#F2F2F2" }}>PRESTACION</th>
+                <th style={{ border: "1px solid #334155", padding: 6, background: "#F2F2F2" }}>CANT</th>
+                {listaVisible.map((p, i) => (
                   <th key={p.nombre} colSpan={2} style={{ border: "1px solid #334155", padding: 6, background: i % 2 ? "#E7E6E6" : "#F2F2F2" }}>{p.nombre.toUpperCase()}</th>
                 ))}
               </tr>
               <tr>
-                <th style={{ border: "1px solid #334155", padding: 6 }}>PRESTACION ({cantTexto || "-"} / {cantNum || "-"})</th>
-                {previa.lista.filter((p) => p.estado !== "sin_respuesta").map((p) => (
+                <th style={{ border: "1px solid #334155", padding: 6 }}></th>
+                <th style={{ border: "1px solid #334155", padding: 6 }}></th>
+                {listaVisible.map((p) => (
                   <Fragment key={p.nombre}>
                     <th style={{ border: "1px solid #334155", padding: 6 }}>P. UNITARIO</th>
                     <th style={{ border: "1px solid #334155", padding: 6 }}>P. MENSUAL</th>
@@ -1647,21 +1731,41 @@ function RegistroPresupuestos({ exp }) {
               </tr>
             </thead>
             <tbody>
-              <tr>
-                <td style={{ border: "1px solid #334155", padding: 6 }}>{exp.modulo}</td>
-                {previa.lista.filter((p) => p.estado !== "sin_respuesta").map((p) => (
-                  <Fragment key={p.nombre}>
-                    <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 700 }}>
-                      {p.estado === "cotizo" ? formatoPesos(p.unitario) : "NO COTIZA"}
-                    </td>
-                    <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 700 }}>
-                      {p.estado === "cotizo" ? formatoPesos(p.mensual) : ""}
-                    </td>
-                  </Fragment>
-                ))}
-              </tr>
+              {items.map((it, i) => (
+                <tr key={i}>
+                  <td style={{ border: "1px solid #334155", padding: 6 }}>{it.nombre}</td>
+                  <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center" }}>{[it.cantTexto, it.cantNum].filter(Boolean).join(" / ")}</td>
+                  {listaVisible.map((p) => (
+                    <Fragment key={p.nombre}>
+                      <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 700 }}>
+                        {p.estado === "cotizo" ? formatoPesos(p.items[i]?.unitario) : i === 0 ? "NO COTIZA" : ""}
+                      </td>
+                      <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 700 }}>
+                        {p.estado === "cotizo" ? formatoPesos(p.items[i]?.mensual) : ""}
+                      </td>
+                    </Fragment>
+                  ))}
+                </tr>
+              ))}
+              {items.length > 1 && (
+                <tr>
+                  <td colSpan={2} style={{ border: "1px solid #334155", padding: 6, fontWeight: 800 }}>TOTAL MENSUAL</td>
+                  {listaVisible.map((p) => (
+                    <Fragment key={p.nombre}>
+                      <td style={{ border: "1px solid #334155", padding: 6 }}></td>
+                      <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 800 }}>
+                        {p.estado === "cotizo" ? formatoPesos(p.mensual) : ""}
+                      </td>
+                    </Fragment>
+                  ))}
+                </tr>
+              )}
             </tbody>
           </table>
+        </div>
+
+        <div style={{ background: "#e0f2fe", borderRadius: 8, padding: 10, marginTop: 12, fontSize: 14, color: "#075e75", fontWeight: 700 }}>
+          🏆 Adjudicado: {previa.ganador} · Mensual total: {formatoPesos(previa.g.mensual)} · Total {exp.periodoMeses} meses: {formatoPesos(previa.total)}
         </div>
 
         <label style={S.label}>Texto de adjudicación (recuadro gris del cuadro)</label>
@@ -1689,85 +1793,90 @@ function RegistroPresupuestos({ exp }) {
     <div style={{ ...S.card, borderLeft: "5px solid #f59e0b" }}>
       <h3 style={{ color: "#075e75", marginBottom: 4 }}>📬 Registro de presupuestos</h3>
       <div style={{ fontSize: 13, color: "#64748b" }}>
-        A medida que respondan al mail, cargá acá cada proveedor: estado, precios y el PDF del presupuesto (queda guardado en el Drive del expediente). Cuando estén todos, generá el cuadro comparativo: se descarga a tu máquina en Excel (editable) y PDF apaisado (para el SIGEDIG), calcado del formato real.
+        Primero definí los <b>ítems del módulo</b> (una fila del cuadro por cada prestación: bomba, enfermería, visita médica, etc.). Después cargá los precios de cada proveedor <b>por ítem</b> — el mensual total se suma solo y se adjudica al total más bajo. El PDF del presupuesto queda guardado en el Drive del expediente.
+      </div>
+
+      <div style={{ background: "#f8fafc", borderRadius: 8, padding: 12, marginTop: 12, border: "1px solid #e2e8f0" }}>
+        <div style={{ fontWeight: 800, color: "#334155", marginBottom: 8 }}>🧩 Ítems del módulo (filas del cuadro comparativo)</div>
+        {items.map((it, i) => (
+          <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 170px 90px 40px", gap: 8, marginBottom: 8, alignItems: "end" }}>
+            <div>
+              {i === 0 && <label style={{ ...S.label, marginTop: 0 }}>Prestación</label>}
+              <input style={S.input} value={it.nombre} onChange={(e) => setItem(i, "nombre", e.target.value)} placeholder="Ej: Enfermería 12 hs diarias" />
+            </div>
+            <div>
+              {i === 0 && <label style={{ ...S.label, marginTop: 0 }}>Cantidad (texto)</label>}
+              <input style={S.input} value={it.cantTexto} onChange={(e) => setItem(i, "cantTexto", e.target.value)} placeholder="31 dias" />
+            </div>
+            <div>
+              {i === 0 && <label style={{ ...S.label, marginTop: 0 }}>Hs/Ses.</label>}
+              <input style={S.input} value={it.cantNum} onChange={(e) => setItem(i, "cantNum", e.target.value)} placeholder="31" />
+            </div>
+            <button style={{ ...S.btnSec, padding: "10px 0", color: "#b91c1c", borderColor: "#fca5a5" }} title="Quitar ítem" onClick={() => quitarItem(i)}>🗑</button>
+          </div>
+        ))}
+        <button style={{ ...S.btnSec, marginTop: 4 }} onClick={agregarItem}>➕ Agregar ítem</button>
       </div>
 
       {consultados.map((nombre) => {
-        const d = datos[nombre] || {};
-        const g = guardados[nombre];
+        const d = datos[nombre] || { estado: "", items: [] };
+        const mensualTotal = sumaMensual(d.items);
         return (
-          <div key={nombre} style={{
-            border: "1.5px solid " + (g?.estado ? "#86efac" : "#e2e8f0"),
-            borderRadius: 10, padding: 12, marginTop: 12,
-            background: g?.estado ? "#f0fdf4" : "#fff",
-          }}>
-            <div style={{ fontWeight: 800, color: "#075e75", marginBottom: 6 }}>
-              {nombre} {g?.estado === "cotizo" && `✅ Cotizó: ${formatoPesos(g.mensual)}/mes`}
-              {g?.estado === "desestimo" && "🚫 Desestimó"}
-              {g?.estado === "sin_respuesta" && "⏳ Sin respuesta"}
+          <div key={nombre} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 12, marginTop: 12 }}>
+            <div style={{ fontWeight: 800, color: "#075e75" }}>
+              {nombre}{" "}
+              {guardados[nombre]?.estado === "cotizo" && <span style={{ color: "#16a34a" }}>✅ Cotizó: {formatoPesos(guardados[nombre].mensual)}/mes</span>}
+              {guardados[nombre]?.estado === "desestimo" && <span style={{ color: "#b91c1c" }}>🚫 Desestimó</span>}
+              {guardados[nombre]?.estado === "sin_respuesta" && <span style={{ color: "#64748b" }}>⏳ No respondió</span>}
             </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-              {[["cotizo", "💰 Cotizó"], ["desestimo", "🚫 Desestimó"], ["sin_respuesta", "⏳ No respondió"]].map(([v, label]) => (
+            <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+              {[["cotizo", "💰 Cotizó"], ["desestimo", "🚫 Desestimó"], ["sin_respuesta", "⏳ No respondió"]].map(([v, t]) => (
                 <label key={v} style={{
-                  display: "flex", alignItems: "center", gap: 5, padding: "6px 10px",
+                  display: "flex", alignItems: "center", gap: 6, padding: "6px 12px",
                   borderRadius: 8, border: "1.5px solid " + (d.estado === v ? "#0891b2" : "#cbd5e1"),
-                  background: d.estado === v ? "#e0f2fe" : "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600,
+                  background: d.estado === v ? "#e0f2fe" : "#fff", cursor: "pointer", fontSize: 14, fontWeight: 600,
                 }}>
                   <input type="radio" name={"estado-" + nombre} checked={d.estado === v} onChange={() => setProv(nombre, "estado", v)} />
-                  {label}
+                  {t}
                 </label>
               ))}
             </div>
+
             {d.estado === "cotizo" && (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 8 }}>
-                <div>
-                  <label style={{ ...S.label, marginTop: 4 }}>Precio unitario ($)</label>
-                  <input type="number" style={S.input} value={d.unitario} onChange={(e) => setProv(nombre, "unitario", e.target.value)} placeholder="12250" />
-                </div>
-                <div>
-                  <label style={{ ...S.label, marginTop: 4 }}>Precio mensual ($)</label>
-                  <input type="number" style={S.input} value={d.mensual} onChange={(e) => setProv(nombre, "mensual", e.target.value)} placeholder="367500" />
-                </div>
-              </div>
-            )}
-            {(d.estado === "cotizo" || d.estado === "desestimo") && (
-              <div style={{ marginTop: 8 }}>
-                <label style={{ ...S.label, marginTop: 0 }}>
-                  {d.estado === "cotizo" ? "PDF del presupuesto" : "PDF de la negativa (constancia de que no cotiza)"}
-                  {d.pdfNombre && ` — guardado: ${d.pdfNombre}`}
-                </label>
+              <div style={{ marginTop: 10 }}>
+                {items.map((it, i) => (
+                  <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 150px 150px", gap: 8, marginBottom: 6, alignItems: "center" }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "#334155" }}>{it.nombre || "Ítem " + (i + 1)}</div>
+                    <input style={S.input} type="number" placeholder="P. unitario ($)" value={d.items?.[i]?.unitario ?? ""}
+                      onChange={(e) => setProvItem(nombre, i, "unitario", e.target.value)} />
+                    <input style={S.input} type="number" placeholder="P. mensual ($)" value={d.items?.[i]?.mensual ?? ""}
+                      onChange={(e) => setProvItem(nombre, i, "mensual", e.target.value)} />
+                  </div>
+                ))}
+                {items.length > 1 && (
+                  <div style={{ textAlign: "right", fontWeight: 800, color: "#075e75", fontSize: 14, marginTop: 4 }}>
+                    Mensual total: {formatoPesos(mensualTotal)}
+                  </div>
+                )}
+                <label style={{ ...S.label }}>PDF del presupuesto{d.pdfNombre ? ` — guardado: ${d.pdfNombre}` : ""}</label>
                 <input type="file" accept="application/pdf" style={{ marginTop: 4 }}
                   onChange={(e) => setArchivos({ ...archivos, [nombre]: e.target.files[0] })} />
               </div>
             )}
-            {d.estado && (
-              <button style={{ ...S.btnSec, marginTop: 10 }} disabled={ocupado} onClick={() => guardarProveedor(nombre)}>
-                💾 Guardar {nombre}
-              </button>
-            )}
+
+            <button style={{ ...S.btnSec, marginTop: 10, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => guardarProveedor(nombre)}>
+              💾 Guardar {nombre}
+            </button>
           </div>
         );
       })}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 180px", gap: 10, marginTop: 14 }}>
-        <div>
-          <label style={{ ...S.label, marginTop: 0 }}>Cantidad (columna "PRESTACION" del cuadro — ej: 31 dias, 15 set, 12 hs diarias)</label>
-          <input style={S.input} value={cantTexto} onChange={(e) => setCantTexto(e.target.value)} placeholder="31 dias" />
-        </div>
-        <div>
-          <label style={{ ...S.label, marginTop: 0 }}>Cant. de hs/ses.</label>
-          <input style={S.input} value={cantNum} onChange={(e) => setCantNum(e.target.value)} placeholder="31" />
-        </div>
-      </div>
-
-      <button style={{ ...S.btn, marginTop: 14, width: "100%", fontSize: 16, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={abrirPrevia}>
-        {ocupado ? "⏳ Procesando..." : "👁️ GENERAR Y REVISAR EL CUADRO (adjudica al menor precio)"}
+      <button style={{ ...S.btn, marginTop: 18, width: "100%", fontSize: 16, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={abrirPrevia}>
+        {ocupado ? "⏳ Procesando..." : "👁️ GENERAR Y REVISAR EL CUADRO (adjudica al menor total)"}
       </button>
     </div>
   );
 }
-
-/* ---------- Nota de afectación presupuestaria (Fase 2) ---------- */
 
 function GenerarNota({ exp }) {
   const total = (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6);
