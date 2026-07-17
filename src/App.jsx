@@ -543,12 +543,24 @@ function extraerItemsDeTexto(texto) {
     .filter(Boolean);
   const items = [];
   lineas.forEach((l) => {
+    // Formato 1: "Nombre: cantidad" (con dos puntos)
     const i = l.indexOf(":");
     if (i > 0 && i <= 45) {
       const nombre = l.slice(0, i).trim();
       const resto = l.slice(i + 1).trim().replace(/\.\s*$/, "");
       items.push({ nombre, cantTexto: resto, cantNum: "" });
+      return;
     }
+    // Formato 2: "Nombre 2 hs semanales" (sin dos puntos: corta donde empieza el primer número)
+    const m = l.match(/\d/);
+    if (m && m.index >= 3 && m.index <= 70) {
+      const nombre = l.slice(0, m.index).replace(/[+\-–(\s]+$/, "").trim();
+      const resto = l.slice(m.index).trim().replace(/\.\s*$/, "");
+      if (nombre && /[a-záéíóúñ]/i.test(nombre)) {
+        items.push({ nombre, cantTexto: resto, cantNum: "" });
+      }
+    }
+    // Las líneas largas o sin cantidad (encabezados, frases) se descartan solas
   });
   return items;
 }
