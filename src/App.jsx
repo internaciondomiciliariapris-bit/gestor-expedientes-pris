@@ -464,7 +464,7 @@ function plantillaResolucion(d, logos) {
     const total = mensualUnico * meses6;
     const letras = numeroALetras(total);
     const adj = esc(d.firmaA).toUpperCase();
-    const mod = esc(limpiarModulo(d.modulo));
+    const mod = esc(moduloSinPeriodo(d.modulo, d.periodoTexto));
 
     const filaSrv = (detalle, mensual, totalM) =>
       "<tr>" +
@@ -589,7 +589,7 @@ function plantillaResolucion(d, logos) {
 
   /* ===================== MODELO SIMPLE (una subpartida — RES 3123) ===================== */
   const letras = numeroALetras(d.total);
-  const mod = esc(limpiarModulo(d.modulo));
+  const mod = esc(moduloSinPeriodo(d.modulo, d.periodoTexto));
   const adj = esc(d.adjudicado).toUpperCase();
   const monto = formatoPesos(d.total);
 
@@ -839,6 +839,17 @@ function descargarBytes(bytes, nombre) {
 
 // Saca el "Solicita / Solicita Renovación de" inicial del módulo al citarlo en los documentos
 const limpiarModulo = (m) => String(m || "").replace(/^solicita\s+(la\s+)?/i, "").trim();
+
+// Quita del nombre del módulo el período que ya se menciona en la misma frase
+const moduloSinPeriodo = (m, periodo) => {
+  let t = limpiarModulo(m);
+  const p = String(periodo || "").trim();
+  if (p) {
+    const escapado = p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s*");
+    t = t.replace(new RegExp("\\s*[-–(]?\\s*" + escapado + "\\s*\\)?", "i"), " ");
+  }
+  return t.replace(/\s{2,}/g, " ").replace(/[\s,;-]+$/, "").trim();
+};
 
 const imputacionNotaPorSubpartida = (sub) => {
   const subTxt = sub === "342" ? "Subp: 342" : sub === "ambas" ? "Subp: 322 y Subp: 342" : "Subp: 322";
@@ -2936,7 +2947,7 @@ function GenerarResolucion({ exp }) {
         </label>
         <label style={chip(esDobleMismo)}>
           <input type="radio" name="submodo-res" checked={esDobleMismo} onChange={() => setF({ ...f, subModo: "dosMismo", firmaA: f.firmaA || (exp.cuadro?.adjudicado || "") })} />
-          322 y 342 — mismo proveedor (una firma, imputación dividida)
+          322 y 342 — mismo proveedor (una firma, imputación conjunta)
         </label>
       </div>
 
