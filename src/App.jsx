@@ -590,8 +590,8 @@ function plantillaCuadro(d, logos) {
 
   const th = "border:0.75pt solid #000; padding:1.5pt 2pt; text-align:center; vertical-align:middle; font-weight:bold;";
   const td = "border:0.75pt solid #000; padding:1.5pt 2pt; text-align:center; vertical-align:middle;";
-  const bg = (p) => (p.nombre === ganador ? " background:#E7E6E6;" : "");
-  const bgHead = (p) => (p.nombre === ganador ? " background:#D9D9D9;" : " background:#F2F2F2;");
+  const bg = (p) => (p.nombre === ganador ? " background-color:#E7E6E6;" : "");
+  const bgHead = (p) => (p.nombre === ganador ? " background-color:#D9D9D9;" : " background-color:#F2F2F2;");
 
   let filasItems = "";
   items.forEach((it, i) => {
@@ -624,7 +624,7 @@ function plantillaCuadro(d, logos) {
     filaTotal += "</tr>";
   }
 
-  let encabezadoProv = '<tr><th colspan="3" style="' + th + ' background:#F2F2F2;">DETALLE SOLICITADO</th>';
+  let encabezadoProv = '<tr><th colspan="3" style="' + th + ' background-color:#F2F2F2;">DETALLE SOLICITADO</th>';
   responden.forEach((p) => {
     encabezadoProv += '<th colspan="2" style="' + th + bgHead(p) + '">' + esc(p.nombre).toUpperCase() + "</th>";
   });
@@ -657,7 +657,7 @@ function plantillaCuadro(d, logos) {
     (d.periodoTexto ? " (Periodo que corresponde a " + esc(d.periodoTexto) + ")" : "") +
     "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;fecha de Adjudicacion " + fechaCortaHoy() + "</p>" +
     '<table style="border-collapse:collapse; margin:7pt 0 0;">' + encabezadoProv + filasItems + filaTotal + "</table>" +
-    '<div style="background:#F2F2F2; padding:4pt 5pt; margin-top:13pt; text-align:justify; font-size:8pt; max-width:460pt;">' + esc(adjudicacion) + "</div>" +
+    '<div style="background-color:#F2F2F2; padding:4pt 5pt; margin-top:13pt; text-align:justify; font-size:8pt; max-width:460pt;">' + esc(adjudicacion) + "</div>" +
     '<p style="text-align:justify; margin-top:10pt; font-size:8pt; max-width:520pt;">' + esc(constancia) + "</p>" +
     '<p style="font-family:\'Times New Roman\', Times, serif; font-size:11pt; font-weight:bold; line-height:1.5; margin-top:20pt;">' +
     "Firmado digitalmente:<br>C.P.N Mariela Agustina Castillo<br>Gerente Administrativo<br>Dirección Gral. Prog. Integrado de Salud<br>SI.PRO.SA</p>" +
