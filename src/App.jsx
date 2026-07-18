@@ -308,9 +308,10 @@ const envolverHtml = (css, body) =>
 
 function plantillaNota(d, logos) {
   const letras = numeroALetras(d.monto);
-  const lineaModulo = /^m[oó]dulo/i.test((d.modulo || "").trim()) ? esc(d.modulo) : "Modulo de " + esc(d.modulo);
+  const moduloLimpio = limpiarModulo(d.modulo);
+  const lineaModulo = /^m[oó]dulo/i.test(moduloLimpio) ? esc(moduloLimpio) : "Modulo de " + esc(moduloLimpio);
   const impHtml = esc(d.imputacion)
-    .replace(/Subp:\s*322/, "<b>$&</b>")
+    .replace(/Subp:\s*3\d\d/g, "<b>$&</b>")
     .replace(/Presupuesto\s*\d{4}/, "<b>$&</b>");
   const css =
     ".hoja { font-family:'Times New Roman', Times, serif; font-size:12pt; color:#000; } " +
@@ -323,7 +324,7 @@ function plantillaNota(d, logos) {
     esc(d.directora) + '<br><b><span style="border-bottom:1.5pt solid #000;">Presente</span></b></p>' +
     '<p style="text-align:justify; text-indent:135pt; margin-left:5pt; line-height:1.5; margin-top:16pt;">' +
     "Me dirijo a usted a fines de informarle la afectación presupuestaria, en virtud de la prestación del servicio " +
-    esc(d.modulo) + " correspondiente al paciente<b>; " + esc(d.paciente) + " </b>la cual solicita:</p>" +
+    esc(moduloLimpio) + " correspondiente al paciente<b>; " + esc(d.paciente) + " </b>la cual solicita:</p>" +
     '<p style="margin-left:146pt; margin-top:12pt;">' + lineaModulo + "</p>" +
     '<p style="text-align:justify; text-indent:135pt; line-height:1.5; margin-top:14pt;">' +
     "Para los periodos de <b>" + esc(d.periodoTexto) + "</b>, por el importe total por " + esc(d.periodoMeses) +
@@ -399,25 +400,140 @@ function plantillaPase(d, logos) {
   return { titulo, css, body: '<div class="pagina ultima">' + encabezadoDoc(logos) + cuerpo + "</div>" };
 }
 
-/* ---------- RESOLUCIÓN INTERNA (Times New Roman 12, 2 páginas) ---------- */
+/* ---------- RESOLUCIÓN INTERNA (Times New Roman 12) ----------
+   Dos modelos calcados de las resoluciones reales:
+   - subModo "una": una subpartida (322 o 342), una tabla — modelo RES 3123
+   - subModo "dos": subpartidas 322 y 342, dos firmas y dos tablas — modelo RES 3004
+   El bloque POR ELLO y la firma cambian según quién firma (Directora o Gerente). */
+
+function porElloHtml(firmante) {
+  if (firmante === "gerente") {
+    return (
+      '<p style="text-align:center; font-weight:bold; margin-top:14pt;">POR ELLO:</p>' +
+      '<p style="text-align:center; font-weight:bold;">LA GERENCIA ADMINISTRATIVA</p>' +
+      '<p style="text-align:center; font-weight:bold;">DEL PROGRAMA INTEGRADO DE SALUD.</p>' +
+      '<p style="text-align:center; font-weight:bold; text-decoration:underline;">RESUELVE:</p>'
+    );
+  }
+  return (
+    '<p style="text-align:center; font-weight:bold; margin-top:14pt;">POR ELLO: LA DIRECCION</p>' +
+    '<p style="text-align:center; font-weight:bold;">DEL PROGRAMA INTEGRADO DE SALUD.</p>' +
+    '<p style="text-align:center; font-weight:bold; text-decoration:underline;">RESUELVE:</p>'
+  );
+}
+
+function firmaResolucionHtml(firmante) {
+  const lineas = firmante === "gerente"
+    ? "Firmado digitalmente:<br>C.P.N Mariela Agustina Castillo<br>Gerente Administrativo<br>Dirección Gral. Prog. Integrado de Salud<br>SI.PRO.SA."
+    : "Firmado digitalmente:<br>Dra. Noelia Bottone<br>Dirección Gral. Prog. Integrado de Salud<br>SI.PRO.SA";
+  return '<p style="font-weight:bold; line-height:1.75; margin-top:90pt; margin-left:5pt;">' + lineas + "</p>";
+}
 
 function plantillaResolucion(d, logos) {
-  const letras = numeroALetras(d.total);
-  const pac = esc(d.paciente).toUpperCase();
-  const mod = esc(d.modulo);
-  const adj = esc(d.adjudicado).toUpperCase();
-  const per = esc(d.periodoTexto || d.periodoMeses + " meses");
-  const monto = formatoPesos(d.total);
   const q = "margin:0; text-align:justify; text-indent:105pt; line-height:1.18;";
   const css =
     ".hoja { font-family:'Times New Roman', Times, serif; font-size:12pt; color:#000; } " +
     ".hoja .pagina { padding: 26pt 79pt 30pt 85pt; } .hoja p { margin:0; } .hoja td { font-size:12pt; }";
+  const pac = esc(d.paciente).toUpperCase();
+  const per = esc(d.periodoTexto || d.periodoMeses + " meses");
+  const meses = esc(d.periodoMeses);
 
-  const pag1 =
-    '<div class="pagina">' + encabezadoDoc(logos) +
+  let n = 1;
+  const art = (texto, mt) =>
+    '<p style="text-align:justify; line-height:1.18; margin-top:' + (mt || 14) + 'pt;"><b>ARTICULO ' + (n++) + 'º)</b> ' + texto + "</p>";
+
+  const encabezadoRes =
     '<p style="text-align:right; margin-top:10pt;">San Miguel de Tucumán, ' + esc(d.fechaTexto) + "</p>" +
     '<p style="text-align:center; font-weight:bold; margin-top:14pt;">Resolución Interna: Nº ' + esc(d.nroResolucion) + "</p>" +
-    '<p style="text-align:center; font-weight:bold; margin-top:14pt;">PROGRAMA INTEGRADO DE SALUD</p>' +
+    '<p style="text-align:center; font-weight:bold; margin-top:14pt;">PROGRAMA INTEGRADO DE SALUD</p>';
+
+  const cierreArticulos = () =>
+    art("Pase a Control Pertinente del Honorable Tribunal de Cuentas en el Si.Pro.Sa.-") +
+    art("Emitir la orden de compra respectiva.") +
+    art("Comunicar y archivar.-", 20);
+
+  const pieFinal =
+    firmaResolucionHtml(d.firmante) +
+    lineaAzulDoc(12) +
+    '<p style="font-size:10pt; line-height:1.2; text-align:justify;">' + PIE_ANIO + "</p>";
+
+  /* ===================== MODELO DOBLE (322 y 342 — RES 3004) ===================== */
+  if (d.subModo === "dos") {
+    const totalA = Number(d.mensualA || 0) * Number(d.periodoMeses || 6);
+    const totalB = Number(d.mensualB || 0) * Number(d.periodoMeses || 6);
+    const total = totalA + totalB;
+    const letras = numeroALetras(total);
+    const letrasA = numeroALetras(totalA);
+    const firmas = esc(d.firmaA).toUpperCase() + " Y " + esc(d.firmaB).toUpperCase();
+
+    const tabla = (titulo, detalle, mensual, totalM) =>
+      '<table style="width:100%; border-collapse:collapse; margin-top:10pt;"><tr>' +
+      '<td style="border:1pt solid #000; padding:2pt 4pt; width:52%;">' + esc(titulo) + "</td>" +
+      '<td style="border:1pt solid #000; padding:2pt 4pt; width:22%;">PRECIO POR MES</td>' +
+      '<td style="border:1pt solid #000; padding:2pt 4pt; width:26%;">PRECIO TOTAL POR ' + meses + " MESES</td>" +
+      "</tr><tr>" +
+      '<td style="border:1pt solid #000; padding:6pt 4pt 12pt;">' + esc(detalle).replace(/\n/g, "<br>") + "</td>" +
+      '<td style="border:1pt solid #000; padding:6pt 4pt 12pt; text-align:center; font-weight:bold;">' + formatoPesos(mensual) + "</td>" +
+      '<td style="border:1pt solid #000; padding:6pt 4pt 12pt; text-align:center; font-weight:bold;">' + formatoPesos(totalM) + "</td>" +
+      "</tr></table>";
+
+    const pag1 =
+      '<div class="pagina">' + encabezadoDoc(logos) + encabezadoRes +
+      '<p style="font-weight:bold; text-decoration:underline; margin-top:4pt;">VISTO:</p>' +
+      '<p style="text-align:justify; text-indent:52pt; line-height:1.18;">El <b>Expediente N° ' + esc(d.nroExpediente) +
+      "</b>, en cual se solicita la <b>" + esc(d.tipoTramite) + "</b> de las prestaciones brindadas de " + esc(d.detalleVisto) +
+      " para el paciente, <b>" + pac + "</b>. Y,</p>" +
+      '<p style="font-weight:bold; text-decoration:underline; margin-top:14pt;">CONSIDERANDO:</p>' +
+      '<p style="' + q + '">Que se solicita la provisión de Servicio de Internación Domiciliaria, modulo: ' + esc(d.detalleModulo) +
+      " para el paciente, <b>" + pac + "</b> para los <b>periodos de " + per + "</b>.</p>" +
+      '<p style="' + q + '">Que a fs. ' + esc(d.fsSolicitud) +
+      " se adjunta copia del pedido y recetas médicas del Expediente, en el cual se especifican Solicitud del servicio, Recetas.</p>" +
+      '<p style="' + q + '">Que a fs ' + esc(d.fsPresupuesto) + " se adjunta presupuestos proveedores (" +
+      esc(d.firmaA).toLowerCase() + "-" + esc(d.firmaB).toLowerCase() + ").</p>" +
+      '<p style="' + q + '">Que a fs ' + esc(d.fsCuadro) + " se adjunta cuadro comparativo de adjudicación al proveedor " +
+      esc(d.firmaA) + " y " + esc(d.firmaB) +
+      " (módulos de internación domiciliaria y módulo de alimentación domiciliaria; para los periodos comprendidos <b>" + per + "</b>).</p>" +
+      '<p style="' + q + '">Que a fs ' + esc(d.fsDictamen) + " obra Informe de Auditoría Médica.</p>" +
+      '<p style="' + q + '">Que obra informe jurídico favorable a la contratación.</p>' +
+      '<p style="' + q + '">Que, por lo expuesto, no existen objeciones legales que formular para que la Gerencia Administrativa ' +
+      "Contable del Programa Integrado de Salud, en virtud de razones de urgencia invocadas, contrate con la firma <b>" + firmas +
+      "</b>., la adquisición del servicio de Internación Domiciliaria y Modulo de alimentación domiciliaria, bajo la figura de " +
+      "Contratación Directa de conformidad a lo normado por la Res. N°388/SPS/-05.</p>" +
+      porElloHtml(d.firmante) +
+      art("ADJUDICAR a las firmas comerciales <b>" + firmas + "</b>, la provisión de los siguientes servicios:") +
+      tabla(d.tituloA, d.detalleA, d.mensualA, totalA) +
+      "</div>";
+
+    const pag2 =
+      '<div class="pagina ultima">' + encabezadoDoc(logos) +
+      tabla(d.tituloB, d.detalleB, d.mensualB, totalB) +
+      '<p style="text-align:justify; line-height:1.18; margin-top:14pt;">Por un monto total por ' + meses + " meses <b>" +
+      formatoPesos(total) + "</b> (" + letras + "). Dicho servicio comprenderá a partir de la fecha de la orden de compra, " +
+      "comprendiendo desde los Meses de <b>" + per + "</b>.</p>" +
+      art("Imputar a <b>Subpartida " + esc(d.subA) + "</b> la suma de <b>" + formatoPesos(totalA) + "</b> (" + letrasA +
+        ") para <b>" + esc(d.firmaA).toUpperCase() + "</b> (por " + meses + " meses).<br>" +
+        "Imputar a <b>Subpartida " + esc(d.subB) + "</b> la suma de <b>" + formatoPesos(totalB) + "</b> para <b>" +
+        esc(d.firmaB).toUpperCase() + "</b> (por " + meses + " meses); a Jurisdicción 67 - Unid. Org. 965 - Recurso 10 - " +
+        "Finalidad/Función 314 - Programa 19 - Actividad 01 - Partida 300 - con cargo al <b>Presupuesto del año " + esc(d.anioPresupuesto) + "</b>.") +
+      cierreArticulos() +
+      pieFinal +
+      "</div>";
+
+    return {
+      titulo: "RESOLUCION " + String(d.nroResolucion || "").replace(/\//g, "-") + " EXPTE " +
+        d.nroExpediente.replace(/\//g, "-") + " " + d.paciente.toUpperCase(),
+      css, body: pag1 + pag2, montoLetras: letras,
+    };
+  }
+
+  /* ===================== MODELO SIMPLE (una subpartida — RES 3123) ===================== */
+  const letras = numeroALetras(d.total);
+  const mod = esc(limpiarModulo(d.modulo));
+  const adj = esc(d.adjudicado).toUpperCase();
+  const monto = formatoPesos(d.total);
+
+  const pag1 =
+    '<div class="pagina">' + encabezadoDoc(logos) + encabezadoRes +
     '<p style="font-weight:bold; text-decoration:underline; margin-top:4pt;">VISTO:</p>' +
     '<p style="text-align:justify; text-indent:52pt; line-height:1.18;">El <b>Expediente N° ' + esc(d.nroExpediente) +
     "</b>, en el que se solicita " + esc(d.tipoTramite) + " de servicios de " + mod +
@@ -426,7 +542,7 @@ function plantillaResolucion(d, logos) {
     '<p style="' + q + '">Que se solicita ' + esc(d.tipoTramite) + " de servicios de " + mod +
     ", para el paciente; <b>" + pac + "</b>; por el <b>periodo de " + per + "</b>.</p>" +
     '<p style="' + q + '">Que a fs. ' + esc(d.fsPresupuesto) + " se adjunta presupuesto del proveedor, correspondiente al <b>periodo de " +
-    per + "</b> (" + esc(d.periodoMeses) + " meses). --------------------------------------</p>" +
+    per + "</b> (" + meses + " meses). --------------------------------------</p>" +
     '<p style="' + q + '">Que a fs. ' + esc(d.fsCuadro) + " se adjunta Cuadro Comparativo, con la Adjudicación al Proveedor <b>" + adj +
     "</b>, correspondiente a los periodos de <b>" + per + "</b>.</p>" +
     '<p style="' + q + '">Que a fs. ' + esc(d.fsDictamen) + " se adjunta dictamen de auditoría médica, autorizando la prestación.</p>" +
@@ -434,16 +550,12 @@ function plantillaResolucion(d, logos) {
     '<p style="' + q + '">Que por lo expuesto, no existen objeciones legales que formular para que la Gerencia Administrativa Contable del Programa Integrado de Salud, en virtud de razones de urgencia invocadas, contrate con la firma <b>' +
     adj + "</b>, la adquisición del servicio de " + mod +
     ", bajo la figura de Contratación Directa de conformidad a lo normado por la Res. N°388/SPS/-05.</p>" +
-    '<p style="text-align:center; font-weight:bold; margin-top:14pt;">POR ELLO:</p>' +
-    '<p style="text-align:center; font-weight:bold;">LA GERENCIA ADMINISTRATIVA CONTABLE</p>' +
-    '<p style="text-align:center; font-weight:bold;">DEL PROGRAMA INTEGRADO DE SALUD.</p>' +
-    '<p style="text-align:center; font-weight:bold; text-decoration:underline;">RESUELVE:</p>' +
-    '<p style="text-align:justify; line-height:1.18; margin-top:14pt;"><b>ARTICULO 1º)</b> ADJUDICAR a la firma <b>' + adj +
-    "</b>, la provisión del siguiente servicio:</p>" +
+    porElloHtml(d.firmante) +
+    art("ADJUDICAR a la firma <b>" + adj + "</b>, la provisión del siguiente servicio:") +
     '<table style="width:100%; border-collapse:collapse; margin-top:8pt;"><tr>' +
     '<td style="border:1pt solid #000; padding:2pt 4pt; width:52%;">SERVICIO</td>' +
     '<td style="border:1pt solid #000; padding:2pt 4pt; width:22%;">PRECIO POR MES</td>' +
-    '<td style="border:1pt solid #000; padding:2pt 4pt; width:26%;">PRECIO TOTAL POR ' + esc(d.periodoMeses) + " MESES</td>" +
+    '<td style="border:1pt solid #000; padding:2pt 4pt; width:26%;">PRECIO TOTAL POR ' + meses + " MESES</td>" +
     "</tr><tr>" +
     '<td style="border:1pt solid #000; padding:6pt 4pt 14pt;">' + mod + "</td>" +
     '<td style="border:1pt solid #000; padding:6pt 4pt 14pt; text-align:center; font-weight:bold;">' + formatoPesos(d.mensual) + "</td>" +
@@ -452,17 +564,13 @@ function plantillaResolucion(d, logos) {
 
   const pag2 =
     '<div class="pagina ultima">' + encabezadoDoc(logos) +
-    '<p style="text-align:justify; line-height:1.18; margin-top:12pt;">Por un monto total por ' + esc(d.periodoMeses) +
+    '<p style="text-align:justify; line-height:1.18; margin-top:12pt;">Por un monto total por ' + meses +
     " meses <b>" + monto + "</b> (" + letras + "). Dicho servicio comprenderá a partir de la fecha de la orden de compra, comprendiendo desde los Meses de <b>" + per + "</b>.</p>" +
-    '<p style="text-align:justify; line-height:1.18; margin-top:14pt;"><b>ARTICULO 2º)</b> Imputar dicha suma <b>' + monto +
-    "</b> (" + letras + ") a " + esc(d.imputacion) + ", con cargo al <b>Presupuesto del año " + esc(d.anioPresupuesto) + "</b>.</p>" +
-    '<p style="text-align:justify; line-height:1.18; margin-top:14pt;"><b>ARTICULO 3°)</b> Pase a Control Pertinente del Honorable Tribunal de Cuentas en el Si.Pro.Sa.-</p>' +
-    '<p style="text-align:justify; line-height:1.18; margin-top:14pt;"><b>ARTICULO 4º)</b> Emitir la orden de compra respectiva.</p>' +
-    '<p style="text-align:justify; line-height:1.18; margin-top:20pt;"><b>ARTICULO 5°)</b> Comunicar y archivar.-</p>' +
-    '<p style="font-weight:bold; line-height:1.75; margin-top:120pt; margin-left:5pt;">Firmado digitalmente:<br>' +
-    esc(d.directora) + "<br>Directora. Gral. Prog. Integrado de Salud<br>SI.PRO.SA</p>" +
-    lineaAzulDoc(12) +
-    '<p style="font-size:10pt; line-height:1.2; text-align:justify;">' + PIE_ANIO + "</p></div>";
+    art("Imputar dicha suma <b>" + monto + "</b> (" + letras + ") a " + esc(d.imputacion) +
+      ", con cargo al <b>Presupuesto del año " + esc(d.anioPresupuesto) + "</b>.") +
+    cierreArticulos() +
+    pieFinal +
+    "</div>";
 
   return {
     titulo: "RESOLUCION " + String(d.nroResolucion || "").replace(/\//g, "-") + " EXPTE " +
@@ -473,8 +581,20 @@ function plantillaResolucion(d, logos) {
 
 /* ---------- Datos por defecto de cada documento (para generar y para revisar de nuevo) ---------- */
 
+// Saca el "Solicita / Solicita Renovación de" inicial del módulo al citarlo en los documentos
+const limpiarModulo = (m) => String(m || "").replace(/^solicita\s+(la\s+)?/i, "").trim();
+
+const imputacionNotaPorSubpartida = (sub) => {
+  const subTxt = sub === "342" ? "Subp: 342" : sub === "ambas" ? "Subp: 322 y Subp: 342" : "Subp: 322";
+  return "Jur: 67, U.O: 965, Fin/Fun: 314, Proy: 00, Subp: 00, Progr: 19, A/OB: 01, Part. Ppal.: 300, " + subTxt +
+    " – Fuente de financiamiento Nº 10 – Recursos Tesoro General de la Provincia – Presupuesto " + new Date().getFullYear();
+};
+
 const IMPUTACION_NOTA_DEFECTO =
   "Jur: 67, U.O: 965, Fin/Fun: 314, Proy: 00, Subp: 00, Progr: 19, A/OB: 01, Part. Ppal.: 300, Subp: 322 – Fuente de financiamiento Nº 10 – Recursos Tesoro General de la Provincia – Presupuesto " + new Date().getFullYear();
+const imputacionResolucionPorSubpartida = (sub) =>
+  "Jurisdicción 67 - Unid. Org. 965 - Recurso 10 - Finalidad/Función 314 - Programa 19 - Actividad 01 - Partida 300 - Subpartida " + (sub || "322");
+
 const IMPUTACION_RESOLUCION_DEFECTO =
   "Jurisdicción 67 - Unid. Org. 965 - Recurso 10 - Finalidad/Función 314 - Programa 19 - Actividad 01 - Partida 300 - Subpartida 322";
 
@@ -517,19 +637,36 @@ const datosPaseTribunal = (exp) => ({
 const datosResolucion = (exp, extra = {}) => {
   const r = exp.resolucion || {};
   const total = extra.total ?? r.total ?? (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6);
+  const itemsTxt = (exp.itemsPrestacion || []).map((it) => it.nombre + (it.cantTexto ? " " + it.cantTexto : "")).join("; ");
+  const nombresTxt = (exp.itemsPrestacion || []).map((it) => it.nombre).join("; ");
   return {
     nroExpediente: exp.nroExpediente, paciente: exp.paciente,
     modulo: exp.modulo, periodoTexto: exp.periodoTexto || "", periodoMeses: exp.periodoMeses,
     adjudicado: exp.cuadro?.adjudicado || "", mensual: exp.cuadro?.mensual || 0, total,
     nroResolucion: extra.nroResolucion ?? r.nro ?? "",
     tipoTramite: extra.tipoTramite ?? r.tipoTramite ?? "inicio",
+    firmante: extra.firmante ?? r.firmante ?? "directora",
+    subModo: extra.subModo ?? r.subModo ?? "una",
     fsSolicitud: extra.fsSolicitud ?? r.fojas?.solicitud ?? "",
     fsPresupuesto: extra.fsPresupuesto ?? r.fojas?.presupuesto ?? "",
     fsCuadro: extra.fsCuadro ?? r.fojas?.cuadro ?? "",
     fsDictamen: extra.fsDictamen ?? r.fojas?.dictamen ?? "",
-    directora: extra.directora ?? r.directora ?? "Dra. Noelia Soledad Bottone",
-    imputacion: extra.imputacion ?? r.imputacion ?? IMPUTACION_RESOLUCION_DEFECTO,
+    subpartida: extra.subpartida ?? r.subpartida ?? "322",
+    imputacion: extra.imputacion ?? r.imputacion ?? imputacionResolucionPorSubpartida(extra.subpartida ?? r.subpartida ?? "322"),
     anioPresupuesto: extra.anio ?? r.anio ?? String(new Date().getFullYear()),
+    // modelo doble (322 y 342)
+    detalleVisto: extra.detalleVisto ?? r.detalleVisto ?? ("Internación Domiciliaria; " + (nombresTxt || limpiarModulo(exp.modulo))),
+    detalleModulo: extra.detalleModulo ?? r.detalleModulo ?? (itemsTxt || limpiarModulo(exp.modulo)),
+    subA: extra.subA ?? r.subA ?? "342",
+    tituloA: extra.tituloA ?? r.tituloA ?? "",
+    detalleA: extra.detalleA ?? r.detalleA ?? "",
+    firmaA: extra.firmaA ?? r.firmaA ?? (exp.cuadro?.adjudicado || ""),
+    mensualA: extra.mensualA ?? r.mensualA ?? "",
+    subB: extra.subB ?? r.subB ?? "322",
+    tituloB: extra.tituloB ?? r.tituloB ?? "",
+    detalleB: extra.detalleB ?? r.detalleB ?? "",
+    firmaB: extra.firmaB ?? r.firmaB ?? "",
+    mensualB: extra.mensualB ?? r.mensualB ?? "",
     fechaTexto: fechaLargaHoy(),
   };
 };
@@ -2057,8 +2194,14 @@ function GenerarNota({ exp }) {
   const total = (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6);
   const [monto, setMonto] = useState(exp.nota?.monto ?? total);
   const [directora, setDirectora] = useState(exp.nota?.directora || "Dra. Noellia Bottone");
-  const [imputacion, setImputacion] = useState(exp.nota?.imputacion || IMPUTACION_NOTA_DEFECTO);
+  const [subpartida, setSubpartida] = useState(exp.nota?.subpartida || "322");
+  const [imputacion, setImputacion] = useState(exp.nota?.imputacion || imputacionNotaPorSubpartida(exp.nota?.subpartida || "322"));
   const [revisando, setRevisando] = useState(false);
+
+  const cambiarSubpartida = (s) => {
+    setSubpartida(s);
+    setImputacion(imputacionNotaPorSubpartida(s));
+  };
 
   if (revisando) {
     return (
@@ -2071,7 +2214,7 @@ function GenerarNota({ exp }) {
             nota: {
               fecha: new Date().toISOString(),
               monto: Number(monto), montoLetras: data.montoLetras || "",
-              directora, imputacion,
+              directora, imputacion, subpartida,
             },
           });
         }}
@@ -2095,6 +2238,20 @@ function GenerarNota({ exp }) {
           <label style={S.label}>Directora del Programa</label>
           <input style={S.input} value={directora} onChange={(e) => setDirectora(e.target.value)} />
         </div>
+      </div>
+
+      <label style={S.label}>Subpartida(s) del gasto</label>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+        {[["322", "322"], ["342", "342"], ["ambas", "322 y 342 (internación + alimentación)"]].map(([v, t]) => (
+          <label key={v} style={{
+            display: "flex", alignItems: "center", gap: 6, padding: "7px 12px",
+            borderRadius: 8, border: "1.5px solid " + (subpartida === v ? "#0891b2" : "#cbd5e1"),
+            background: subpartida === v ? "#e0f2fe" : "#fff", cursor: "pointer", fontSize: 14, fontWeight: 600,
+          }}>
+            <input type="radio" name="subpartida-nota" checked={subpartida === v} onChange={() => cambiarSubpartida(v)} />
+            {t}
+          </label>
+        ))}
       </div>
 
       <label style={S.label}>Imputación presupuestaria</label>
@@ -2162,28 +2319,62 @@ function PaseLetrada({ exp }) {
 
 function GenerarResolucion({ exp }) {
   const total = (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6);
+  const r = exp.resolucion || {};
+  const nombresItems = (exp.itemsPrestacion || []).map((it) => it.nombre).join("; ");
   const [f, setF] = useState({
-    nroResolucion: "",
-    tipoTramite: "inicio",
-    fsSolicitud: "02,04",
-    fsPresupuesto: "",
-    fsCuadro: "",
-    fsDictamen: "",
-    directora: "Dra. Noelia Soledad Bottone",
-    anio: String(new Date().getFullYear()),
-    imputacion: exp.resolucion?.imputacion || IMPUTACION_RESOLUCION_DEFECTO,
+    nroResolucion: r.nro || "",
+    tipoTramite: r.tipoTramite || "inicio",
+    firmante: r.firmante || "directora",
+    subModo: r.subModo || "una",
+    subpartida: r.subpartida || "322",
+    fsSolicitud: r.fojas?.solicitud || "02,04",
+    fsPresupuesto: r.fojas?.presupuesto || "",
+    fsCuadro: r.fojas?.cuadro || "",
+    fsDictamen: r.fojas?.dictamen || "",
+    anio: r.anio || String(new Date().getFullYear()),
+    imputacion: r.imputacion || imputacionResolucionPorSubpartida(r.subpartida || "322"),
+    // modelo doble (322 y 342)
+    subA: r.subA || "342",
+    firmaA: r.firmaA || (exp.cuadro?.adjudicado || ""),
+    tituloA: r.tituloA || "",
+    detalleA: r.detalleA || "",
+    mensualA: r.mensualA || "",
+    subB: r.subB || "322",
+    firmaB: r.firmaB || "",
+    tituloB: r.tituloB || "",
+    detalleB: r.detalleB || "",
+    mensualB: r.mensualB || "",
   });
   const [revisando, setRevisando] = useState(false);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+
+  const cambiarSubpartidaSimple = (s) => setF({ ...f, subpartida: s, imputacion: imputacionResolucionPorSubpartida(s) });
+
+  const chip = (activo) => ({
+    display: "flex", alignItems: "center", gap: 6, padding: "7px 12px",
+    borderRadius: 8, border: "1.5px solid " + (activo ? "#0891b2" : "#cbd5e1"),
+    background: activo ? "#e0f2fe" : "#fff", cursor: "pointer", fontSize: 14, fontWeight: 600,
+  });
+
+  const esDoble = f.subModo === "dos";
+  const totalA = Number(f.mensualA || 0) * Number(exp.periodoMeses || 6);
+  const totalB = Number(f.mensualB || 0) * Number(exp.periodoMeses || 6);
 
   if (revisando) {
     return (
       <VistaPrevia
         construirPlantilla={(logos) => plantillaResolucion(datosResolucion(exp, {
           total, nroResolucion: f.nroResolucion, tipoTramite: f.tipoTramite,
+          firmante: f.firmante, subModo: f.subModo, subpartida: f.subpartida,
           fsSolicitud: f.fsSolicitud, fsPresupuesto: f.fsPresupuesto,
           fsCuadro: f.fsCuadro, fsDictamen: f.fsDictamen,
-          directora: f.directora, imputacion: f.imputacion, anio: f.anio,
+          imputacion: f.imputacion, anio: f.anio,
+          subA: f.subA, firmaA: f.firmaA, mensualA: f.mensualA,
+          tituloA: f.tituloA || ("SERVICIOS INTERNACION DOMICILIARIA: " + f.firmaA.toUpperCase()),
+          detalleA: f.detalleA || nombresItems || limpiarModulo(exp.modulo),
+          subB: f.subB, firmaB: f.firmaB, mensualB: f.mensualB,
+          tituloB: f.tituloB || ("SERVICIO: MODULO ALIMENTACION DOMICILIARIA: " + f.firmaB.toUpperCase()),
+          detalleB: f.detalleB || "Módulo de alimentación domiciliaria por 31 días",
         }), logos)}
         onCerrar={() => setRevisando(false)}
         onListo={async (data) => {
@@ -2192,10 +2383,14 @@ function GenerarResolucion({ exp }) {
             resolucion: {
               fecha: new Date().toISOString(),
               nro: f.nroResolucion, tipoTramite: f.tipoTramite,
-              adjudicado: exp.cuadro?.adjudicado || "", total,
+              firmante: f.firmante, subModo: f.subModo, subpartida: f.subpartida,
+              adjudicado: exp.cuadro?.adjudicado || "",
+              total: esDoble ? totalA + totalB : total,
               montoLetras: data.montoLetras || "",
               fojas: { solicitud: f.fsSolicitud, presupuesto: f.fsPresupuesto, cuadro: f.fsCuadro, dictamen: f.fsDictamen },
-              directora: f.directora, imputacion: f.imputacion, anio: f.anio,
+              imputacion: f.imputacion, anio: f.anio,
+              subA: f.subA, firmaA: f.firmaA, tituloA: f.tituloA, detalleA: f.detalleA, mensualA: f.mensualA,
+              subB: f.subB, firmaB: f.firmaB, tituloB: f.tituloB, detalleB: f.detalleB, mensualB: f.mensualB,
             },
           });
         }}
@@ -2205,6 +2400,10 @@ function GenerarResolucion({ exp }) {
 
   const generar = () => {
     if (!f.nroResolucion) { alert("Cargá el N° de la resolución (ej: 3123/DGPRIS)."); return; }
+    if (esDoble) {
+      if (!f.firmaA || !f.firmaB) { alert("Cargá las dos firmas comerciales (bloques A y B)."); return; }
+      if (!f.mensualA || !f.mensualB) { alert("Cargá el precio mensual de cada firma (bloques A y B)."); return; }
+    }
     if (!f.fsPresupuesto || !f.fsCuadro || !f.fsDictamen) {
       if (!confirm("Faltan números de fojas (presupuesto, cuadro o dictamen). El documento va a salir con esos espacios vacíos — igual podés completarlos a mano en la vista previa. ¿Continuar?")) return;
     }
@@ -2215,11 +2414,11 @@ function GenerarResolucion({ exp }) {
     <div style={{ ...S.card, borderLeft: "5px solid #f59e0b" }}>
       <h3 style={{ color: "#075e75", marginBottom: 4 }}>📜 Resolución Interna de contratación</h3>
       <div style={{ fontSize: 13, color: "#64748b" }}>
-        El monto, las letras, el adjudicado y el período salen solos del expediente y se replican en todos los artículos. Vos cargás el N° y las fojas, la revisás en pantalla, corregís lo que haga falta y generás el PDF.
+        Elegí quién firma y las subpartidas: con una sola sale el modelo habitual; con 322 y 342 sale el modelo de dos firmas y dos tablas (internación + alimentación). Después la revisás en pantalla y generás el PDF.
       </div>
 
       <div style={{ background: "#e0f2fe", borderRadius: 8, padding: 10, marginTop: 12, fontSize: 14, color: "#075e75", fontWeight: 700 }}>
-        Adjudicado: {exp.cuadro?.adjudicado} · {formatoPesos(exp.cuadro?.mensual)}/mes · Total {exp.periodoMeses} meses: {formatoPesos(total)}
+        Adjudicado en el cuadro: {exp.cuadro?.adjudicado} · {formatoPesos(exp.cuadro?.mensual)}/mes · Total {exp.periodoMeses} meses: {formatoPesos(total)}
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 130px", gap: 10 }}>
@@ -2233,21 +2432,45 @@ function GenerarResolucion({ exp }) {
         </div>
       </div>
 
-      <label style={S.label}>Tipo de trámite (así aparece en el texto: "se solicita ___ de servicios")</label>
+      <label style={S.label}>¿Quién firma la resolución? (cambia el POR ELLO y la firma final)</label>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+        <label style={chip(f.firmante === "directora")}>
+          <input type="radio" name="firmante-res" checked={f.firmante === "directora"} onChange={() => setF({ ...f, firmante: "directora" })} />
+          Directora — Dra. Noelia Bottone
+        </label>
+        <label style={chip(f.firmante === "gerente")}>
+          <input type="radio" name="firmante-res" checked={f.firmante === "gerente"} onChange={() => setF({ ...f, firmante: "gerente" })} />
+          Gerente — C.P.N Mariela A. Castillo
+        </label>
+      </div>
+
+      <label style={S.label}>Subpartida(s)</label>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+        <label style={chip(f.subModo === "una" && f.subpartida === "322")}>
+          <input type="radio" name="submodo-res" checked={f.subModo === "una" && f.subpartida === "322"} onChange={() => { setF({ ...f, subModo: "una", subpartida: "322", imputacion: imputacionResolucionPorSubpartida("322") }); }} />
+          Subpartida 322
+        </label>
+        <label style={chip(f.subModo === "una" && f.subpartida === "342")}>
+          <input type="radio" name="submodo-res" checked={f.subModo === "una" && f.subpartida === "342"} onChange={() => { setF({ ...f, subModo: "una", subpartida: "342", imputacion: imputacionResolucionPorSubpartida("342") }); }} />
+          Subpartida 342
+        </label>
+        <label style={chip(esDoble)}>
+          <input type="radio" name="submodo-res" checked={esDoble} onChange={() => setF({ ...f, subModo: "dos" })} />
+          322 y 342 (internación + alimentación, dos firmas)
+        </label>
+      </div>
+
+      <label style={{ ...S.label, marginTop: 14 }}>Tipo de trámite</label>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
         {["inicio", "ampliación", "renovación"].map((t) => (
-          <label key={t} style={{
-            display: "flex", alignItems: "center", gap: 6, padding: "7px 12px",
-            borderRadius: 8, border: "1.5px solid " + (f.tipoTramite === t ? "#0891b2" : "#cbd5e1"),
-            background: f.tipoTramite === t ? "#e0f2fe" : "#fff", cursor: "pointer", fontSize: 14, fontWeight: 600,
-          }}>
+          <label key={t} style={chip(f.tipoTramite === t)}>
             <input type="radio" name="tipoTramite" checked={f.tipoTramite === t} onChange={() => setF({ ...f, tipoTramite: t })} />
             {t}
           </label>
         ))}
       </div>
 
-      <label style={{ ...S.label, marginTop: 16 }}>📑 Fojas del expediente (miralas en el expediente físico / SIGEDIG)</label>
+      <label style={{ ...S.label, marginTop: 16 }}>📑 Fojas del expediente</label>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10 }}>
         <div>
           <label style={{ ...S.label, marginTop: 4, fontWeight: 600 }}>Solicitud (fs.)</label>
@@ -2267,11 +2490,64 @@ function GenerarResolucion({ exp }) {
         </div>
       </div>
 
-      <label style={S.label}>Firma (Directora del Programa)</label>
-      <input style={S.input} value={f.directora} onChange={set("directora")} />
+      {!esDoble && (
+        <div>
+          <label style={S.label}>Imputación presupuestaria (Artículo 2º)</label>
+          <textarea style={{ ...S.input, minHeight: 70 }} value={f.imputacion} onChange={set("imputacion")} />
+        </div>
+      )}
 
-      <label style={S.label}>Imputación presupuestaria (Artículo 2º)</label>
-      <textarea style={{ ...S.input, minHeight: 70 }} value={f.imputacion} onChange={set("imputacion")} />
+      {esDoble && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: 12 }}>
+            <div style={{ fontWeight: 800, color: "#334155" }}>🅰️ Firma A — Internación Domiciliaria (Subpartida {f.subA})</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 110px 170px", gap: 10 }}>
+              <div>
+                <label style={{ ...S.label, fontWeight: 600 }}>Firma comercial</label>
+                <input style={S.input} value={f.firmaA} onChange={set("firmaA")} placeholder="VISALUD" />
+              </div>
+              <div>
+                <label style={{ ...S.label, fontWeight: 600 }}>Subpartida</label>
+                <input style={S.input} value={f.subA} onChange={set("subA")} />
+              </div>
+              <div>
+                <label style={{ ...S.label, fontWeight: 600 }}>Precio mensual ($)</label>
+                <input style={S.input} type="number" value={f.mensualA} onChange={set("mensualA")} />
+              </div>
+            </div>
+            <label style={{ ...S.label, fontWeight: 600 }}>Detalle de servicios (celda de la tabla A)</label>
+            <textarea style={{ ...S.input, minHeight: 55 }} value={f.detalleA} onChange={set("detalleA")} placeholder={nombresItems || "Enfermería 12hs de lunes a Domingo; Kinesiología..."} />
+            {f.mensualA && <div style={{ textAlign: "right", fontSize: 13, fontWeight: 700, color: "#075e75", marginTop: 4 }}>Total A por {exp.periodoMeses} meses: {formatoPesos(totalA)}</div>}
+          </div>
+
+          <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: 12, marginTop: 10 }}>
+            <div style={{ fontWeight: 800, color: "#334155" }}>🅱️ Firma B — Alimentación Domiciliaria (Subpartida {f.subB})</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 110px 170px", gap: 10 }}>
+              <div>
+                <label style={{ ...S.label, fontWeight: 600 }}>Firma comercial</label>
+                <input style={S.input} value={f.firmaB} onChange={set("firmaB")} placeholder="NUTRIHOME" />
+              </div>
+              <div>
+                <label style={{ ...S.label, fontWeight: 600 }}>Subpartida</label>
+                <input style={S.input} value={f.subB} onChange={set("subB")} />
+              </div>
+              <div>
+                <label style={{ ...S.label, fontWeight: 600 }}>Precio mensual ($)</label>
+                <input style={S.input} type="number" value={f.mensualB} onChange={set("mensualB")} />
+              </div>
+            </div>
+            <label style={{ ...S.label, fontWeight: 600 }}>Detalle de servicios (celda de la tabla B)</label>
+            <textarea style={{ ...S.input, minHeight: 55 }} value={f.detalleB} onChange={set("detalleB")} placeholder="Módulo de alimentación domiciliaria por 31 días" />
+            {f.mensualB && <div style={{ textAlign: "right", fontSize: 13, fontWeight: 700, color: "#075e75", marginTop: 4 }}>Total B por {exp.periodoMeses} meses: {formatoPesos(totalB)}</div>}
+          </div>
+
+          {f.mensualA && f.mensualB && (
+            <div style={{ background: "#e0f2fe", borderRadius: 8, padding: 10, marginTop: 10, fontSize: 14, color: "#075e75", fontWeight: 800, textAlign: "right" }}>
+              Monto total por {exp.periodoMeses} meses: {formatoPesos(totalA + totalB)}
+            </div>
+          )}
+        </div>
+      )}
 
       <button style={{ ...S.btn, marginTop: 16, width: "100%", fontSize: 16 }} onClick={generar}>
         👁️ GENERAR Y REVISAR LA RESOLUCIÓN
