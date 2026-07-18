@@ -457,6 +457,70 @@ function plantillaResolucion(d, logos) {
     lineaAzulDoc(12) +
     '<p style="font-size:10pt; line-height:1.2; text-align:justify;">' + PIE_ANIO + "</p>";
 
+  /* ========== MODELO MISMO PROVEEDOR, DOS SUBPARTIDAS (una firma, una tabla, imputación dividida) ========== */
+  if (d.subModo === "dosMismo") {
+    const totalA = Number(d.mensualA || 0) * Number(d.periodoMeses || 6);
+    const totalB = Number(d.mensualB || 0) * Number(d.periodoMeses || 6);
+    const total = totalA + totalB;
+    const letras = numeroALetras(total);
+    const letrasA = numeroALetras(totalA);
+    const adj = esc(d.firmaA).toUpperCase();
+    const mod = esc(limpiarModulo(d.modulo));
+
+    const filaSrv = (detalle, mensual, totalM) =>
+      "<tr>" +
+      '<td style="border:1pt solid #000; padding:5pt 4pt 10pt;">' + esc(detalle).replace(/\n/g, "<br>") + "</td>" +
+      '<td style="border:1pt solid #000; padding:5pt 4pt 10pt; text-align:center; font-weight:bold;">' + formatoPesos(mensual) + "</td>" +
+      '<td style="border:1pt solid #000; padding:5pt 4pt 10pt; text-align:center; font-weight:bold;">' + formatoPesos(totalM) + "</td>" +
+      "</tr>";
+
+    const pag1 =
+      '<div class="pagina">' + encabezadoDoc(logos) + encabezadoRes +
+      '<p style="font-weight:bold; text-decoration:underline; margin-top:4pt;">VISTO:</p>' +
+      '<p style="text-align:justify; text-indent:52pt; line-height:1.18;">El <b>Expediente N° ' + esc(d.nroExpediente) +
+      "</b>, en el que se solicita " + esc(d.tipoTramite) + " de servicios de " + mod +
+      ", para el paciente; <b>" + pac + "</b> según lo indicado a fs. " + esc(d.fsSolicitud) + ". Y,</p>" +
+      '<p style="font-weight:bold; text-decoration:underline; margin-top:14pt;">CONSIDERANDO:</p>' +
+      '<p style="' + q + '">Que se solicita ' + esc(d.tipoTramite) + " de servicios de " + mod +
+      ", para el paciente; <b>" + pac + "</b>; por el <b>periodo de " + per + "</b>.</p>" +
+      '<p style="' + q + '">Que a fs. ' + esc(d.fsPresupuesto) + " se adjunta presupuesto del proveedor, correspondiente al <b>periodo de " +
+      per + "</b> (" + meses + " meses). --------------------------------------</p>" +
+      '<p style="' + q + '">Que a fs. ' + esc(d.fsCuadro) + " se adjunta Cuadro Comparativo, con la Adjudicación al Proveedor <b>" + adj +
+      "</b> (módulos de internación domiciliaria y módulo de alimentación domiciliaria), correspondiente a los periodos de <b>" + per + "</b>.</p>" +
+      '<p style="' + q + '">Que a fs. ' + esc(d.fsDictamen) + " se adjunta dictamen de auditoría médica, autorizando la prestación.</p>" +
+      '<p style="' + q + '">Que obra informe jurídico favorable a la contratación. ---------------</p>' +
+      '<p style="' + q + '">Que por lo expuesto, no existen objeciones legales que formular para que la Gerencia Administrativa Contable del Programa Integrado de Salud, en virtud de razones de urgencia invocadas, contrate con la firma <b>' +
+      adj + "</b>, la adquisición del servicio de Internación Domiciliaria y Módulo de alimentación domiciliaria, bajo la figura de Contratación Directa de conformidad a lo normado por la Res. N°388/SPS/-05.</p>" +
+      porElloHtml(d.firmante) +
+      art("ADJUDICAR a la firma <b>" + adj + "</b>, la provisión de los siguientes servicios:") +
+      '<table style="width:100%; border-collapse:collapse; margin-top:8pt;"><tr>' +
+      '<td style="border:1pt solid #000; padding:2pt 4pt; width:52%;">SERVICIO</td>' +
+      '<td style="border:1pt solid #000; padding:2pt 4pt; width:22%;">PRECIO POR MES</td>' +
+      '<td style="border:1pt solid #000; padding:2pt 4pt; width:26%;">PRECIO TOTAL POR ' + meses + " MESES</td>" +
+      "</tr>" +
+      filaSrv(d.detalleA, d.mensualA, totalA) +
+      filaSrv(d.detalleB, d.mensualB, totalB) +
+      "</table></div>";
+
+    const pag2 =
+      '<div class="pagina ultima">' + encabezadoDoc(logos) +
+      '<p style="text-align:justify; line-height:1.18; margin-top:12pt;">Por un monto total por ' + meses + " meses <b>" +
+      formatoPesos(total) + "</b> (" + letras + "). Dicho servicio comprenderá a partir de la fecha de la orden de compra, comprendiendo desde los Meses de <b>" + per + "</b>.</p>" +
+      art("Imputar a <b>Subpartida " + esc(d.subA) + "</b> la suma de <b>" + formatoPesos(totalA) + "</b> (" + letrasA +
+        ") correspondiente al servicio de Internación Domiciliaria (por " + meses + " meses).<br>" +
+        "Imputar a <b>Subpartida " + esc(d.subB) + "</b> la suma de <b>" + formatoPesos(totalB) + "</b> correspondiente al Módulo de Alimentación domiciliaria (por " + meses + " meses); ambas para la firma <b>" + adj +
+        "</b>; a Jurisdicción 67 - Unid. Org. 965 - Recurso 10 - Finalidad/Función 314 - Programa 19 - Actividad 01 - Partida 300 - con cargo al <b>Presupuesto del año " + esc(d.anioPresupuesto) + "</b>.") +
+      cierreArticulos() +
+      pieFinal +
+      "</div>";
+
+    return {
+      titulo: "RESOLUCION " + String(d.nroResolucion || "").replace(/\//g, "-") + " EXPTE " +
+        d.nroExpediente.replace(/\//g, "-") + " " + d.paciente.toUpperCase(),
+      css, body: pag1 + pag2, montoLetras: letras,
+    };
+  }
+
   /* ===================== MODELO DOBLE (322 y 342 — RES 3004) ===================== */
   if (d.subModo === "dos") {
     const totalA = Number(d.mensualA || 0) * Number(d.periodoMeses || 6);
@@ -2735,6 +2799,7 @@ function GenerarResolucion({ exp }) {
   });
 
   const esDoble = f.subModo === "dos";
+  const esDobleMismo = f.subModo === "dosMismo";
   const totalA = Number(f.mensualA || 0) * Number(exp.periodoMeses || 6);
   const totalB = Number(f.mensualB || 0) * Number(exp.periodoMeses || 6);
 
@@ -2750,9 +2815,9 @@ function GenerarResolucion({ exp }) {
           subA: f.subA, firmaA: f.firmaA, mensualA: f.mensualA,
           tituloA: f.tituloA || ("SERVICIOS INTERNACION DOMICILIARIA: " + f.firmaA.toUpperCase()),
           detalleA: f.detalleA || nombresItems || limpiarModulo(exp.modulo),
-          subB: f.subB, firmaB: f.firmaB, mensualB: f.mensualB,
+          subB: f.subB, firmaB: esDobleMismo ? f.firmaA : f.firmaB, mensualB: f.mensualB,
           tituloB: f.tituloB || ("SERVICIO: MODULO ALIMENTACION DOMICILIARIA: " + f.firmaB.toUpperCase()),
-          detalleB: f.detalleB || "Módulo de alimentación domiciliaria por 31 días",
+          detalleB: f.detalleB || "Servicio de Alimentación domiciliaria C/Bomba de Infusión",
         }), logos)}
         onCerrar={() => setRevisando(false)}
         onListo={async (data) => {
@@ -2763,7 +2828,7 @@ function GenerarResolucion({ exp }) {
               nro: f.nroResolucion, tipoTramite: f.tipoTramite,
               firmante: f.firmante, subModo: f.subModo, subpartida: f.subpartida,
               adjudicado: exp.cuadro?.adjudicado || "",
-              total: esDoble ? totalA + totalB : total,
+              total: (esDoble || esDobleMismo) ? totalA + totalB : total,
               montoLetras: data.montoLetras || "",
               fojas: { solicitud: f.fsSolicitud, presupuesto: f.fsPresupuesto, cuadro: f.fsCuadro, dictamen: f.fsDictamen },
               imputacion: f.imputacion, anio: f.anio,
@@ -2781,6 +2846,14 @@ function GenerarResolucion({ exp }) {
     if (esDoble) {
       if (!f.firmaA || !f.firmaB) { alert("Cargá las dos firmas comerciales (bloques A y B)."); return; }
       if (!f.mensualA || !f.mensualB) { alert("Cargá el precio mensual de cada firma (bloques A y B)."); return; }
+    }
+    if (esDobleMismo) {
+      if (!f.firmaA) { alert("Cargá la firma comercial adjudicada."); return; }
+      if (!f.mensualA || !f.mensualB) { alert("Cargá el precio mensual de cada bloque (internación y alimentación)."); return; }
+      const suma = Number(f.mensualA) + Number(f.mensualB);
+      if (exp.cuadro?.mensual != null && Math.abs(suma - exp.cuadro.mensual) > 0.02) {
+        if (!confirm(`⚠️ OJO: la suma de los dos bloques da ${formatoPesos(suma)}/mes, pero el cuadro adjudicó ${formatoPesos(exp.cuadro.mensual)}/mes.\n\nEn este modelo el monto total se REPARTE entre las dos subpartidas (no se duplica). ¿Seguro que querés continuar con estos montos?`)) return;
+      }
     }
     if (!f.fsPresupuesto || !f.fsCuadro || !f.fsDictamen) {
       if (!confirm("Faltan números de fojas (presupuesto, cuadro o dictamen). El documento va a salir con esos espacios vacíos — igual podés completarlos a mano en la vista previa. ¿Continuar?")) return;
@@ -2834,7 +2907,11 @@ function GenerarResolucion({ exp }) {
         </label>
         <label style={chip(esDoble)}>
           <input type="radio" name="submodo-res" checked={esDoble} onChange={() => setF({ ...f, subModo: "dos" })} />
-          322 y 342 (internación + alimentación, dos firmas)
+          322 y 342 — dos proveedores distintos
+        </label>
+        <label style={chip(esDobleMismo)}>
+          <input type="radio" name="submodo-res" checked={esDobleMismo} onChange={() => setF({ ...f, subModo: "dosMismo", firmaA: f.firmaA || (exp.cuadro?.adjudicado || "") })} />
+          322 y 342 — mismo proveedor (una firma, imputación dividida)
         </label>
       </div>
 
@@ -2868,22 +2945,36 @@ function GenerarResolucion({ exp }) {
         </div>
       </div>
 
-      {!esDoble && (
+      {!esDoble && !esDobleMismo && (
         <div>
           <label style={S.label}>Imputación presupuestaria (Artículo 2º)</label>
           <textarea style={{ ...S.input, minHeight: 70 }} value={f.imputacion} onChange={set("imputacion")} />
         </div>
       )}
 
-      {esDoble && (
+      {esDobleMismo && (
+        <div style={{ marginTop: 14 }}>
+          <div>
+            <label style={S.label}>Firma comercial adjudicada (única, del cuadro comparativo)</label>
+            <input style={S.input} value={f.firmaA} onChange={set("firmaA")} placeholder="QUIMUR SRL" />
+          </div>
+          {exp.cuadro?.mensual != null && (
+            <div style={{ fontSize: 13, color: "#075e75", background: "#e0f2fe", borderRadius: 8, padding: 8, marginTop: 8 }}>
+              💡 El cuadro adjudicó <b>{formatoPesos(exp.cuadro.mensual)}/mes</b> — la suma de los dos bloques de abajo debería dar ese monto (repartido entre internación y alimentación).
+            </div>
+          )}
+        </div>
+      )}
+
+      {(esDoble || esDobleMismo) && (
         <div style={{ marginTop: 14 }}>
           <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: 12 }}>
             <div style={{ fontWeight: 800, color: "#334155" }}>🅰️ Firma A — Internación Domiciliaria (Subpartida {f.subA})</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 110px 170px", gap: 10 }}>
-              <div>
+            <div style={{ display: "grid", gridTemplateColumns: esDobleMismo ? "110px 170px" : "1fr 110px 170px", gap: 10 }}>
+              {!esDobleMismo && <div>
                 <label style={{ ...S.label, fontWeight: 600 }}>Firma comercial</label>
                 <input style={S.input} value={f.firmaA} onChange={set("firmaA")} placeholder="VISALUD" />
-              </div>
+              </div>}
               <div>
                 <label style={{ ...S.label, fontWeight: 600 }}>Subpartida</label>
                 <input style={S.input} value={f.subA} onChange={set("subA")} />
@@ -2900,11 +2991,11 @@ function GenerarResolucion({ exp }) {
 
           <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: 12, marginTop: 10 }}>
             <div style={{ fontWeight: 800, color: "#334155" }}>🅱️ Firma B — Alimentación Domiciliaria (Subpartida {f.subB})</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 110px 170px", gap: 10 }}>
-              <div>
+            <div style={{ display: "grid", gridTemplateColumns: esDobleMismo ? "110px 170px" : "1fr 110px 170px", gap: 10 }}>
+              {!esDobleMismo && <div>
                 <label style={{ ...S.label, fontWeight: 600 }}>Firma comercial</label>
                 <input style={S.input} value={f.firmaB} onChange={set("firmaB")} placeholder="NUTRIHOME" />
-              </div>
+              </div>}
               <div>
                 <label style={{ ...S.label, fontWeight: 600 }}>Subpartida</label>
                 <input style={S.input} value={f.subB} onChange={set("subB")} />
