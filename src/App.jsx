@@ -189,14 +189,14 @@ function descargarBase64(b64, nombre, mime) {
 }
 
 // Llama al Apps Script y descarga a la máquina los dos archivos: PDF + Word
-async function llamarYDescargar(payload, descargarDoc = true) {
+async function llamarYDescargar(payload, descargarDoc = true, descargarPdf = true) {
   const res = await fetch(APPS_SCRIPT_URL, {
     method: "POST",
     body: JSON.stringify({ clave: APPS_SCRIPT_CLAVE, ...payload }),
   });
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || "Error desconocido en Apps Script");
-  if (data.pdfBase64) descargarBase64(data.pdfBase64, data.nombreArchivo + ".pdf", "application/pdf");
+  if (data.pdfBase64 && descargarPdf) descargarBase64(data.pdfBase64, data.nombreArchivo + ".pdf", "application/pdf");
   if (data.docBase64 && descargarDoc) {
     // pequeña pausa para que el navegador no bloquee la segunda descarga
     await new Promise((r) => setTimeout(r, 500));
@@ -298,9 +298,9 @@ function encabezadoDoc(logos) {
 
 const lineaAzulDoc = (m) => '<div style="border-bottom:2.2pt solid ' + AZUL + '; margin-top:' + m + 'pt; margin-bottom:6pt;"></div>';
 
-const envolverHtml = (css, body) =>
+const envolverHtml = (css, body, apaisado) =>
   '<!DOCTYPE html><html><head><meta charset="utf-8"><style>' +
-  "@page { size: A4; margin: 0; } body { margin:0; padding:0; } " +
+  "@page { size: A4" + (apaisado ? " landscape" : "") + "; margin: 0; } body { margin:0; padding:0; } " +
   ".pagina { page-break-after: always; } .pagina.ultima { page-break-after: auto; } " +
   css + "</style></head><body>" + body + "</body></html>";
 
@@ -579,6 +579,98 @@ function plantillaResolucion(d, logos) {
   };
 }
 
+/* ---------- CUADRO COMPARATIVO (PDF apaisado por HTML: logos garantizados) ---------- */
+
+function plantillaCuadro(d, logos) {
+  const responden = (d.proveedores || []).filter((p) => p.estado !== "sin_respuesta");
+  const todos = d.proveedores || [];
+  const items = d.items?.length ? d.items : [{ nombre: d.modulo || "", cantTexto: "", cantNum: "" }];
+  const hayTotal = items.length > 1;
+  const ganador = d.adjudicado?.nombre || "";
+
+  const th = "border:0.75pt solid #000; padding:2pt 3pt; text-align:center; vertical-align:middle; font-weight:bold;";
+  const td = "border:0.75pt solid #000; padding:2.5pt 3pt; text-align:center; vertical-align:middle;";
+  const bg = (p) => (p.nombre === ganador ? " background:#E7E6E6;" : "");
+  const bgHead = (p) => (p.nombre === ganador ? " background:#D9D9D9;" : " background:#F2F2F2;");
+
+  let filasItems = "";
+  items.forEach((it, i) => {
+    filasItems += "<tr>" +
+      '<td style="' + td + ' width:110pt;">' + esc(it.nombre) + "</td>" +
+      '<td style="' + td + ' width:52pt;">' + esc(it.cantTexto || "") + "</td>" +
+      '<td style="' + td + ' width:42pt;">' + esc(it.cantNum || "") + "</td>";
+    responden.forEach((p) => {
+      if (p.estado === "cotizo") {
+        const pi = (p.items || [])[i] || {};
+        filasItems +=
+          '<td style="' + td + ' font-weight:bold; width:62pt;' + bg(p) + '">' + (pi.unitario != null && pi.unitario !== "" ? formatoPesos(pi.unitario) : "") + "</td>" +
+          '<td style="' + td + ' font-weight:bold; width:62pt;' + bg(p) + '">' + (pi.mensual != null && pi.mensual !== "" ? formatoPesos(pi.mensual) : "") + "</td>";
+      } else {
+        filasItems +=
+          '<td style="' + td + ' font-weight:bold; width:62pt;' + bg(p) + '">' + (i === 0 ? "NO COTIZÓ" : "") + "</td>" +
+          '<td style="' + td + ' width:62pt;' + bg(p) + '"></td>';
+      }
+    });
+    filasItems += "</tr>";
+  });
+
+  let filaTotal = "";
+  if (hayTotal) {
+    filaTotal = '<tr><td colspan="3" style="' + td + ' font-weight:bold;">TOTAL MENSUAL</td>';
+    responden.forEach((p) => {
+      filaTotal += '<td style="' + td + bg(p) + '"></td>' +
+        '<td style="' + td + ' font-weight:bold;' + bg(p) + '">' + (p.estado === "cotizo" ? formatoPesos(p.mensual) : "") + "</td>";
+    });
+    filaTotal += "</tr>";
+  }
+
+  let encabezadoProv = '<tr><th colspan="3" style="' + th + ' background:#F2F2F2;">DETALLE SOLICITADO</th>';
+  responden.forEach((p) => {
+    encabezadoProv += '<th colspan="2" style="' + th + bgHead(p) + '">' + esc(p.nombre).toUpperCase() + "</th>";
+  });
+  encabezadoProv += "</tr><tr>" +
+    '<th style="' + th + '">PRESTACION</th><th style="' + th + '">CANTIDAD</th><th style="' + th + '">CANT DE HS/SES.</th>';
+  responden.forEach((p) => {
+    encabezadoProv += '<th style="' + th + bg(p) + '">P. UNITARIO</th><th style="' + th + bg(p) + '">P. MENSUAL</th>';
+  });
+  encabezadoProv += "</tr>";
+
+  const cotizaron = todos.filter((p) => p.estado === "cotizo").map((p) => p.nombre.toUpperCase());
+  const negativas = todos.filter((p) => p.estado === "desestimo").map((p) => p.nombre.toUpperCase() + " (NEGATIVA)");
+  const constancia = d.textoConstancia ||
+    ("Se deja constancia que, habiendose solicitado cotizacion a " + todos.length +
+      " proveedores del rubro, unicamente las firmas comerciales: " + cotizaron.concat(negativas).join("/") +
+      " ; presentaron presupuestos dentro del plazo establecido. Los restantes proveedores convocados no remitieron cotizacion ni emitieron respuesta alguna al requerimiento efectuado a la fecha de adjudicacion.-");
+  const adjudicacion = d.textoAdjudicacion ||
+    ("CONFORME A LO DETALLADO EN EL CUADRO COMPARATIVO , SE ADJUDICA SERVICIO DE " +
+      (d.modulo || "").toUpperCase() + " A LA FIRMA : " + ganador.toUpperCase());
+
+  const css =
+    ".hoja { font-family: Calibri, Arial, sans-serif; font-size:10pt; color:#000; } " +
+    ".hoja .pagina { padding: 16pt 26pt 20pt 26pt; } .hoja p { margin:0; }";
+
+  const body =
+    '<div class="pagina ultima">' +
+    '<table style="width:100%; border-collapse:collapse; margin-bottom:2pt;"><tr>' +
+    '<td style="border:none; padding:0; vertical-align:middle;"><img src="' + logos.pris + '" style="height:30pt;"></td>' +
+    '<td style="border:none; padding:0; vertical-align:middle; text-align:right;"><img src="' + logos.gob + '" style="height:38pt;"></td>' +
+    "</tr></table>" +
+    '<p style="text-align:center; font-weight:bold; margin-top:6pt;">EXPTE : ' + esc(d.nroExpediente) + " - PTE " + esc(d.paciente).toUpperCase() +
+    (d.periodoTexto ? " (Periodo que corresponde a " + esc(d.periodoTexto) + ")" : "") +
+    "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;fecha de Adjudicacion " + fechaCortaHoy() + "</p>" +
+    '<table style="border-collapse:collapse; margin:8pt auto 0;">' + encabezadoProv + filasItems + filaTotal + "</table>" +
+    '<div style="background:#F2F2F2; padding:5pt 6pt; margin-top:16pt; text-align:justify;">' + esc(adjudicacion) + "</div>" +
+    '<p style="text-align:justify; margin-top:12pt;">' + esc(constancia) + "</p>" +
+    '<p style="font-family:\'Times New Roman\', Times, serif; font-size:12pt; font-weight:bold; line-height:1.55; margin-top:24pt;">' +
+    "Firmado digitalmente:<br>C.P.N Mariela Agustina Castillo<br>Gerente Administrativo<br>Dirección Gral. Prog. Integrado de Salud<br>SI.PRO.SA</p>" +
+    "</div>";
+
+  return {
+    titulo: "CUADRO COMPARATIVO " + d.nroExpediente.replace(/\//g, "-") + " " + d.paciente.toUpperCase(),
+    css, body, apaisado: true,
+  };
+}
+
 /* ---------- Datos por defecto de cada documento (para generar y para revisar de nuevo) ---------- */
 
 // Saca el "Solicita / Solicita Renovación de" inicial del módulo al citarlo en los documentos
@@ -597,6 +689,11 @@ const imputacionResolucionPorSubpartida = (sub) =>
 
 const IMPUTACION_RESOLUCION_DEFECTO =
   "Jurisdicción 67 - Unid. Org. 965 - Recurso 10 - Finalidad/Función 314 - Programa 19 - Actividad 01 - Partida 300 - Subpartida 322";
+
+function fechaCortaHoy() {
+  const d = new Date();
+  return ("0" + d.getDate()).slice(-2) + "/" + ("0" + (d.getMonth() + 1)).slice(-2) + "/" + d.getFullYear();
+}
 
 function fechaLargaHoy() {
   const meses = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
@@ -1399,9 +1496,9 @@ function VistaPrevia({ construirPlantilla, onListo, onCerrar }) {
       const payload = {
         accion: "htmlAPdf",
         titulo: plantilla.titulo,
-        html: envolverHtml(plantilla.css, '<div class="hoja">' + body + "</div>"),
+        html: envolverHtml(plantilla.css, '<div class="hoja">' + body + "</div>", plantilla.apaisado),
       };
-      if (conWord) payload.htmlWord = envolverHtml(plantilla.css, '<div class="hoja">' + logosAUrl(body) + "</div>");
+      if (conWord) payload.htmlWord = envolverHtml(plantilla.css, '<div class="hoja">' + logosAUrl(body) + "</div>", plantilla.apaisado);
       const data = await llamarYDescargar(payload);
       if (onListo) await onListo({ ...data, montoLetras: plantilla.montoLetras || "" });
       alert("✅ PDF generado y descargado a tu máquina." + (conWord ? "\n📄 También se descargó la versión Word." : ""));
@@ -1422,7 +1519,7 @@ function VistaPrevia({ construirPlantilla, onListo, onCerrar }) {
       <div style={{ fontSize: 13, color: "#64748b", marginBottom: 10 }}>
         Así va a salir el PDF. <b>Si hay algo que corregir, hacé clic sobre el texto y editalo directamente acá</b> — nombres, fechas, fojas, montos, lo que sea. Cuando esté bien, apretá el botón verde.
       </div>
-      <style>{plantilla.css + " .hoja .pagina { background:#fff; box-shadow:0 1px 6px rgba(0,0,0,0.3); margin:0 auto 14px; width:794px; min-height:1122px; box-sizing:border-box; }"}</style>
+      <style>{plantilla.css + " .hoja .pagina { background:#fff; box-shadow:0 1px 6px rgba(0,0,0,0.3); margin:0 auto 14px; width:" + (plantilla.apaisado ? "1123px" : "794px") + "; min-height:" + (plantilla.apaisado ? "794px" : "1122px") + "; box-sizing:border-box; }"}</style>
       <div style={{ overflowX: "auto", background: "#cbd5e1", padding: 12, borderRadius: 8 }}>
         <div
           className="hoja"
@@ -1430,7 +1527,7 @@ function VistaPrevia({ construirPlantilla, onListo, onCerrar }) {
           contentEditable
           suppressContentEditableWarning
           spellCheck={false}
-          style={{ outline: "none", minWidth: 794 }}
+          style={{ outline: "none", minWidth: plantilla.apaisado ? 1123 : 794 }}
           dangerouslySetInnerHTML={{ __html: plantilla.body }}
         />
       </div>
@@ -1483,11 +1580,26 @@ function RevisarCuadro({ exp }) {
   const generar = async (conExcel) => {
     setOcupado(true);
     try {
+      const logos = await obtenerLogos();
+      const plantilla = plantillaCuadro({
+        nroExpediente: exp.nroExpediente, paciente: exp.paciente, modulo: exp.modulo,
+        periodoTexto: exp.periodoTexto, periodoMeses: exp.periodoMeses,
+        items: payload.items, proveedores: payload.proveedores,
+        adjudicado: payload.adjudicado,
+        textoAdjudicacion: textos.adjudicacion, textoConstancia: textos.constancia,
+      }, logos);
       await llamarYDescargar({
-        ...payload,
-        textoAdjudicacion: textos.adjudicacion,
-        textoConstancia: textos.constancia,
-      }, conExcel);
+        accion: "htmlAPdf",
+        titulo: plantilla.titulo,
+        html: envolverHtml(plantilla.css, '<div class="hoja">' + plantilla.body + "</div>", true),
+      });
+      if (conExcel) {
+        await llamarYDescargar({
+          ...payload,
+          textoAdjudicacion: textos.adjudicacion,
+          textoConstancia: textos.constancia,
+        }, true, false);
+      }
       await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
         "cuadro.textoAdjudicacion": textos.adjudicacion,
         "cuadro.textoConstancia": textos.constancia,
@@ -2052,16 +2164,33 @@ function RegistroPresupuestos({ exp }) {
   const confirmarCuadro = async (conExcel) => {
     setOcupado(true);
     try {
-      await llamarYDescargar({
-        accion: "generarCuadro",
-        nroExpediente: exp.nroExpediente, paciente: exp.paciente,
-        modulo: exp.modulo, detalleServicios: exp.detalleServicios,
+      // PDF apaisado por el motor HTML (logos garantizados, cuadro compacto en una hoja)
+      const logos = await obtenerLogos();
+      const plantilla = plantillaCuadro({
+        nroExpediente: exp.nroExpediente, paciente: exp.paciente, modulo: exp.modulo,
         periodoTexto: exp.periodoTexto, periodoMeses: exp.periodoMeses,
-        items,
+        items, proveedores: previa.lista,
+        adjudicado: { nombre: previa.ganador },
         textoAdjudicacion: previa.textoAdjudicacion, textoConstancia: previa.textoConstancia,
-        proveedores: previa.lista,
-        adjudicado: { nombre: previa.ganador, mensual: previa.g.mensual, total: previa.total },
-      }, conExcel);
+      }, logos);
+      await llamarYDescargar({
+        accion: "htmlAPdf",
+        titulo: plantilla.titulo,
+        html: envolverHtml(plantilla.css, '<div class="hoja">' + plantilla.body + "</div>", true),
+      });
+      // Excel editable (opcional) por el motor de planillas
+      if (conExcel) {
+        await llamarYDescargar({
+          accion: "generarCuadro",
+          nroExpediente: exp.nroExpediente, paciente: exp.paciente,
+          modulo: exp.modulo, detalleServicios: exp.detalleServicios,
+          periodoTexto: exp.periodoTexto, periodoMeses: exp.periodoMeses,
+          items,
+          textoAdjudicacion: previa.textoAdjudicacion, textoConstancia: previa.textoConstancia,
+          proveedores: previa.lista,
+          adjudicado: { nombre: previa.ganador, mensual: previa.g.mensual, total: previa.total },
+        }, true, false);
+      }
       await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
         etapa: 3,
         itemsPrestacion: items,
@@ -2073,7 +2202,7 @@ function RegistroPresupuestos({ exp }) {
         },
       });
       alert("✅ Cuadro comparativo generado. Adjudicado: " + previa.ganador +
-        "\n\nSe descargó el PDF apaisado (para el SIGEDIG)" + (conExcel ? " y el Excel editable." : "."));
+        "\n\nSe descargó el PDF apaisado con los logos (para el SIGEDIG)" + (conExcel ? " y el Excel editable." : "."));
     } catch (e) {
       alert("❌ Error al generar el cuadro: " + e.message);
     }
