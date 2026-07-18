@@ -459,9 +459,11 @@ function plantillaResolucion(d, logos) {
 
   /* ========== MODELO MISMO PROVEEDOR, DOS SUBPARTIDAS (una firma, una tabla, imputación dividida) ========== */
   if (d.subModo === "dosMismo") {
-    const totalA = Number(d.mensualA || 0) * Number(d.periodoMeses || 6);
-    const totalB = Number(d.mensualB || 0) * Number(d.periodoMeses || 6);
-    const total = totalA + totalB;
+    const meses6 = Number(d.periodoMeses || 6);
+    const mensualUnico = Number(d.mensualUnico || 0) || (Number(d.mensualA || 0) + Number(d.mensualB || 0));
+    const totalA = Number(d.mensualA || 0) * meses6;                       // parte imputada a la subpartida A
+    const totalB = Math.max(0, mensualUnico * meses6 - totalA);            // el resto va a la subpartida B
+    const total = mensualUnico * meses6;
     const letras = numeroALetras(total);
     const letrasA = numeroALetras(totalA);
     const adj = esc(d.firmaA).toUpperCase();
@@ -498,8 +500,7 @@ function plantillaResolucion(d, logos) {
       '<td style="border:1pt solid #000; padding:2pt 4pt; width:22%;">PRECIO POR MES</td>' +
       '<td style="border:1pt solid #000; padding:2pt 4pt; width:26%;">PRECIO TOTAL POR ' + meses + " MESES</td>" +
       "</tr>" +
-      filaSrv(d.detalleA, d.mensualA, totalA) +
-      filaSrv(d.detalleB, d.mensualB, totalB) +
+      filaSrv(d.detalleUnico || d.detalleA, mensualUnico, total) +
       "</table></div>";
 
     const pag2 =
@@ -921,6 +922,8 @@ const datosResolucion = (exp, extra = {}) => {
     // modelo doble (322 y 342)
     detalleVisto: extra.detalleVisto ?? r.detalleVisto ?? ("Internación Domiciliaria; " + (nombresTxt || limpiarModulo(exp.modulo))),
     detalleModulo: extra.detalleModulo ?? r.detalleModulo ?? (itemsTxt || limpiarModulo(exp.modulo)),
+    mensualUnico: extra.mensualUnico ?? r.mensualUnico ?? null,
+    detalleUnico: extra.detalleUnico ?? r.detalleUnico ?? "",
     subA: extra.subA ?? r.subA ?? "342",
     tituloA: extra.tituloA ?? r.tituloA ?? "",
     detalleA: extra.detalleA ?? r.detalleA ?? "",
@@ -2763,8 +2766,27 @@ function GenerarResolucion({ exp }) {
   const total = (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6);
   const r = exp.resolucion || {};
   const nombresItems = (exp.itemsPrestacion || []).map((it) => it.nombre).join("; ");
+
+  // Lo que el cuadro comparativo adjudicó: prestaciones y precios del ganador,
+  // para armar la resolución sin volver a escribir nada.
+  const itemsAdjudicados = (() => {
+    const g = (exp.presupuestos || {})[exp.cuadro?.adjudicado || ""];
+    const its = exp.itemsPrestacion || [];
+    return its.map((it, i) => ({
+      nombre: it.nombre,
+      cantTexto: it.cantTexto || "",
+      mensual: Number(g?.items?.[i]?.mensual ?? (its.length === 1 ? g?.mensual : 0)) || 0,
+    }));
+  })();
+  const detalleDeItems = (lista) =>
+    lista.map((it) => it.nombre + (it.cantTexto ? ": " + it.cantTexto : "")).join("\n");
+  const esAlimentacion = (n) => /aliment|bomba|nutri|enteral|m[oó]dulo alim/i.test(n || "");
+  const itemsInternacion = itemsAdjudicados.filter((it) => !esAlimentacion(it.nombre));
+  const itemsAlimentacion = itemsAdjudicados.filter((it) => esAlimentacion(it.nombre));
+  const sumar = (lista) => lista.reduce((s, it) => s + (it.mensual || 0), 0);
+
   const [f, setF] = useState({
-    nroResolucion: r.nro || "",
+    nroResolucion: r.nro || "/DGPRIS",
     tipoTramite: r.tipoTramite || "inicio",
     firmante: r.firmante || "directora",
     subModo: r.subModo || "una",
@@ -2779,13 +2801,16 @@ function GenerarResolucion({ exp }) {
     subA: r.subA || "342",
     firmaA: r.firmaA || (exp.cuadro?.adjudicado || ""),
     tituloA: r.tituloA || "",
-    detalleA: r.detalleA || "",
-    mensualA: r.mensualA || "",
+    detalleA: r.detalleA || detalleDeItems(itemsInternacion.length ? itemsInternacion : itemsAdjudicados),
+    mensualA: r.mensualA || (sumar(itemsInternacion.length ? itemsInternacion : itemsAdjudicados) || ""),
     subB: r.subB || "322",
     firmaB: r.firmaB || "",
     tituloB: r.tituloB || "",
-    detalleB: r.detalleB || "",
-    mensualB: r.mensualB || "",
+    detalleB: r.detalleB || detalleDeItems(itemsAlimentacion),
+    mensualB: r.mensualB || (sumar(itemsAlimentacion) || ""),
+    // modelo mismo proveedor: un solo bloque con todos los ítems
+    detalleUnico: r.detalleUnico || detalleDeItems(itemsAdjudicados),
+    montoSub342: r.montoSub342 || (sumar(itemsInternacion.length ? itemsInternacion : itemsAdjudicados) || ""),
   });
   const [revisando, setRevisando] = useState(false);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
@@ -2812,12 +2837,18 @@ function GenerarResolucion({ exp }) {
           fsSolicitud: f.fsSolicitud, fsPresupuesto: f.fsPresupuesto,
           fsCuadro: f.fsCuadro, fsDictamen: f.fsDictamen,
           imputacion: f.imputacion, anio: f.anio,
-          subA: f.subA, firmaA: f.firmaA, mensualA: f.mensualA,
+          subA: f.subA, firmaA: f.firmaA,
+          mensualA: esDobleMismo ? Number(f.montoSub342 || 0) : f.mensualA,
           tituloA: f.tituloA || ("SERVICIOS INTERNACION DOMICILIARIA: " + f.firmaA.toUpperCase()),
-          detalleA: f.detalleA || nombresItems || limpiarModulo(exp.modulo),
-          subB: f.subB, firmaB: esDobleMismo ? f.firmaA : f.firmaB, mensualB: f.mensualB,
-          tituloB: f.tituloB || ("SERVICIO: MODULO ALIMENTACION DOMICILIARIA: " + f.firmaB.toUpperCase()),
+          detalleA: esDobleMismo ? f.detalleUnico : (f.detalleA || nombresItems || limpiarModulo(exp.modulo)),
+          subB: f.subB, firmaB: esDobleMismo ? f.firmaA : f.firmaB,
+          mensualB: esDobleMismo
+            ? Math.max(0, Number(f.mensualUnico ?? exp.cuadro?.mensual ?? 0) - Number(f.montoSub342 || 0))
+            : f.mensualB,
+          tituloB: f.tituloB || ("SERVICIO: MODULO ALIMENTACION DOMICILIARIA: " + (f.firmaB || "").toUpperCase()),
           detalleB: f.detalleB || "Servicio de Alimentación domiciliaria C/Bomba de Infusión",
+          mensualUnico: esDobleMismo ? Number(f.mensualUnico ?? exp.cuadro?.mensual ?? 0) : null,
+          detalleUnico: f.detalleUnico,
         }), logos)}
         onCerrar={() => setRevisando(false)}
         onListo={async (data) => {
@@ -2833,6 +2864,7 @@ function GenerarResolucion({ exp }) {
               fojas: { solicitud: f.fsSolicitud, presupuesto: f.fsPresupuesto, cuadro: f.fsCuadro, dictamen: f.fsDictamen },
               imputacion: f.imputacion, anio: f.anio,
               subA: f.subA, firmaA: f.firmaA, tituloA: f.tituloA, detalleA: f.detalleA, mensualA: f.mensualA,
+              detalleUnico: f.detalleUnico, mensualUnico: f.mensualUnico ?? exp.cuadro?.mensual ?? "", montoSub342: f.montoSub342,
               subB: f.subB, firmaB: f.firmaB, tituloB: f.tituloB, detalleB: f.detalleB, mensualB: f.mensualB,
             },
           });
@@ -2849,10 +2881,14 @@ function GenerarResolucion({ exp }) {
     }
     if (esDobleMismo) {
       if (!f.firmaA) { alert("Cargá la firma comercial adjudicada."); return; }
-      if (!f.mensualA || !f.mensualB) { alert("Cargá el precio mensual de cada bloque (internación y alimentación)."); return; }
-      const suma = Number(f.mensualA) + Number(f.mensualB);
-      if (exp.cuadro?.mensual != null && Math.abs(suma - exp.cuadro.mensual) > 0.02) {
-        if (!confirm(`⚠️ OJO: la suma de los dos bloques da ${formatoPesos(suma)}/mes, pero el cuadro adjudicó ${formatoPesos(exp.cuadro.mensual)}/mes.\n\nEn este modelo el monto total se REPARTE entre las dos subpartidas (no se duplica). ¿Seguro que querés continuar con estos montos?`)) return;
+      const mensualTot = Number(f.mensualUnico ?? exp.cuadro?.mensual ?? 0);
+      if (!mensualTot) { alert("Cargá el precio mensual total adjudicado."); return; }
+      if (!f.montoSub342) {
+        if (!confirm(`No indicaste cuánto del total corresponde a la Subpartida ${f.subA}. Si seguís, el ARTÍCULO 2º va a imputar todo a la Subpartida ${f.subB}. ¿Continuar?`)) return;
+      }
+      if (Number(f.montoSub342 || 0) > mensualTot) {
+        alert(`El monto de la Subpartida ${f.subA} no puede ser mayor al total mensual adjudicado.`);
+        return;
       }
     }
     if (!f.fsPresupuesto || !f.fsCuadro || !f.fsDictamen) {
@@ -2953,20 +2989,52 @@ function GenerarResolucion({ exp }) {
       )}
 
       {esDobleMismo && (
-        <div style={{ marginTop: 14 }}>
-          <div>
-            <label style={S.label}>Firma comercial adjudicada (única, del cuadro comparativo)</label>
-            <input style={S.input} value={f.firmaA} onChange={set("firmaA")} placeholder="QUIMUR SRL" />
+        <div style={{ marginTop: 14, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: 12 }}>
+          <div style={{ fontWeight: 800, color: "#334155" }}>📋 Servicios adjudicados (un solo cuadro, todos los ítems)</div>
+          <div style={{ fontSize: 13, color: "#64748b", marginTop: 2 }}>
+            Se completó solo con lo que adjudicó el cuadro comparativo — retocalo si hace falta.
           </div>
-          {exp.cuadro?.mensual != null && (
-            <div style={{ fontSize: 13, color: "#075e75", background: "#e0f2fe", borderRadius: 8, padding: 8, marginTop: 8 }}>
-              💡 El cuadro adjudicó <b>{formatoPesos(exp.cuadro.mensual)}/mes</b> — la suma de los dos bloques de abajo debería dar ese monto (repartido entre internación y alimentación).
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 190px", gap: 10 }}>
+            <div>
+              <label style={{ ...S.label, fontWeight: 600 }}>Firma comercial adjudicada</label>
+              <input style={S.input} value={f.firmaA} onChange={set("firmaA")} placeholder="QUIMUR SRL" />
             </div>
-          )}
+            <div>
+              <label style={{ ...S.label, fontWeight: 600 }}>Precio mensual total ($)</label>
+              <input style={S.input} type="number" value={f.mensualUnico ?? exp.cuadro?.mensual ?? ""}
+                onChange={(e) => setF({ ...f, mensualUnico: e.target.value })} />
+            </div>
+          </div>
+
+          <label style={{ ...S.label, fontWeight: 600 }}>Detalle de las prestaciones (celda del cuadro)</label>
+          <textarea style={{ ...S.input, minHeight: 78 }} value={f.detalleUnico} onChange={set("detalleUnico")} />
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10, alignItems: "end" }}>
+            <div>
+              <label style={{ ...S.label, fontWeight: 600, marginTop: 0 }}>De ese total, corresponde a Subpartida {f.subA} ($/mes)</label>
+              <input style={S.input} type="number" value={f.montoSub342} onChange={set("montoSub342")} />
+            </div>
+            <div style={{ fontSize: 13, color: "#075e75", fontWeight: 700, paddingBottom: 10 }}>
+              Resto a Subpartida {f.subB}: {formatoPesos(Math.max(0, Number(f.mensualUnico ?? exp.cuadro?.mensual ?? 0) - Number(f.montoSub342 || 0)))}/mes
+            </div>
+          </div>
+          <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
+            El cuadro de la resolución sale con una sola fila; este reparto es solo para el ARTÍCULO 2º (imputación a las dos subpartidas).
+          </div>
+
+          {(() => {
+            const mensualTot = Number(f.mensualUnico ?? exp.cuadro?.mensual ?? 0);
+            return mensualTot > 0 ? (
+              <div style={{ background: "#e0f2fe", borderRadius: 8, padding: 10, marginTop: 10, fontSize: 14, color: "#075e75", fontWeight: 800, textAlign: "right" }}>
+                Monto total por {exp.periodoMeses} meses: {formatoPesos(mensualTot * Number(exp.periodoMeses || 6))}
+              </div>
+            ) : null;
+          })()}
         </div>
       )}
 
-      {(esDoble || esDobleMismo) && (
+      {esDoble && (
         <div style={{ marginTop: 14 }}>
           <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: 12 }}>
             <div style={{ fontWeight: 800, color: "#334155" }}>🅰️ Firma A — Internación Domiciliaria (Subpartida {f.subA})</div>
