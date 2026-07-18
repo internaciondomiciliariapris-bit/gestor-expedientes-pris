@@ -628,12 +628,16 @@ async function crearPdfCuadro(PDFLib, d, prisBytes, gobBytes) {
     page.drawText(texto, { x: cx - font.widthOfTextAtSize(texto, size) / 2, y: cy, size, font, color: NEGRO });
   };
 
-  // ---- título ----
-  const titulo = "EXPTE : " + d.nroExpediente + " - PTE " + d.paciente.toUpperCase() +
-    (d.periodoTexto ? " (Periodo que corresponde a " + d.periodoTexto + ")" : "") +
-    "     fecha de Adjudicacion " + d.fechaCorta;
-  page.drawText(titulo, { x: MX, y: y - 8.5, size: 8.5, font: helvB, color: NEGRO });
-  y -= 8.5 + 8;
+  // ---- título en dos líneas (la fecha de adjudicación abajo, alineada con el EXPTE) ----
+  const tituloL1 = "EXPTE : " + d.nroExpediente + " - PTE " + d.paciente.toUpperCase() +
+    (d.periodoTexto ? " (Periodo que corresponde a " + d.periodoTexto + ")" : "");
+  const lineasTitulo = partir(tituloL1, helvB, 8.5, 640);
+  lineasTitulo.push("fecha de Adjudicacion " + d.fechaCorta);
+  lineasTitulo.forEach((l) => {
+    page.drawText(l, { x: MX, y: y - 8.5, size: 8.5, font: helvB, color: NEGRO });
+    y -= 11.5;
+  });
+  y -= 4;
 
   // ---- geometría de la tabla ----
   const responden = (d.proveedores || []).filter((p) => p.estado !== "sin_respuesta");
@@ -723,7 +727,7 @@ async function crearPdfCuadro(PDFLib, d, prisBytes, gobBytes) {
 
   // ---- recuadro de adjudicación ----
   y -= 14;
-  const wAdj = Math.max(anchoTabla, 400);
+  const wAdj = Math.min(Math.max(anchoTabla, 300), 420);
   const lAdj = partir(d.textoAdjudicacion, helv, F, wAdj - 10);
   const hAdj = lAdj.length * LH + 8;
   page.drawRectangle({ x: MX, y: y - hAdj, width: wAdj, height: hAdj, color: GRIS_ENC });
@@ -732,7 +736,7 @@ async function crearPdfCuadro(PDFLib, d, prisBytes, gobBytes) {
   y -= hAdj + 11;
 
   // ---- constancia ----
-  const lConst = partir(d.textoConstancia, helv, F, Math.max(anchoTabla, 500));
+  const lConst = partir(d.textoConstancia, helv, F, Math.min(Math.max(anchoTabla, 300), 440));
   lConst.forEach((l) => { page.drawText(l, { x: MX, y: y - 6, size: F, font: helv, color: NEGRO }); y -= LH; });
 
   // ---- firma ----
