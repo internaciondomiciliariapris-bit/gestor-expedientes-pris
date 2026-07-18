@@ -579,100 +579,195 @@ function plantillaResolucion(d, logos) {
   };
 }
 
-/* ---------- CUADRO COMPARATIVO (PDF apaisado por HTML: logos garantizados) ----------
-   Los fondos van por partida doble: CSS background-color (vista previa en el navegador)
-   + atributo clásico bgcolor (el que respeta el conversor de PDF). */
+/* ---------- CUADRO COMPARATIVO: PDF fabricado en el navegador con pdf-lib ----------
+   Sin conversor de por medio: los grises del ganador y los logos quedan grabados
+   en los bytes del archivo. Requiere /public/pdf-lib.min.js cargado en index.html. */
 
-function plantillaCuadro(d, logos) {
+// GENERADOR DEL PDF DEL CUADRO COMPARATIVO CON pdf-lib
+// (idéntico en Node para pruebas y en el navegador vía window.PDFLib)
+async function crearPdfCuadro(PDFLib, d, prisBytes, gobBytes) {
+  const { PDFDocument, StandardFonts, rgb } = PDFLib;
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([842, 595]); // A4 apaisado
+  const helv = await doc.embedFont(StandardFonts.Helvetica);
+  const helvB = await doc.embedFont(StandardFonts.HelveticaBold);
+  const timesB = await doc.embedFont(StandardFonts.TimesRomanBold);
+
+  const NEGRO = rgb(0, 0, 0);
+  const GRIS_GANA = rgb(231 / 255, 230 / 255, 230 / 255);   // #E7E6E6
+  const GRIS_GANA_H = rgb(217 / 255, 217 / 255, 217 / 255); // #D9D9D9
+  const GRIS_ENC = rgb(242 / 255, 242 / 255, 242 / 255);    // #F2F2F2
+
+  const MX = 30;              // margen izquierdo
+  let y = 595 - 26;           // cursor vertical (desde arriba)
+
+  // ---- logos a la par ----
+  const pris = await doc.embedPng(prisBytes);
+  const gob = await doc.embedPng(gobBytes);
+  const hP = 26, wP = (pris.width / pris.height) * hP;
+  const hG = 32, wG = (gob.width / gob.height) * hG;
+  const topLogos = Math.max(hP, hG);
+  page.drawImage(pris, { x: MX, y: y - topLogos + (topLogos - hP) / 2, width: wP, height: hP });
+  page.drawImage(gob, { x: MX + wP + 16, y: y - topLogos + (topLogos - hG) / 2, width: wG, height: hG });
+  y -= topLogos + 9;
+
+  // ---- helpers de texto ----
+  const partir = (texto, font, size, maxW) => {
+    const palabras = String(texto || "").split(/\s+/).filter(Boolean);
+    const lineas = [];
+    let actual = "";
+    palabras.forEach((p) => {
+      const prueba = actual ? actual + " " + p : p;
+      if (font.widthOfTextAtSize(prueba, size) <= maxW || !actual) actual = prueba;
+      else { lineas.push(actual); actual = p; }
+    });
+    if (actual) lineas.push(actual);
+    return lineas.length ? lineas : [""];
+  };
+  const centrado = (texto, font, size, cx, cy) => {
+    page.drawText(texto, { x: cx - font.widthOfTextAtSize(texto, size) / 2, y: cy, size, font, color: NEGRO });
+  };
+
+  // ---- título ----
+  const titulo = "EXPTE : " + d.nroExpediente + " - PTE " + d.paciente.toUpperCase() +
+    (d.periodoTexto ? " (Periodo que corresponde a " + d.periodoTexto + ")" : "") +
+    "     fecha de Adjudicacion " + d.fechaCorta;
+  page.drawText(titulo, { x: MX, y: y - 8.5, size: 8.5, font: helvB, color: NEGRO });
+  y -= 8.5 + 8;
+
+  // ---- geometría de la tabla ----
   const responden = (d.proveedores || []).filter((p) => p.estado !== "sin_respuesta");
   const todos = d.proveedores || [];
-  const items = d.items?.length ? d.items : [{ nombre: d.modulo || "", cantTexto: "", cantNum: "" }];
-  const hayTotal = items.length > 1;
-  const ganador = d.adjudicado?.nombre || "";
-
-  const th = "border:0.75pt solid #000; padding:1.5pt 2pt; text-align:center; vertical-align:middle; font-weight:bold;";
-  const td = "border:0.75pt solid #000; padding:1.5pt 2pt; text-align:center; vertical-align:middle;";
+  const items = d.items && d.items.length ? d.items : [{ nombre: d.modulo || "", cantTexto: "", cantNum: "" }];
+  const ganador = (d.adjudicado && d.adjudicado.nombre) || "";
   const gana = (p) => p.nombre === ganador;
-  const bg = (p) => (gana(p) ? ' bgcolor="#E7E6E6" ' : " ");
-  const cssBg = (p) => (gana(p) ? " background-color:#E7E6E6;" : "");
 
-  let filasItems = "";
-  items.forEach((it, i) => {
-    filasItems += "<tr>" +
-      '<td style="' + td + ' width:88pt;">' + esc(it.nombre) + "</td>" +
-      '<td style="' + td + ' width:42pt;">' + esc(it.cantTexto || "") + "</td>" +
-      '<td style="' + td + ' width:30pt;">' + esc(it.cantNum || "") + "</td>";
-    responden.forEach((p) => {
+  const anchos = [88, 42, 30];
+  responden.forEach(() => { anchos.push(50, 50); });
+  const xCols = [MX];
+  anchos.forEach((a) => xCols.push(xCols[xCols.length - 1] + a));
+  const anchoTabla = xCols[xCols.length - 1] - MX;
+
+  const F = 8;          // fuente de la tabla
+  const LH = 9.6;       // alto de línea
+
+  const celda = (col, yTop, alto, lineas, font, fondo) => {
+    const x = xCols[col], w = anchos[col];
+    if (fondo) page.drawRectangle({ x, y: yTop - alto, width: w, height: alto, color: fondo });
+    page.drawRectangle({ x, y: yTop - alto, width: w, height: alto, borderColor: NEGRO, borderWidth: 0.75 });
+    const totalTxt = lineas.length * LH;
+    let ty = yTop - (alto - totalTxt) / 2 - LH + 2.4;
+    lineas.forEach((l) => { centrado(l, font, F, x + w / 2, ty); ty -= LH; });
+  };
+  const celdaCombinada = (colIni, nCols, yTop, alto, texto, font, fondo) => {
+    const x = xCols[colIni];
+    let w = 0;
+    for (let k = 0; k < nCols; k++) w += anchos[colIni + k];
+    if (fondo) page.drawRectangle({ x, y: yTop - alto, width: w, height: alto, color: fondo });
+    page.drawRectangle({ x, y: yTop - alto, width: w, height: alto, borderColor: NEGRO, borderWidth: 0.75 });
+    centrado(texto, font, F, x + w / 2, yTop - alto / 2 - 2.8);
+  };
+
+  // ---- fila 1: DETALLE SOLICITADO + proveedores ----
+  const h1 = 12;
+  celdaCombinada(0, 3, y, h1, "DETALLE SOLICITADO", helvB, GRIS_ENC);
+  responden.forEach((p, i) => {
+    celdaCombinada(3 + i * 2, 2, y, h1, p.nombre.toUpperCase(), helvB, gana(p) ? GRIS_GANA_H : GRIS_ENC);
+  });
+  y -= h1;
+
+  // ---- fila 2: encabezados de columnas ----
+  const h2 = 30;
+  celda(0, y, h2, ["PRESTACION"], helvB, null);
+  celda(1, y, h2, ["CANTIDAD"], helvB, null);
+  celda(2, y, h2, partir("CANT DE HS/SES.", helvB, F, anchos[2] - 4), helvB, null);
+  responden.forEach((p, i) => {
+    celda(3 + i * 2, y, h2, ["P.", "UNITARIO"], helvB, gana(p) ? GRIS_GANA : null);
+    celda(4 + i * 2, y, h2, ["P.", "MENSUAL"], helvB, gana(p) ? GRIS_GANA : null);
+  });
+  y -= h2;
+
+  // ---- filas de ítems ----
+  items.forEach((it, idx) => {
+    const lN = partir(it.nombre, helv, F, anchos[0] - 6);
+    const lC = partir(it.cantTexto || "", helv, F, anchos[1] - 6);
+    const alto = Math.max(lN.length, lC.length, 1) * LH + 6;
+    celda(0, y, alto, lN, helv, null);
+    celda(1, y, alto, lC, helv, null);
+    celda(2, y, alto, [String(it.cantNum || "")], helv, null);
+    responden.forEach((p, i) => {
+      const fondo = gana(p) ? GRIS_GANA : null;
       if (p.estado === "cotizo") {
-        const pi = (p.items || [])[i] || {};
-        filasItems +=
-          "<td" + bg(p) + 'style="' + td + ' font-weight:bold; width:50pt;' + cssBg(p) + '">' + (pi.unitario != null && pi.unitario !== "" ? formatoPesos(pi.unitario) : "") + "</td>" +
-          "<td" + bg(p) + 'style="' + td + ' font-weight:bold; width:50pt;' + cssBg(p) + '">' + (pi.mensual != null && pi.mensual !== "" ? formatoPesos(pi.mensual) : "") + "</td>";
+        const pi = (p.items || [])[idx] || {};
+        celda(3 + i * 2, y, alto, [pi.unitario != null && pi.unitario !== "" ? d.fmt(pi.unitario) : ""], helvB, fondo);
+        celda(4 + i * 2, y, alto, [pi.mensual != null && pi.mensual !== "" ? d.fmt(pi.mensual) : ""], helvB, fondo);
       } else {
-        filasItems +=
-          "<td" + bg(p) + 'style="' + td + ' font-weight:bold; width:50pt;' + cssBg(p) + '">' + (i === 0 ? "NO COTIZÓ" : "") + "</td>" +
-          "<td" + bg(p) + 'style="' + td + ' width:50pt;' + cssBg(p) + '"></td>';
+        celda(3 + i * 2, y, alto, [idx === 0 ? "NO COTIZÓ" : ""], helvB, fondo);
+        celda(4 + i * 2, y, alto, [""], helv, fondo);
       }
     });
-    filasItems += "</tr>";
+    y -= alto;
   });
 
-  let filaTotal = "";
-  if (hayTotal) {
-    filaTotal = '<tr><td colspan="3" style="' + td + ' font-weight:bold;">TOTAL MENSUAL</td>';
-    responden.forEach((p) => {
-      filaTotal += "<td" + bg(p) + 'style="' + td + cssBg(p) + '"></td>' +
-        "<td" + bg(p) + 'style="' + td + ' font-weight:bold;' + cssBg(p) + '">' + (p.estado === "cotizo" ? formatoPesos(p.mensual) : "") + "</td>";
+  // ---- fila TOTAL MENSUAL ----
+  if (items.length > 1) {
+    const hT = 13;
+    celdaCombinada(0, 3, y, hT, "TOTAL MENSUAL", helvB, null);
+    responden.forEach((p, i) => {
+      const fondo = gana(p) ? GRIS_GANA : null;
+      celda(3 + i * 2, y, hT, [""], helv, fondo);
+      celda(4 + i * 2, y, hT, [p.estado === "cotizo" ? d.fmt(p.mensual) : ""], helvB, fondo);
     });
-    filaTotal += "</tr>";
+    y -= hT;
   }
 
-  let encabezadoProv = '<tr><th bgcolor="#F2F2F2" colspan="3" style="' + th + ' background-color:#F2F2F2;">DETALLE SOLICITADO</th>';
-  responden.forEach((p) => {
-    const colorHead = gana(p) ? "#D9D9D9" : "#F2F2F2";
-    encabezadoProv += '<th bgcolor="' + colorHead + '" colspan="2" style="' + th + " background-color:" + colorHead + ';">' + esc(p.nombre).toUpperCase() + "</th>";
+  // ---- recuadro de adjudicación ----
+  y -= 14;
+  const wAdj = Math.max(anchoTabla, 400);
+  const lAdj = partir(d.textoAdjudicacion, helv, F, wAdj - 10);
+  const hAdj = lAdj.length * LH + 8;
+  page.drawRectangle({ x: MX, y: y - hAdj, width: wAdj, height: hAdj, color: GRIS_ENC });
+  let ty = y - LH + 1;
+  lAdj.forEach((l) => { page.drawText(l, { x: MX + 5, y: ty - 3, size: F, font: helv, color: NEGRO }); ty -= LH; });
+  y -= hAdj + 11;
+
+  // ---- constancia ----
+  const lConst = partir(d.textoConstancia, helv, F, Math.max(anchoTabla, 500));
+  lConst.forEach((l) => { page.drawText(l, { x: MX, y: y - 6, size: F, font: helv, color: NEGRO }); y -= LH; });
+
+  // ---- firma ----
+  y -= 16;
+  ["Firmado digitalmente:", "C.P.N Mariela Agustina Castillo", "Gerente Administrativo",
+   "Dirección Gral. Prog. Integrado de Salud", "SI.PRO.SA"].forEach((l) => {
+    page.drawText(l, { x: MX, y: y - 9, size: 11, font: timesB, color: NEGRO });
+    y -= 16;
   });
-  encabezadoProv += "</tr><tr>" +
-    '<th style="' + th + '">PRESTACION</th><th style="' + th + '">CANTIDAD</th><th style="' + th + '">CANT DE HS/SES.</th>';
-  responden.forEach((p) => {
-    encabezadoProv += "<th" + bg(p) + 'style="' + th + cssBg(p) + '">P. UNITARIO</th><th' + bg(p) + 'style="' + th + cssBg(p) + '">P. MENSUAL</th>';
-  });
-  encabezadoProv += "</tr>";
 
-  const cotizaron = todos.filter((p) => p.estado === "cotizo").map((p) => p.nombre.toUpperCase());
-  const negativas = todos.filter((p) => p.estado === "desestimo").map((p) => p.nombre.toUpperCase() + " (NEGATIVA)");
-  const constancia = d.textoConstancia ||
-    ("Se deja constancia que, habiendose solicitado cotizacion a " + todos.length +
-      " proveedores del rubro, unicamente las firmas comerciales: " + cotizaron.concat(negativas).join("/") +
-      " ; presentaron presupuestos dentro del plazo establecido. Los restantes proveedores convocados no remitieron cotizacion ni emitieron respuesta alguna al requerimiento efectuado a la fecha de adjudicacion.-");
-  const adjudicacion = d.textoAdjudicacion ||
-    ("CONFORME A LO DETALLADO EN EL CUADRO COMPARATIVO , SE ADJUDICA SERVICIO DE " +
-      (d.modulo || "").toUpperCase() + " A LA FIRMA : " + ganador.toUpperCase());
+  return doc.save();
+}
 
-  const css =
-    ".hoja { font-family: Calibri, Arial, sans-serif; font-size:8pt; color:#000; } " +
-    ".hoja .pagina { padding: 14pt 30pt 18pt 30pt; } .hoja p { margin:0; }";
+// Bytes de los logos para el generador de PDF (con caché)
+let _logosBytesCache = null;
+async function obtenerLogosBytes() {
+  if (_logosBytesCache) return _logosBytesCache;
+  const [pris, gob] = await Promise.all([
+    fetch("/logo-pris.png").then((r) => r.arrayBuffer()),
+    fetch("/logo-gobierno.png").then((r) => r.arrayBuffer()),
+  ]);
+  _logosBytesCache = { pris, gob };
+  return _logosBytesCache;
+}
 
-  const body =
-    '<div class="pagina ultima">' +
-    '<div style="margin-bottom:2pt;"><img src="' + logos.pris + '" style="height:26pt; vertical-align:middle;">' +
-    '<img src="' + logos.gob + '" style="height:32pt; vertical-align:middle; margin-left:16pt;"></div>' +
-    '<p style="font-weight:bold; font-size:8.5pt; margin-top:5pt;">EXPTE : ' + esc(d.nroExpediente) + " - PTE " + esc(d.paciente).toUpperCase() +
-    (d.periodoTexto ? " (Periodo que corresponde a " + esc(d.periodoTexto) + ")" : "") +
-    "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;fecha de Adjudicacion " + fechaCortaHoy() + "</p>" +
-    '<table style="border-collapse:collapse; margin:7pt 0 0;">' + encabezadoProv + filasItems + filaTotal + "</table>" +
-    '<table style="border-collapse:collapse; margin-top:13pt;"><tr>' +
-    '<td bgcolor="#F2F2F2" style="border:none; padding:4pt 5pt; text-align:justify; font-size:8pt; background-color:#F2F2F2; width:460pt;">' + esc(adjudicacion) + "</td>" +
-    "</tr></table>" +
-    '<p style="text-align:justify; margin-top:10pt; font-size:8pt; max-width:520pt;">' + esc(constancia) + "</p>" +
-    '<p style="font-family:\'Times New Roman\', Times, serif; font-size:11pt; font-weight:bold; line-height:1.5; margin-top:20pt;">' +
-    "Firmado digitalmente:<br>C.P.N Mariela Agustina Castillo<br>Gerente Administrativo<br>Dirección Gral. Prog. Integrado de Salud<br>SI.PRO.SA</p>" +
-    "</div>";
-
-  return {
-    titulo: "CUADRO COMPARATIVO " + d.nroExpediente.replace(/\//g, "-") + " " + d.paciente.toUpperCase(),
-    css, body, apaisado: true,
-  };
+function descargarBytes(bytes, nombre) {
+  const blob = new Blob([bytes], { type: "application/pdf" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = nombre;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
 /* ---------- Datos por defecto de cada documento (para generar y para revisar de nuevo) ---------- */
@@ -1584,19 +1679,17 @@ function RevisarCuadro({ exp }) {
   const generar = async (conExcel) => {
     setOcupado(true);
     try {
-      const logos = await obtenerLogos();
-      const plantilla = plantillaCuadro({
+      if (!window.PDFLib) throw new Error("Falta pdf-lib: subí pdf-lib.min.js a la carpeta public y agregá la línea al index.html");
+      const logosB = await obtenerLogosBytes();
+      const bytes = await crearPdfCuadro(window.PDFLib, {
         nroExpediente: exp.nroExpediente, paciente: exp.paciente, modulo: exp.modulo,
         periodoTexto: exp.periodoTexto, periodoMeses: exp.periodoMeses,
+        fechaCorta: fechaCortaHoy(), fmt: formatoPesos,
         items: payload.items, proveedores: payload.proveedores,
         adjudicado: payload.adjudicado,
         textoAdjudicacion: textos.adjudicacion, textoConstancia: textos.constancia,
-      }, logos);
-      await llamarYDescargar({
-        accion: "htmlAPdf",
-        titulo: plantilla.titulo,
-        html: envolverHtml(plantilla.css, '<div class="hoja">' + plantilla.body + "</div>", true),
-      });
+      }, logosB.pris, logosB.gob);
+      descargarBytes(bytes, "CUADRO COMPARATIVO " + exp.nroExpediente.replace(/\//g, "-") + " " + exp.paciente.toUpperCase() + ".pdf");
       if (conExcel) {
         await llamarYDescargar({
           ...payload,
@@ -2168,20 +2261,20 @@ function RegistroPresupuestos({ exp }) {
   const confirmarCuadro = async (conExcel) => {
     setOcupado(true);
     try {
-      // PDF apaisado por el motor HTML (logos garantizados, cuadro compacto en una hoja)
-      const logos = await obtenerLogos();
-      const plantilla = plantillaCuadro({
+      // PDF fabricado en el navegador con pdf-lib (grises y logos grabados en el archivo)
+      if (!window.PDFLib) throw new Error("Falta pdf-lib: subí pdf-lib.min.js a la carpeta public y agregá la línea al index.html");
+      const logosB = await obtenerLogosBytes();
+      const bytes = await crearPdfCuadro(window.PDFLib, {
         nroExpediente: exp.nroExpediente, paciente: exp.paciente, modulo: exp.modulo,
         periodoTexto: exp.periodoTexto, periodoMeses: exp.periodoMeses,
+        fechaCorta: fechaCortaHoy(), fmt: formatoPesos,
         items, proveedores: previa.lista,
         adjudicado: { nombre: previa.ganador },
-        textoAdjudicacion: previa.textoAdjudicacion, textoConstancia: previa.textoConstancia,
-      }, logos);
-      await llamarYDescargar({
-        accion: "htmlAPdf",
-        titulo: plantilla.titulo,
-        html: envolverHtml(plantilla.css, '<div class="hoja">' + plantilla.body + "</div>", true),
-      });
+        textoAdjudicacion: previa.textoAdjudicacion ||
+          ("CONFORME A LO DETALLADO EN EL CUADRO COMPARATIVO , SE ADJUDICA SERVICIO DE " + (exp.modulo || "").toUpperCase() + " A LA FIRMA : " + previa.ganador.toUpperCase()),
+        textoConstancia: previa.textoConstancia,
+      }, logosB.pris, logosB.gob);
+      descargarBytes(bytes, "CUADRO COMPARATIVO " + exp.nroExpediente.replace(/\//g, "-") + " " + exp.paciente.toUpperCase() + ".pdf");
       // Excel editable (opcional) por el motor de planillas
       if (conExcel) {
         await llamarYDescargar({
