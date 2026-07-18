@@ -579,7 +579,9 @@ function plantillaResolucion(d, logos) {
   };
 }
 
-/* ---------- CUADRO COMPARATIVO (PDF apaisado por HTML: logos garantizados) ---------- */
+/* ---------- CUADRO COMPARATIVO (PDF apaisado por HTML: logos garantizados) ----------
+   Los fondos van por partida doble: CSS background-color (vista previa en el navegador)
+   + atributo clásico bgcolor (el que respeta el conversor de PDF). */
 
 function plantillaCuadro(d, logos) {
   const responden = (d.proveedores || []).filter((p) => p.estado !== "sin_respuesta");
@@ -590,8 +592,9 @@ function plantillaCuadro(d, logos) {
 
   const th = "border:0.75pt solid #000; padding:1.5pt 2pt; text-align:center; vertical-align:middle; font-weight:bold;";
   const td = "border:0.75pt solid #000; padding:1.5pt 2pt; text-align:center; vertical-align:middle;";
-  const bg = (p) => (p.nombre === ganador ? " background-color:#E7E6E6;" : "");
-  const bgHead = (p) => (p.nombre === ganador ? " background-color:#D9D9D9;" : " background-color:#F2F2F2;");
+  const gana = (p) => p.nombre === ganador;
+  const bg = (p) => (gana(p) ? ' bgcolor="#E7E6E6" ' : " ");
+  const cssBg = (p) => (gana(p) ? " background-color:#E7E6E6;" : "");
 
   let filasItems = "";
   items.forEach((it, i) => {
@@ -603,12 +606,12 @@ function plantillaCuadro(d, logos) {
       if (p.estado === "cotizo") {
         const pi = (p.items || [])[i] || {};
         filasItems +=
-          '<td style="' + td + ' font-weight:bold; width:50pt;' + bg(p) + '">' + (pi.unitario != null && pi.unitario !== "" ? formatoPesos(pi.unitario) : "") + "</td>" +
-          '<td style="' + td + ' font-weight:bold; width:50pt;' + bg(p) + '">' + (pi.mensual != null && pi.mensual !== "" ? formatoPesos(pi.mensual) : "") + "</td>";
+          "<td" + bg(p) + 'style="' + td + ' font-weight:bold; width:50pt;' + cssBg(p) + '">' + (pi.unitario != null && pi.unitario !== "" ? formatoPesos(pi.unitario) : "") + "</td>" +
+          "<td" + bg(p) + 'style="' + td + ' font-weight:bold; width:50pt;' + cssBg(p) + '">' + (pi.mensual != null && pi.mensual !== "" ? formatoPesos(pi.mensual) : "") + "</td>";
       } else {
         filasItems +=
-          '<td style="' + td + ' font-weight:bold; width:50pt;' + bg(p) + '">' + (i === 0 ? "NO COTIZÓ" : "") + "</td>" +
-          '<td style="' + td + ' width:50pt;' + bg(p) + '"></td>';
+          "<td" + bg(p) + 'style="' + td + ' font-weight:bold; width:50pt;' + cssBg(p) + '">' + (i === 0 ? "NO COTIZÓ" : "") + "</td>" +
+          "<td" + bg(p) + 'style="' + td + ' width:50pt;' + cssBg(p) + '"></td>';
       }
     });
     filasItems += "</tr>";
@@ -618,20 +621,21 @@ function plantillaCuadro(d, logos) {
   if (hayTotal) {
     filaTotal = '<tr><td colspan="3" style="' + td + ' font-weight:bold;">TOTAL MENSUAL</td>';
     responden.forEach((p) => {
-      filaTotal += '<td style="' + td + bg(p) + '"></td>' +
-        '<td style="' + td + ' font-weight:bold;' + bg(p) + '">' + (p.estado === "cotizo" ? formatoPesos(p.mensual) : "") + "</td>";
+      filaTotal += "<td" + bg(p) + 'style="' + td + cssBg(p) + '"></td>' +
+        "<td" + bg(p) + 'style="' + td + ' font-weight:bold;' + cssBg(p) + '">' + (p.estado === "cotizo" ? formatoPesos(p.mensual) : "") + "</td>";
     });
     filaTotal += "</tr>";
   }
 
-  let encabezadoProv = '<tr><th colspan="3" style="' + th + ' background-color:#F2F2F2;">DETALLE SOLICITADO</th>';
+  let encabezadoProv = '<tr><th bgcolor="#F2F2F2" colspan="3" style="' + th + ' background-color:#F2F2F2;">DETALLE SOLICITADO</th>';
   responden.forEach((p) => {
-    encabezadoProv += '<th colspan="2" style="' + th + bgHead(p) + '">' + esc(p.nombre).toUpperCase() + "</th>";
+    const colorHead = gana(p) ? "#D9D9D9" : "#F2F2F2";
+    encabezadoProv += '<th bgcolor="' + colorHead + '" colspan="2" style="' + th + " background-color:" + colorHead + ';">' + esc(p.nombre).toUpperCase() + "</th>";
   });
   encabezadoProv += "</tr><tr>" +
     '<th style="' + th + '">PRESTACION</th><th style="' + th + '">CANTIDAD</th><th style="' + th + '">CANT DE HS/SES.</th>';
   responden.forEach((p) => {
-    encabezadoProv += '<th style="' + th + bg(p) + '">P. UNITARIO</th><th style="' + th + bg(p) + '">P. MENSUAL</th>';
+    encabezadoProv += "<th" + bg(p) + 'style="' + th + cssBg(p) + '">P. UNITARIO</th><th' + bg(p) + 'style="' + th + cssBg(p) + '">P. MENSUAL</th>';
   });
   encabezadoProv += "</tr>";
 
@@ -657,7 +661,9 @@ function plantillaCuadro(d, logos) {
     (d.periodoTexto ? " (Periodo que corresponde a " + esc(d.periodoTexto) + ")" : "") +
     "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;fecha de Adjudicacion " + fechaCortaHoy() + "</p>" +
     '<table style="border-collapse:collapse; margin:7pt 0 0;">' + encabezadoProv + filasItems + filaTotal + "</table>" +
-    '<div style="background-color:#F2F2F2; padding:4pt 5pt; margin-top:13pt; text-align:justify; font-size:8pt; max-width:460pt;">' + esc(adjudicacion) + "</div>" +
+    '<table style="border-collapse:collapse; margin-top:13pt;"><tr>' +
+    '<td bgcolor="#F2F2F2" style="border:none; padding:4pt 5pt; text-align:justify; font-size:8pt; background-color:#F2F2F2; width:460pt;">' + esc(adjudicacion) + "</td>" +
+    "</tr></table>" +
     '<p style="text-align:justify; margin-top:10pt; font-size:8pt; max-width:520pt;">' + esc(constancia) + "</p>" +
     '<p style="font-family:\'Times New Roman\', Times, serif; font-size:11pt; font-weight:bold; line-height:1.5; margin-top:20pt;">' +
     "Firmado digitalmente:<br>C.P.N Mariela Agustina Castillo<br>Gerente Administrativo<br>Dirección Gral. Prog. Integrado de Salud<br>SI.PRO.SA</p>" +
