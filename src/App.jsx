@@ -1244,7 +1244,7 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
             <b>Precio mensual:</b> {formatoPesos(exp.cuadro.mensual)} · <b>Total {exp.periodoMeses} meses:</b> {formatoPesos(exp.cuadro.total)}
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-            <BotonRedescargar construirPayload={() => payloadCuadro(exp)} />
+            <RevisarCuadro exp={exp} />
             <button
               style={{ ...S.btnSec, marginTop: 10, color: "#b91c1c", borderColor: "#fca5a5" }}
               onClick={async () => {
@@ -1459,6 +1459,132 @@ function BotonRevisar({ construirPlantilla, etiqueta }) {
     );
   }
   return <VistaPrevia construirPlantilla={construirPlantilla} onCerrar={() => setAbierto(false)} />;
+}
+
+/* Revisión del cuadro ya generado: misma pantalla de revisión que en la generación inicial,
+   con los textos editables, antes de volver a descargar el PDF/Excel */
+function RevisarCuadro({ exp }) {
+  const [abierto, setAbierto] = useState(false);
+  const [ocupado, setOcupado] = useState(false);
+  const [textos, setTextos] = useState(null);
+
+  const payload = payloadCuadro(exp);
+
+  const abrir = () => {
+    setTextos({
+      adjudicacion: payload.textoAdjudicacion ||
+        ("CONFORME A LO DETALLADO EN EL CUADRO COMPARATIVO , SE ADJUDICA SERVICIO DE " +
+          (exp.modulo || "").toUpperCase() + " A LA FIRMA : " + (payload.adjudicado.nombre || "").toUpperCase()),
+      constancia: payload.textoConstancia || "",
+    });
+    setAbierto(true);
+  };
+
+  const generar = async (conExcel) => {
+    setOcupado(true);
+    try {
+      await llamarYDescargar({
+        ...payload,
+        textoAdjudicacion: textos.adjudicacion,
+        textoConstancia: textos.constancia,
+      }, conExcel);
+      await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
+        "cuadro.textoAdjudicacion": textos.adjudicacion,
+        "cuadro.textoConstancia": textos.constancia,
+      });
+      alert("✅ Cuadro descargado" + (conExcel ? " (PDF + Excel)." : " (PDF)."));
+      setAbierto(false);
+    } catch (e) {
+      alert("❌ Error: " + e.message);
+    }
+    setOcupado(false);
+  };
+
+  if (!abierto) {
+    return (
+      <button style={{ ...S.btnSec, marginTop: 10 }} onClick={abrir}>
+        👁️ Revisar / descargar de nuevo (PDF o Excel)
+      </button>
+    );
+  }
+
+  const listaVisible = payload.proveedores.filter((p) => p.estado !== "sin_respuesta");
+  const items = payload.items;
+  const ganador = payload.adjudicado.nombre;
+
+  return (
+    <div style={{ marginTop: 10, background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 8, padding: 12 }}>
+      <div style={{ fontWeight: 800, color: "#075e75", marginBottom: 8 }}>👁️ Revisión del cuadro comparativo</div>
+
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13, background: "#fff" }}>
+          <thead>
+            <tr>
+              <th style={{ border: "1px solid #334155", padding: 6, background: "#F2F2F2" }}>PRESTACION</th>
+              <th style={{ border: "1px solid #334155", padding: 6, background: "#F2F2F2" }}>CANT</th>
+              {listaVisible.map((p) => (
+                <th key={p.nombre} colSpan={2} style={{ border: "1px solid #334155", padding: 6, background: p.nombre === ganador ? "#D9D9D9" : "#F2F2F2" }}>
+                  {p.nombre.toUpperCase()}{p.nombre === ganador ? " 🏆" : ""}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((it, i) => (
+              <tr key={i}>
+                <td style={{ border: "1px solid #334155", padding: 6 }}>{it.nombre}</td>
+                <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center" }}>{[it.cantTexto, it.cantNum].filter(Boolean).join(" / ")}</td>
+                {listaVisible.map((p) => (
+                  <Fragment key={p.nombre}>
+                    <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 700, background: p.nombre === ganador ? "#E7E6E6" : "#fff" }}>
+                      {p.estado === "cotizo" ? formatoPesos(p.items[i]?.unitario) : i === 0 ? "NO COTIZÓ" : ""}
+                    </td>
+                    <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 700, background: p.nombre === ganador ? "#E7E6E6" : "#fff" }}>
+                      {p.estado === "cotizo" ? formatoPesos(p.items[i]?.mensual) : ""}
+                    </td>
+                  </Fragment>
+                ))}
+              </tr>
+            ))}
+            {items.length > 1 && (
+              <tr>
+                <td colSpan={2} style={{ border: "1px solid #334155", padding: 6, fontWeight: 800 }}>TOTAL MENSUAL</td>
+                {listaVisible.map((p) => (
+                  <Fragment key={p.nombre}>
+                    <td style={{ border: "1px solid #334155", padding: 6, background: p.nombre === ganador ? "#E7E6E6" : "#fff" }}></td>
+                    <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 800, background: p.nombre === ganador ? "#E7E6E6" : "#fff" }}>
+                      {p.estado === "cotizo" ? formatoPesos(p.mensual) : ""}
+                    </td>
+                  </Fragment>
+                ))}
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ fontSize: 12, color: "#64748b", marginTop: 6 }}>
+        Los precios salen de los presupuestos cargados — si hay que corregir un precio, usá "↩️ Reabrir presupuestos". Los textos de abajo sí podés editarlos acá.
+      </div>
+
+      <label style={S.label}>Texto de adjudicación (recuadro gris del cuadro)</label>
+      <textarea style={{ ...S.input, minHeight: 60 }} value={textos.adjudicacion}
+        onChange={(e) => setTextos({ ...textos, adjudicacion: e.target.value })} />
+
+      <label style={S.label}>Texto de constancia (proveedores consultados)</label>
+      <textarea style={{ ...S.input, minHeight: 90 }} value={textos.constancia}
+        onChange={(e) => setTextos({ ...textos, constancia: e.target.value })} placeholder="Se genera automáticamente si lo dejás vacío" />
+
+      <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+        <button style={{ ...S.btn, flex: 2, minWidth: 180, background: "#16a34a", opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => generar(false)}>
+          {ocupado ? "⏳ Generando..." : "✅ ESTÁ BIEN — GENERAR PDF"}
+        </button>
+        <button style={{ ...S.btnSec, flex: 1, minWidth: 130, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => generar(true)}>
+          {ocupado ? "⏳..." : "📊 PDF + Excel"}
+        </button>
+        <button style={{ ...S.btnSec, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => setAbierto(false)}>✖ Cancelar</button>
+      </div>
+    </div>
+  );
 }
 
 /* ---------- Pase a Auditoría Médica (documento del inicio del trámite) ---------- */
