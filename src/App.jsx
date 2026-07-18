@@ -651,14 +651,12 @@ function plantillaCuadro(d, logos) {
 
   const body =
     '<div class="pagina ultima">' +
-    '<table style="width:100%; border-collapse:collapse; margin-bottom:2pt;"><tr>' +
-    '<td style="border:none; padding:0; vertical-align:middle;"><img src="' + logos.pris + '" style="height:26pt;"></td>' +
-    '<td style="border:none; padding:0; vertical-align:middle; text-align:right;"><img src="' + logos.gob + '" style="height:32pt;"></td>' +
-    "</tr></table>" +
-    '<p style="text-align:center; font-weight:bold; font-size:8.5pt; margin-top:5pt;">EXPTE : ' + esc(d.nroExpediente) + " - PTE " + esc(d.paciente).toUpperCase() +
+    '<div style="margin-bottom:2pt;"><img src="' + logos.pris + '" style="height:26pt; vertical-align:middle;">' +
+    '<img src="' + logos.gob + '" style="height:32pt; vertical-align:middle; margin-left:16pt;"></div>' +
+    '<p style="font-weight:bold; font-size:8.5pt; margin-top:5pt;">EXPTE : ' + esc(d.nroExpediente) + " - PTE " + esc(d.paciente).toUpperCase() +
     (d.periodoTexto ? " (Periodo que corresponde a " + esc(d.periodoTexto) + ")" : "") +
     "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;fecha de Adjudicacion " + fechaCortaHoy() + "</p>" +
-    '<table style="border-collapse:collapse; margin:8pt auto 0;">' + encabezadoProv + filasItems + filaTotal + "</table>" +
+    '<table style="border-collapse:collapse; margin:7pt 0 0;">' + encabezadoProv + filasItems + filaTotal + "</table>" +
     '<div style="background:#F2F2F2; padding:4pt 5pt; margin-top:13pt; text-align:justify; font-size:8pt; max-width:460pt;">' + esc(adjudicacion) + "</div>" +
     '<p style="text-align:justify; margin-top:10pt; font-size:8pt; max-width:520pt;">' + esc(constancia) + "</p>" +
     '<p style="font-family:\'Times New Roman\', Times, serif; font-size:11pt; font-weight:bold; line-height:1.5; margin-top:20pt;">' +
