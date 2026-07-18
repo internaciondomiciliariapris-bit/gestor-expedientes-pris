@@ -811,7 +811,7 @@ const datosNota = (exp, extra = {}) => ({
   montoFormato: formatoPesos(extra.monto ?? exp.nota?.monto ?? (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6)),
   directora: extra.directora ?? exp.nota?.directora ?? "Dra. Noellia Bottone",
   imputacion: extra.imputacion ?? exp.nota?.imputacion ?? IMPUTACION_NOTA_DEFECTO,
-  fechaTexto: fechaLargaHoy(),
+  fechaTexto: extra.fechaTexto ?? exp.nota?.fechaTexto ?? fechaLargaHoy(),
 });
 
 const datosPaseAuditoria = (exp, extra = {}) => ({
@@ -1477,7 +1477,7 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
           <div style={{ fontSize: 14, color: "#334155" }}>
             <b>Importe total:</b> {formatoPesos(exp.nota.monto)} ({exp.nota.montoLetras})
           </div>
-          <BotonRevisar construirPlantilla={(logos) => plantillaNota(datosNota(exp), logos)} />
+          <ReabrirGenerador etiqueta="✏️ Modificar y regenerar (fecha, subpartidas, importe)" render={() => <GenerarNota exp={exp} />} />
         </div>
       )}
 
@@ -1501,7 +1501,7 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
             <b>Fecha:</b> {formatearFecha(exp.resolucion.fecha)}<br />
             <b>Adjudicado:</b> {exp.resolucion.adjudicado} · <b>Monto total:</b> {formatoPesos(exp.resolucion.total)}
           </div>
-          <BotonRevisar construirPlantilla={(logos) => plantillaResolucion(datosResolucion(exp), logos)} />
+          <ReabrirGenerador etiqueta="✏️ Modificar y regenerar (firmante, subpartidas, fojas, N°)" render={() => <GenerarResolucion exp={exp} />} />
         </div>
       )}
       {exp.etapa === 5 && <GenerarResolucion exp={exp} />}
@@ -1645,6 +1645,23 @@ function VistaPrevia({ construirPlantilla, onListo, onCerrar }) {
           <button style={{ ...S.btnSec, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={onCerrar}>✖ Cancelar</button>
         )}
       </div>
+    </div>
+  );
+}
+
+function ReabrirGenerador({ etiqueta, render }) {
+  const [abierto, setAbierto] = useState(false);
+  if (!abierto) {
+    return (
+      <button style={{ ...S.btnSec, marginTop: 10 }} onClick={() => setAbierto(true)}>
+        {etiqueta}
+      </button>
+    );
+  }
+  return (
+    <div style={{ marginTop: 10 }}>
+      <button style={{ ...S.btnSec, marginBottom: 8 }} onClick={() => setAbierto(false)}>▲ Cerrar</button>
+      {render()}
     </div>
   );
 }
@@ -2550,6 +2567,7 @@ function GenerarNota({ exp }) {
   const total = (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6);
   const [monto, setMonto] = useState(exp.nota?.monto ?? total);
   const [directora, setDirectora] = useState(exp.nota?.directora || "Dra. Noellia Bottone");
+  const [fechaTexto, setFechaTexto] = useState(exp.nota?.fechaTexto || fechaLargaHoy());
   const [subpartida, setSubpartida] = useState(exp.nota?.subpartida || "322");
   const [imputacion, setImputacion] = useState(exp.nota?.imputacion || imputacionNotaPorSubpartida(exp.nota?.subpartida || "322"));
   const [revisando, setRevisando] = useState(false);
@@ -2562,7 +2580,7 @@ function GenerarNota({ exp }) {
   if (revisando) {
     return (
       <VistaPrevia
-        construirPlantilla={(logos) => plantillaNota(datosNota(exp, { monto: Number(monto), directora, imputacion }), logos)}
+        construirPlantilla={(logos) => plantillaNota(datosNota(exp, { monto: Number(monto), directora, imputacion, fechaTexto }), logos)}
         onCerrar={() => setRevisando(false)}
         onListo={async (data) => {
           await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
@@ -2570,7 +2588,7 @@ function GenerarNota({ exp }) {
             nota: {
               fecha: new Date().toISOString(),
               monto: Number(monto), montoLetras: data.montoLetras || "",
-              directora, imputacion, subpartida,
+              directora, imputacion, subpartida, fechaTexto,
             },
           });
         }}
@@ -2585,10 +2603,14 @@ function GenerarNota({ exp }) {
         Con el formato oficial del Word real (Times New Roman). El importe sale del cuadro comparativo y las letras se escriben solas. Primero la revisás en pantalla, la corregís si hace falta, y recién ahí generás el PDF.
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 10 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "180px 1fr 1fr", gap: 10 }}>
         <div>
           <label style={S.label}>Importe total ({exp.periodoMeses} meses)</label>
           <input style={S.input} type="number" value={monto} onChange={(e) => setMonto(e.target.value)} />
+        </div>
+        <div>
+          <label style={S.label}>Fecha que sale en la nota</label>
+          <input style={S.input} value={fechaTexto} onChange={(e) => setFechaTexto(e.target.value)} />
         </div>
         <div>
           <label style={S.label}>Directora del Programa</label>
