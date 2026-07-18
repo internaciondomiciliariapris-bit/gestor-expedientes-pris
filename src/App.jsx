@@ -461,11 +461,8 @@ function plantillaResolucion(d, logos) {
   if (d.subModo === "dosMismo") {
     const meses6 = Number(d.periodoMeses || 6);
     const mensualUnico = Number(d.mensualUnico || 0) || (Number(d.mensualA || 0) + Number(d.mensualB || 0));
-    const totalA = Number(d.mensualA || 0) * meses6;                       // parte imputada a la subpartida A
-    const totalB = Math.max(0, mensualUnico * meses6 - totalA);            // el resto va a la subpartida B
     const total = mensualUnico * meses6;
     const letras = numeroALetras(total);
-    const letrasA = numeroALetras(totalA);
     const adj = esc(d.firmaA).toUpperCase();
     const mod = esc(limpiarModulo(d.modulo));
 
@@ -507,9 +504,8 @@ function plantillaResolucion(d, logos) {
       '<div class="pagina ultima">' + encabezadoDoc(logos) +
       '<p style="text-align:justify; line-height:1.18; margin-top:12pt;">Por un monto total por ' + meses + " meses <b>" +
       formatoPesos(total) + "</b> (" + letras + "). Dicho servicio comprenderá a partir de la fecha de la orden de compra, comprendiendo desde los Meses de <b>" + per + "</b>.</p>" +
-      art("Imputar a <b>Subpartida " + esc(d.subA) + "</b> la suma de <b>" + formatoPesos(totalA) + "</b> (" + letrasA +
-        ") correspondiente al servicio de Internación Domiciliaria (por " + meses + " meses).<br>" +
-        "Imputar a <b>Subpartida " + esc(d.subB) + "</b> la suma de <b>" + formatoPesos(totalB) + "</b> correspondiente al Módulo de Alimentación domiciliaria (por " + meses + " meses); ambas para la firma <b>" + adj +
+      art("Imputar a <b>Subpartida " + esc(d.subA) + " y " + esc(d.subB) + "</b> la suma de <b>" + formatoPesos(total) + "</b> (" + letras +
+        ") correspondiente al servicio de Internación Domiciliaria y Módulo de Alimentación domiciliaria (por " + meses + " meses), para la firma <b>" + adj +
         "</b>; a Jurisdicción 67 - Unid. Org. 965 - Recurso 10 - Finalidad/Función 314 - Programa 19 - Actividad 01 - Partida 300 - con cargo al <b>Presupuesto del año " + esc(d.anioPresupuesto) + "</b>.") +
       cierreArticulos() +
       pieFinal +
@@ -2883,13 +2879,6 @@ function GenerarResolucion({ exp }) {
       if (!f.firmaA) { alert("Cargá la firma comercial adjudicada."); return; }
       const mensualTot = Number(f.mensualUnico ?? exp.cuadro?.mensual ?? 0);
       if (!mensualTot) { alert("Cargá el precio mensual total adjudicado."); return; }
-      if (!f.montoSub342) {
-        if (!confirm(`No indicaste cuánto del total corresponde a la Subpartida ${f.subA}. Si seguís, el ARTÍCULO 2º va a imputar todo a la Subpartida ${f.subB}. ¿Continuar?`)) return;
-      }
-      if (Number(f.montoSub342 || 0) > mensualTot) {
-        alert(`El monto de la Subpartida ${f.subA} no puede ser mayor al total mensual adjudicado.`);
-        return;
-      }
     }
     if (!f.fsPresupuesto || !f.fsCuadro || !f.fsDictamen) {
       if (!confirm("Faltan números de fojas (presupuesto, cuadro o dictamen). El documento va a salir con esos espacios vacíos — igual podés completarlos a mano en la vista previa. ¿Continuar?")) return;
@@ -3010,17 +2999,8 @@ function GenerarResolucion({ exp }) {
           <label style={{ ...S.label, fontWeight: 600 }}>Detalle de las prestaciones (celda del cuadro)</label>
           <textarea style={{ ...S.input, minHeight: 78 }} value={f.detalleUnico} onChange={set("detalleUnico")} />
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10, alignItems: "end" }}>
-            <div>
-              <label style={{ ...S.label, fontWeight: 600, marginTop: 0 }}>De ese total, corresponde a Subpartida {f.subA} ($/mes)</label>
-              <input style={S.input} type="number" value={f.montoSub342} onChange={set("montoSub342")} />
-            </div>
-            <div style={{ fontSize: 13, color: "#075e75", fontWeight: 700, paddingBottom: 10 }}>
-              Resto a Subpartida {f.subB}: {formatoPesos(Math.max(0, Number(f.mensualUnico ?? exp.cuadro?.mensual ?? 0) - Number(f.montoSub342 || 0)))}/mes
-            </div>
-          </div>
-          <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
-            El cuadro de la resolución sale con una sola fila; este reparto es solo para el ARTÍCULO 2º (imputación a las dos subpartidas).
+          <div style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>
+            El ARTÍCULO 2º va a imputar el total a las <b>Subpartidas {f.subA} y {f.subB}</b> juntas, para esta firma.
           </div>
 
           {(() => {
