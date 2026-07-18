@@ -588,27 +588,27 @@ function plantillaCuadro(d, logos) {
   const hayTotal = items.length > 1;
   const ganador = d.adjudicado?.nombre || "";
 
-  const th = "border:0.75pt solid #000; padding:2pt 3pt; text-align:center; vertical-align:middle; font-weight:bold;";
-  const td = "border:0.75pt solid #000; padding:2.5pt 3pt; text-align:center; vertical-align:middle;";
+  const th = "border:0.75pt solid #000; padding:1.5pt 2pt; text-align:center; vertical-align:middle; font-weight:bold;";
+  const td = "border:0.75pt solid #000; padding:1.5pt 2pt; text-align:center; vertical-align:middle;";
   const bg = (p) => (p.nombre === ganador ? " background:#E7E6E6;" : "");
   const bgHead = (p) => (p.nombre === ganador ? " background:#D9D9D9;" : " background:#F2F2F2;");
 
   let filasItems = "";
   items.forEach((it, i) => {
     filasItems += "<tr>" +
-      '<td style="' + td + ' width:110pt;">' + esc(it.nombre) + "</td>" +
-      '<td style="' + td + ' width:52pt;">' + esc(it.cantTexto || "") + "</td>" +
-      '<td style="' + td + ' width:42pt;">' + esc(it.cantNum || "") + "</td>";
+      '<td style="' + td + ' width:88pt;">' + esc(it.nombre) + "</td>" +
+      '<td style="' + td + ' width:42pt;">' + esc(it.cantTexto || "") + "</td>" +
+      '<td style="' + td + ' width:30pt;">' + esc(it.cantNum || "") + "</td>";
     responden.forEach((p) => {
       if (p.estado === "cotizo") {
         const pi = (p.items || [])[i] || {};
         filasItems +=
-          '<td style="' + td + ' font-weight:bold; width:62pt;' + bg(p) + '">' + (pi.unitario != null && pi.unitario !== "" ? formatoPesos(pi.unitario) : "") + "</td>" +
-          '<td style="' + td + ' font-weight:bold; width:62pt;' + bg(p) + '">' + (pi.mensual != null && pi.mensual !== "" ? formatoPesos(pi.mensual) : "") + "</td>";
+          '<td style="' + td + ' font-weight:bold; width:50pt;' + bg(p) + '">' + (pi.unitario != null && pi.unitario !== "" ? formatoPesos(pi.unitario) : "") + "</td>" +
+          '<td style="' + td + ' font-weight:bold; width:50pt;' + bg(p) + '">' + (pi.mensual != null && pi.mensual !== "" ? formatoPesos(pi.mensual) : "") + "</td>";
       } else {
         filasItems +=
-          '<td style="' + td + ' font-weight:bold; width:62pt;' + bg(p) + '">' + (i === 0 ? "NO COTIZÓ" : "") + "</td>" +
-          '<td style="' + td + ' width:62pt;' + bg(p) + '"></td>';
+          '<td style="' + td + ' font-weight:bold; width:50pt;' + bg(p) + '">' + (i === 0 ? "NO COTIZÓ" : "") + "</td>" +
+          '<td style="' + td + ' width:50pt;' + bg(p) + '"></td>';
       }
     });
     filasItems += "</tr>";
@@ -646,22 +646,22 @@ function plantillaCuadro(d, logos) {
       (d.modulo || "").toUpperCase() + " A LA FIRMA : " + ganador.toUpperCase());
 
   const css =
-    ".hoja { font-family: Calibri, Arial, sans-serif; font-size:10pt; color:#000; } " +
-    ".hoja .pagina { padding: 16pt 26pt 20pt 26pt; } .hoja p { margin:0; }";
+    ".hoja { font-family: Calibri, Arial, sans-serif; font-size:8pt; color:#000; } " +
+    ".hoja .pagina { padding: 14pt 30pt 18pt 30pt; } .hoja p { margin:0; }";
 
   const body =
     '<div class="pagina ultima">' +
     '<table style="width:100%; border-collapse:collapse; margin-bottom:2pt;"><tr>' +
-    '<td style="border:none; padding:0; vertical-align:middle;"><img src="' + logos.pris + '" style="height:30pt;"></td>' +
-    '<td style="border:none; padding:0; vertical-align:middle; text-align:right;"><img src="' + logos.gob + '" style="height:38pt;"></td>' +
+    '<td style="border:none; padding:0; vertical-align:middle;"><img src="' + logos.pris + '" style="height:26pt;"></td>' +
+    '<td style="border:none; padding:0; vertical-align:middle; text-align:right;"><img src="' + logos.gob + '" style="height:32pt;"></td>' +
     "</tr></table>" +
-    '<p style="text-align:center; font-weight:bold; margin-top:6pt;">EXPTE : ' + esc(d.nroExpediente) + " - PTE " + esc(d.paciente).toUpperCase() +
+    '<p style="text-align:center; font-weight:bold; font-size:8.5pt; margin-top:5pt;">EXPTE : ' + esc(d.nroExpediente) + " - PTE " + esc(d.paciente).toUpperCase() +
     (d.periodoTexto ? " (Periodo que corresponde a " + esc(d.periodoTexto) + ")" : "") +
     "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;fecha de Adjudicacion " + fechaCortaHoy() + "</p>" +
     '<table style="border-collapse:collapse; margin:8pt auto 0;">' + encabezadoProv + filasItems + filaTotal + "</table>" +
-    '<div style="background:#F2F2F2; padding:5pt 6pt; margin-top:16pt; text-align:justify;">' + esc(adjudicacion) + "</div>" +
-    '<p style="text-align:justify; margin-top:12pt;">' + esc(constancia) + "</p>" +
-    '<p style="font-family:\'Times New Roman\', Times, serif; font-size:12pt; font-weight:bold; line-height:1.55; margin-top:24pt;">' +
+    '<div style="background:#F2F2F2; padding:4pt 5pt; margin-top:13pt; text-align:justify; font-size:8pt; max-width:460pt;">' + esc(adjudicacion) + "</div>" +
+    '<p style="text-align:justify; margin-top:10pt; font-size:8pt; max-width:520pt;">' + esc(constancia) + "</p>" +
+    '<p style="font-family:\'Times New Roman\', Times, serif; font-size:11pt; font-weight:bold; line-height:1.5; margin-top:20pt;">' +
     "Firmado digitalmente:<br>C.P.N Mariela Agustina Castillo<br>Gerente Administrativo<br>Dirección Gral. Prog. Integrado de Salud<br>SI.PRO.SA</p>" +
     "</div>";
 
