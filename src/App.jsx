@@ -658,6 +658,7 @@ async function crearPdfCuadro(PDFLib, d, prisBytes, gobBytes) {
   const GRIS_GANA = rgb(231 / 255, 230 / 255, 230 / 255);   // #E7E6E6
   const GRIS_GANA_H = rgb(217 / 255, 217 / 255, 217 / 255); // #D9D9D9
   const GRIS_ENC = rgb(242 / 255, 242 / 255, 242 / 255);    // #F2F2F2
+  const GRIS_MOD = rgb(226 / 255, 232 / 255, 240 / 255);    // encabezado de módulo
 
   const MX = 30;              // margen izquierdo
   let y = 595 - 26;           // cursor vertical (desde arriba)
@@ -688,6 +689,12 @@ async function crearPdfCuadro(PDFLib, d, prisBytes, gobBytes) {
   const centrado = (texto, font, size, cx, cy) => {
     page.drawText(texto, { x: cx - font.widthOfTextAtSize(texto, size) / 2, y: cy, size, font, color: NEGRO });
   };
+  // Achica el texto hasta que entre en el ancho pedido (para nombres largos)
+  const encoger = (texto, font, size, maxW) => {
+    let s = size;
+    while (s > 5 && font.widthOfTextAtSize(String(texto), s) > maxW) s -= 0.25;
+    return s;
+  };
 
   // ---- título en dos líneas (la fecha de adjudicación abajo, alineada con el EXPTE) ----
   const tituloL1 = "EXPTE : " + d.nroExpediente + " - PTE " + d.paciente.toUpperCase() +
@@ -700,15 +707,23 @@ async function crearPdfCuadro(PDFLib, d, prisBytes, gobBytes) {
   });
   y -= 4;
 
-  // ---- geometría de la tabla ----
-  const responden = (d.proveedores || []).filter((p) => p.estado !== "sin_respuesta");
-  const todos = d.proveedores || [];
+  // ---- datos de módulos y adjudicación ----
   const items = d.items && d.items.length ? d.items : [{ nombre: d.modulo || "", cantTexto: "", cantNum: "" }];
-  const ganador = (d.adjudicado && d.adjudicado.nombre) || "";
-  const gana = (p) => p.nombre === ganador;
+  const modulos = modulosDeItems(items);
+  const multi = modulos.length > 1;
+  const adjs = d.adjudicaciones && d.adjudicaciones.length
+    ? d.adjudicaciones
+    : [{ modulo: modulos[0], proveedor: (d.adjudicado && d.adjudicado.nombre) || "", mensual: 0 }];
+  const ganadorDe = (mod) => { const a = adjs.find((x) => x.modulo === mod); return a ? a.proveedor : ""; };
+  const ganaAlgo = (nombre) => adjs.some((a) => a.proveedor === nombre);
 
-  const anchos = [88, 42, 30];
-  responden.forEach(() => { anchos.push(50, 50); });
+  // ---- geometría de la tabla (los anchos se achican si hay muchos proveedores) ----
+  const responden = (d.proveedores || []).filter((p) => p.estado !== "sin_respuesta");
+  const ANCHO_UTIL = 842 - MX * 2;
+  const wDetalle = [88, 42, 30];
+  const wPar = Math.max(30, Math.min(50, Math.floor((ANCHO_UTIL - 160) / (2 * Math.max(responden.length, 1)))));
+  const anchos = wDetalle.slice();
+  responden.forEach(() => { anchos.push(wPar, wPar); });
   const xCols = [MX];
   anchos.forEach((a) => xCols.push(xCols[xCols.length - 1] + a));
   const anchoTabla = xCols[xCols.length - 1] - MX;
@@ -722,22 +737,29 @@ async function crearPdfCuadro(PDFLib, d, prisBytes, gobBytes) {
     page.drawRectangle({ x, y: yTop - alto, width: w, height: alto, borderColor: NEGRO, borderWidth: 0.75 });
     const totalTxt = lineas.length * LH;
     let ty = yTop - (alto - totalTxt) / 2 - LH + 2.4;
-    lineas.forEach((l) => { centrado(l, font, F, x + w / 2, ty); ty -= LH; });
+    lineas.forEach((l) => {
+      const s = encoger(l, font, F, w - 3);
+      page.drawText(String(l), { x: x + w / 2 - font.widthOfTextAtSize(String(l), s) / 2, y: ty, size: s, font, color: NEGRO });
+      ty -= LH;
+    });
   };
-  const celdaCombinada = (colIni, nCols, yTop, alto, texto, font, fondo) => {
+  const celdaCombinada = (colIni, nCols, yTop, alto, texto, font, fondo, alineIzq) => {
     const x = xCols[colIni];
     let w = 0;
     for (let k = 0; k < nCols; k++) w += anchos[colIni + k];
     if (fondo) page.drawRectangle({ x, y: yTop - alto, width: w, height: alto, color: fondo });
     page.drawRectangle({ x, y: yTop - alto, width: w, height: alto, borderColor: NEGRO, borderWidth: 0.75 });
-    centrado(texto, font, F, x + w / 2, yTop - alto / 2 - 2.8);
+    const s = encoger(texto, font, F, w - 8);
+    const ty = yTop - alto / 2 - 2.8;
+    if (alineIzq) page.drawText(String(texto), { x: x + 4, y: ty, size: s, font, color: NEGRO });
+    else page.drawText(String(texto), { x: x + w / 2 - font.widthOfTextAtSize(String(texto), s) / 2, y: ty, size: s, font, color: NEGRO });
   };
 
   // ---- fila 1: DETALLE SOLICITADO + proveedores ----
   const h1 = 12;
   celdaCombinada(0, 3, y, h1, "DETALLE SOLICITADO", helvB, GRIS_ENC);
   responden.forEach((p, i) => {
-    celdaCombinada(3 + i * 2, 2, y, h1, p.nombre.toUpperCase(), helvB, gana(p) ? GRIS_GANA_H : GRIS_ENC);
+    celdaCombinada(3 + i * 2, 2, y, h1, p.nombre.toUpperCase(), helvB, ganaAlgo(p.nombre) ? GRIS_GANA_H : GRIS_ENC);
   });
   y -= h1;
 
@@ -747,65 +769,120 @@ async function crearPdfCuadro(PDFLib, d, prisBytes, gobBytes) {
   celda(1, y, h2, ["CANTIDAD"], helvB, null);
   celda(2, y, h2, partir("CANT DE HS/SES.", helvB, F, anchos[2] - 4), helvB, null);
   responden.forEach((p, i) => {
-    celda(3 + i * 2, y, h2, ["P.", "UNITARIO"], helvB, gana(p) ? GRIS_GANA : null);
-    celda(4 + i * 2, y, h2, ["P.", "MENSUAL"], helvB, gana(p) ? GRIS_GANA : null);
+    const g = ganaAlgo(p.nombre) && !multi;
+    celda(3 + i * 2, y, h2, ["P.", "UNITARIO"], helvB, g ? GRIS_GANA : null);
+    celda(4 + i * 2, y, h2, ["P.", "MENSUAL"], helvB, g ? GRIS_GANA : null);
   });
   y -= h2;
 
-  // ---- filas de ítems ----
-  items.forEach((it, idx) => {
+  // ---- filas de ítems, agrupadas por módulo ----
+  const nCols = anchos.length;
+  const dibujarItem = (it, idx, mod) => {
     const lN = partir(it.nombre, helv, F, anchos[0] - 6);
     const lC = partir(it.cantTexto || "", helv, F, anchos[1] - 6);
     const alto = Math.max(lN.length, lC.length, 1) * LH + 6;
     celda(0, y, alto, lN, helv, null);
     celda(1, y, alto, lC, helv, null);
     celda(2, y, alto, [String(it.cantNum || "")], helv, null);
+    const primeroDelModulo = itemsDelModulo(items, mod)[0];
+    const esPrimero = primeroDelModulo && primeroDelModulo.i === idx;
     responden.forEach((p, i) => {
-      const fondo = gana(p) ? GRIS_GANA : null;
-      if (p.estado === "cotizo") {
+      const gana = ganadorDe(mod) === p.nombre;
+      const fondo = gana ? GRIS_GANA : null;
+      const inf = infoModulo(p, mod);
+      if (p.estado !== "cotizo" || inf.noCotiza) {
+        celda(3 + i * 2, y, alto, [esPrimero ? "NO COTIZÓ" : ""], helvB, fondo);
+        celda(4 + i * 2, y, alto, [""], helv, fondo);
+      } else if (inf.modo === "modulo") {
+        celda(3 + i * 2, y, alto, esPrimero ? partir(inf.leyenda || "COTIZA POR MODULO", helv, F, anchos[3] - 4) : [""], helv, fondo);
+        celda(4 + i * 2, y, alto, [""], helv, fondo);
+      } else {
         const pi = (p.items || [])[idx] || {};
         celda(3 + i * 2, y, alto, [pi.unitario != null && pi.unitario !== "" ? d.fmt(pi.unitario) : ""], helvB, fondo);
         celda(4 + i * 2, y, alto, [pi.mensual != null && pi.mensual !== "" ? d.fmt(pi.mensual) : ""], helvB, fondo);
-      } else {
-        celda(3 + i * 2, y, alto, [idx === 0 ? "NO COTIZÓ" : ""], helvB, fondo);
-        celda(4 + i * 2, y, alto, [""], helv, fondo);
       }
     });
     y -= alto;
-  });
+  };
 
-  // ---- fila TOTAL MENSUAL ----
-  if (items.length > 1) {
-    const hT = 13;
-    celdaCombinada(0, 3, y, hT, "TOTAL MENSUAL", helvB, null);
-    responden.forEach((p, i) => {
-      const fondo = gana(p) ? GRIS_GANA : null;
-      celda(3 + i * 2, y, hT, [""], helv, fondo);
-      celda(4 + i * 2, y, hT, [p.estado === "cotizo" ? d.fmt(p.mensual) : ""], helvB, fondo);
+  if (!multi) {
+    // ---- comportamiento de siempre: un solo bloque ----
+    items.forEach((it, idx) => dibujarItem(it, idx, modulos[0]));
+    if (items.length > 1) {
+      const hT = 13;
+      celdaCombinada(0, 3, y, hT, "TOTAL MENSUAL", helvB, null);
+      responden.forEach((p, i) => {
+        const fondo = ganaAlgo(p.nombre) ? GRIS_GANA : null;
+        const st = subtotalModulo(p, items, modulos[0]);
+        celda(3 + i * 2, y, hT, [""], helv, fondo);
+        celda(4 + i * 2, y, hT, [st != null ? d.fmt(st) : ""], helvB, fondo);
+      });
+      y -= hT;
+    }
+  } else {
+    // ---- un bloque por módulo, con su subtotal y su firma adjudicada ----
+    modulos.forEach((mod) => {
+      const hM = 13;
+      const gan = ganadorDe(mod);
+      celdaCombinada(0, nCols, y, hM,
+        "MODULO: " + (mod || "SIN MODULO").toUpperCase() + (gan ? "   —   ADJUDICADO A: " + gan.toUpperCase() : ""),
+        helvB, GRIS_MOD, true);
+      y -= hM;
+      itemsDelModulo(items, mod).forEach(({ it, i }) => dibujarItem(it, i, mod));
+      const hS = 13;
+      celdaCombinada(0, 3, y, hS, "SUBTOTAL MENSUAL", helvB, null);
+      responden.forEach((p, i) => {
+        const fondo = gan === p.nombre ? GRIS_GANA : null;
+        const st = subtotalModulo(p, items, mod);
+        celda(3 + i * 2, y, hS, [""], helv, fondo);
+        celda(4 + i * 2, y, hS, [st != null ? d.fmt(st) : ""], helvB, fondo);
+      });
+      y -= hS;
     });
-    y -= hT;
+    const hTot = 14;
+    const totalAdj = adjs.reduce((s, a) => s + (Number(a.mensual) || 0), 0);
+    celdaCombinada(0, nCols, y, hTot, "TOTAL MENSUAL ADJUDICADO:  " + d.fmt(totalAdj), helvB, GRIS_GANA_H, true);
+    y -= hTot;
   }
 
-  // ---- recuadro de adjudicación ----
-  y -= 14;
-  const wAdj = Math.min(Math.max(anchoTabla, 300), 420);
-  const lAdj = partir(d.textoAdjudicacion, helv, F, wAdj - 10);
-  const hAdj = lAdj.length * LH + 8;
-  page.drawRectangle({ x: MX, y: y - hAdj, width: wAdj, height: hAdj, color: GRIS_ENC });
-  let ty = y - LH + 1;
-  lAdj.forEach((l) => { page.drawText(l, { x: MX + 5, y: ty - 3, size: F, font: helv, color: NEGRO }); ty -= LH; });
-  y -= hAdj + 11;
+  // ---- bloque final: adjudicación(es), constancia y firma ----
+  // Se mide todo antes de dibujar y, si no entra, se comprimen los espacios
+  // (con un solo módulo sobra lugar y no se comprime nada: sale igual que siempre).
+  const textos = (d.textosAdjudicacion && d.textosAdjudicacion.length)
+    ? d.textosAdjudicacion.filter(Boolean)
+    : [d.textoAdjudicacion].filter(Boolean);
+  const wAdj = Math.min(Math.max(anchoTabla, 300), 460);
+  const bloques = textos.map((t) => partir(t, helv, F, wAdj - 10));
+  const lConst = partir(d.textoConstancia, helv, F, Math.min(Math.max(anchoTabla, 300), 460));
+  const lFirma = ["Firmado digitalmente:", "C.P.N Mariela Agustina Castillo", "Gerente Administrativo",
+                  "Dirección Gral. Prog. Integrado de Salud", "SI.PRO.SA"];
 
-  // ---- constancia ----
-  const lConst = partir(d.textoConstancia, helv, F, Math.min(Math.max(anchoTabla, 300), 440));
+  let gapTop = 14, gapAdj = 9, gapConst = 2, gapFirma = 16, firmaPaso = 16, firmaSize = 11;
+  const altoPie = () =>
+    gapTop + bloques.reduce((s, b) => s + b.length * LH + 8 + gapAdj, 0) +
+    gapConst + lConst.length * LH + gapFirma + lFirma.length * firmaPaso;
+  const entra = () => y - altoPie() >= 6;
+  while (!entra() && firmaPaso > 11.5) { firmaPaso -= 0.5; firmaSize = Math.max(8.5, firmaSize - 0.12); }
+  while (!entra() && gapFirma > 6) { gapFirma -= 1; }
+  while (!entra() && gapAdj > 3) { gapAdj -= 0.5; }
+  while (!entra() && gapTop > 5) { gapTop -= 1; }
+
+  y -= gapTop;
+  bloques.forEach((lAdj) => {
+    const hAdj = lAdj.length * LH + 8;
+    page.drawRectangle({ x: MX, y: y - hAdj, width: wAdj, height: hAdj, color: GRIS_ENC });
+    let ty = y - LH + 1;
+    lAdj.forEach((l) => { page.drawText(l, { x: MX + 5, y: ty - 3, size: F, font: helv, color: NEGRO }); ty -= LH; });
+    y -= hAdj + gapAdj;
+  });
+  y -= gapConst;
+
   lConst.forEach((l) => { page.drawText(l, { x: MX, y: y - 6, size: F, font: helv, color: NEGRO }); y -= LH; });
 
-  // ---- firma ----
-  y -= 16;
-  ["Firmado digitalmente:", "C.P.N Mariela Agustina Castillo", "Gerente Administrativo",
-   "Dirección Gral. Prog. Integrado de Salud", "SI.PRO.SA"].forEach((l) => {
-    page.drawText(l, { x: MX, y: y - 9, size: 11, font: timesB, color: NEGRO });
-    y -= 16;
+  y -= gapFirma;
+  lFirma.forEach((l) => {
+    page.drawText(l, { x: MX, y: y - 9, size: firmaSize, font: timesB, color: NEGRO });
+    y -= firmaPaso;
   });
 
   return doc.save();
@@ -976,6 +1053,85 @@ function extraerItemsDeTexto(texto) {
   return items;
 }
 
+/* ---------- MÓDULOS DEL CUADRO COMPARATIVO ----------
+   Un ítem puede llevar un campo "modulo" (texto libre). Si ningún ítem lo tiene,
+   o todos comparten el mismo, el cuadro se comporta exactamente como antes. */
+
+function modulosDeItems(items) {
+  const vistos = [];
+  (items || []).forEach((it) => {
+    const m = it && it.modulo ? String(it.modulo).trim() : "";
+    if (!vistos.includes(m)) vistos.push(m);
+  });
+  return vistos.length ? vistos : [""];
+}
+
+function hayVariosModulos(items) { return modulosDeItems(items).length > 1; }
+
+function itemsDelModulo(items, mod) {
+  const salida = [];
+  (items || []).forEach((it, i) => {
+    const m = it && it.modulo ? String(it.modulo).trim() : "";
+    if (m === mod) salida.push({ it, i });
+  });
+  return salida;
+}
+
+function infoModulo(prov, mod) {
+  const m = (prov && prov.modulos && prov.modulos[mod]) || {};
+  return {
+    noCotiza: !!m.noCotiza,
+    modo: m.modo === "modulo" ? "modulo" : "item",
+    montoModulo: m.montoModulo != null && m.montoModulo !== "" ? Number(m.montoModulo) : null,
+    leyenda: m.leyenda || "",
+  };
+}
+
+// Subtotal mensual de un proveedor para un módulo. null = no cotizó ese módulo.
+function subtotalModulo(prov, items, mod) {
+  if (!prov || prov.estado !== "cotizo") return null;
+  const inf = infoModulo(prov, mod);
+  if (inf.noCotiza) return null;
+  if (inf.modo === "modulo") return inf.montoModulo;
+  let suma = 0, hay = false;
+  itemsDelModulo(items, mod).forEach(({ i }) => {
+    const pi = (prov.items || [])[i] || {};
+    if (pi.mensual != null && pi.mensual !== "" && !isNaN(Number(pi.mensual))) { suma += Number(pi.mensual); hay = true; }
+  });
+  return hay ? suma : null;
+}
+
+function ganadorDeModulo(proveedores, items, mod) {
+  let mejor = null, mejorValor = Infinity;
+  (proveedores || []).forEach((p) => {
+    const v = subtotalModulo(p, items, mod);
+    if (v != null && v < mejorValor) { mejorValor = v; mejor = p.nombre; }
+  });
+  return mejor;
+}
+
+// forzados = { [modulo]: nombreProveedor } — lo que el usuario marcó a mano
+function calcularAdjudicaciones(proveedores, items, forzados) {
+  return modulosDeItems(items).map((mod) => {
+    const auto = ganadorDeModulo(proveedores, items, mod);
+    const elegido = (forzados && forzados[mod]) || auto || "";
+    const prov = (proveedores || []).find((p) => p.nombre === elegido);
+    const mensual = prov ? (subtotalModulo(prov, items, mod) || 0) : 0;
+    return { modulo: mod, proveedor: elegido, mensual, auto: auto || "", forzado: !!(elegido && auto && elegido !== auto) };
+  });
+}
+
+function totalMensualAdjudicado(adjs) {
+  return (adjs || []).reduce((s, a) => s + (Number(a.mensual) || 0), 0);
+}
+
+// Firmas distintas que quedaron adjudicadas, en orden
+function firmasAdjudicadas(adjs) {
+  const f = [];
+  (adjs || []).forEach((a) => { if (a.proveedor && !f.includes(a.proveedor)) f.push(a.proveedor); });
+  return f;
+}
+
 const payloadCuadro = (exp) => {
   const consultados = (exp.cotizacion?.proveedores || "").split(",").map((s) => s.trim()).filter(Boolean);
   const guardados = exp.presupuestos || {};
@@ -998,8 +1154,11 @@ const payloadCuadro = (exp) => {
       estado: guardados[n]?.estado || "sin_respuesta",
       mensual: guardados[n]?.mensual ?? null,
       items: itemsDe(guardados[n]),
+      modulos: guardados[n]?.modulos || {},
     })),
     adjudicado: { nombre: c.adjudicado, mensual: c.mensual, total: c.total },
+    adjudicaciones: c.adjudicaciones || [],
+    textosAdjudicacion: c.textosAdjudicacion || [],
   };
 };
 
@@ -1761,11 +1920,19 @@ function RevisarCuadro({ exp }) {
 
   const payload = payloadCuadro(exp);
 
+  const adjsGuardadas = payload.adjudicaciones && payload.adjudicaciones.length
+    ? payload.adjudicaciones
+    : [{ modulo: modulosDeItems(payload.items)[0], proveedor: payload.adjudicado.nombre || "", mensual: payload.adjudicado.mensual || 0 }];
+
   const abrir = () => {
+    const previos = (payload.textosAdjudicacion && payload.textosAdjudicacion.length)
+      ? payload.textosAdjudicacion
+      : (payload.textoAdjudicacion ? [payload.textoAdjudicacion] : []);
     setTextos({
-      adjudicacion: payload.textoAdjudicacion ||
-        ("CONFORME A LO DETALLADO EN EL CUADRO COMPARATIVO , SE ADJUDICA SERVICIO DE " +
-          (exp.modulo || "").toUpperCase() + " A LA FIRMA : " + (payload.adjudicado.nombre || "").toUpperCase()),
+      adjudicaciones: previos.length ? previos : adjsGuardadas.filter((a) => a.proveedor).map((a) =>
+        "CONFORME A LO DETALLADO EN EL CUADRO COMPARATIVO , SE ADJUDICA SERVICIO DE " +
+        ((modulosDeItems(payload.items).length > 1 ? a.modulo : (exp.modulo || a.modulo)) || "").toUpperCase() +
+        " A LA FIRMA : " + (a.proveedor || "").toUpperCase()),
       constancia: payload.textoConstancia || "",
     });
     setAbierto(true);
@@ -1782,18 +1949,23 @@ function RevisarCuadro({ exp }) {
         fechaCorta: fechaCortaHoy(), fmt: formatoPesos,
         items: payload.items, proveedores: payload.proveedores,
         adjudicado: payload.adjudicado,
-        textoAdjudicacion: textos.adjudicacion, textoConstancia: textos.constancia,
+        adjudicaciones: adjsGuardadas,
+        textosAdjudicacion: textos.adjudicaciones,
+        textoAdjudicacion: (textos.adjudicaciones || []).join("  "),
+        textoConstancia: textos.constancia,
       }, logosB.pris, logosB.gob);
       descargarBytes(bytes, "CUADRO COMPARATIVO " + exp.nroExpediente.replace(/\//g, "-") + " " + exp.paciente.toUpperCase() + ".pdf");
       if (conExcel) {
         await llamarYDescargar({
           ...payload,
-          textoAdjudicacion: textos.adjudicacion,
+          textoAdjudicacion: (textos.adjudicaciones || []).join("  "),
+          textosAdjudicacion: textos.adjudicaciones,
           textoConstancia: textos.constancia,
         }, true, false);
       }
       await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
-        "cuadro.textoAdjudicacion": textos.adjudicacion,
+        "cuadro.textoAdjudicacion": (textos.adjudicaciones || []).join("  "),
+        "cuadro.textosAdjudicacion": textos.adjudicaciones,
         "cuadro.textoConstancia": textos.constancia,
       });
       alert("✅ Cuadro descargado" + (conExcel ? " (PDF + Excel)." : " (PDF)."));
@@ -1814,6 +1986,11 @@ function RevisarCuadro({ exp }) {
 
   const listaVisible = payload.proveedores.filter((p) => p.estado !== "sin_respuesta");
   const items = payload.items;
+  const modsRev = modulosDeItems(items);
+  const variosRev = modsRev.length > 1;
+  const adjRevDe = (mod) => adjsGuardadas.find((a) => a.modulo === mod) || { proveedor: "" };
+  const ganaRev = (mod, nombre) => !!nombre && adjRevDe(mod).proveedor === nombre;
+  const ganaAlgoRev = (nombre) => adjsGuardadas.some((a) => a.proveedor === nombre);
   const ganador = payload.adjudicado.nombre;
 
   return (
@@ -1827,40 +2004,79 @@ function RevisarCuadro({ exp }) {
               <th style={{ border: "1px solid #334155", padding: 6, background: "#F2F2F2" }}>PRESTACION</th>
               <th style={{ border: "1px solid #334155", padding: 6, background: "#F2F2F2" }}>CANT</th>
               {listaVisible.map((p) => (
-                <th key={p.nombre} colSpan={2} style={{ border: "1px solid #334155", padding: 6, background: p.nombre === ganador ? "#D9D9D9" : "#F2F2F2" }}>
-                  {p.nombre.toUpperCase()}{p.nombre === ganador ? " 🏆" : ""}
+                <th key={p.nombre} colSpan={2} style={{ border: "1px solid #334155", padding: 6, background: ganaAlgoRev(p.nombre) ? "#D9D9D9" : "#F2F2F2" }}>
+                  {p.nombre.toUpperCase()}{ganaAlgoRev(p.nombre) ? " 🏆" : ""}
                 </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {items.map((it, i) => (
-              <tr key={i}>
-                <td style={{ border: "1px solid #334155", padding: 6 }}>{it.nombre}</td>
-                <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center" }}>{[it.cantTexto, it.cantNum].filter(Boolean).join(" / ")}</td>
-                {listaVisible.map((p) => (
-                  <Fragment key={p.nombre}>
-                    <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 700, background: p.nombre === ganador ? "#E7E6E6" : "#fff" }}>
-                      {p.estado === "cotizo" ? formatoPesos(p.items[i]?.unitario) : i === 0 ? "NO COTIZÓ" : ""}
-                    </td>
-                    <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 700, background: p.nombre === ganador ? "#E7E6E6" : "#fff" }}>
-                      {p.estado === "cotizo" ? formatoPesos(p.items[i]?.mensual) : ""}
-                    </td>
-                  </Fragment>
-                ))}
-              </tr>
-            ))}
-            {items.length > 1 && (
+            {modsRev.map((mod) => {
+              const delModulo = itemsDelModulo(items, mod);
+              const primerIndice = delModulo.length ? delModulo[0].i : -1;
+              return (
+                <Fragment key={mod}>
+                  {variosRev && (
+                    <tr>
+                      <td colSpan={2 + listaVisible.length * 2} style={{ border: "1px solid #334155", padding: 6, background: "#e2e8f0", fontWeight: 800 }}>
+                        🧩 {(mod || "SIN MÓDULO").toUpperCase()}
+                        {adjRevDe(mod).proveedor ? " — ADJUDICADO A: " + adjRevDe(mod).proveedor.toUpperCase() : ""}
+                      </td>
+                    </tr>
+                  )}
+                  {delModulo.map(({ it, i }) => (
+                    <tr key={i}>
+                      <td style={{ border: "1px solid #334155", padding: 6 }}>{it.nombre}</td>
+                      <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center" }}>{[it.cantTexto, it.cantNum].filter(Boolean).join(" / ")}</td>
+                      {listaVisible.map((p) => {
+                        const inf = infoModulo(p, mod);
+                        const fondo = ganaRev(mod, p.nombre) ? "#E7E6E6" : "#fff";
+                        const primero = i === primerIndice;
+                        const sinPrecio = p.estado !== "cotizo" || inf.noCotiza;
+                        return (
+                          <Fragment key={p.nombre}>
+                            <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 700, background: fondo, fontSize: inf.modo === "modulo" ? 11 : 13 }}>
+                              {sinPrecio
+                                ? (primero ? "NO COTIZÓ" : "")
+                                : inf.modo === "modulo"
+                                  ? (primero ? (inf.leyenda || "COTIZA POR MÓDULO") : "")
+                                  : formatoPesos(p.items[i]?.unitario)}
+                            </td>
+                            <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 700, background: fondo }}>
+                              {!sinPrecio && inf.modo !== "modulo" ? formatoPesos(p.items[i]?.mensual) : ""}
+                            </td>
+                          </Fragment>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                  {(variosRev || items.length > 1) && (
+                    <tr>
+                      <td colSpan={2} style={{ border: "1px solid #334155", padding: 6, fontWeight: 800 }}>
+                        {variosRev ? "SUBTOTAL " + (mod || "SIN MÓDULO").toUpperCase() : "TOTAL MENSUAL"}
+                      </td>
+                      {listaVisible.map((p) => {
+                        const st = subtotalModulo(p, items, mod);
+                        const fondo = ganaRev(mod, p.nombre) ? "#E7E6E6" : "#fff";
+                        return (
+                          <Fragment key={p.nombre}>
+                            <td style={{ border: "1px solid #334155", padding: 6, background: fondo }}></td>
+                            <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 800, background: fondo }}>
+                              {st != null ? formatoPesos(st) : ""}
+                            </td>
+                          </Fragment>
+                        );
+                      })}
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
+            {variosRev && (
               <tr>
-                <td colSpan={2} style={{ border: "1px solid #334155", padding: 6, fontWeight: 800 }}>TOTAL MENSUAL</td>
-                {listaVisible.map((p) => (
-                  <Fragment key={p.nombre}>
-                    <td style={{ border: "1px solid #334155", padding: 6, background: p.nombre === ganador ? "#E7E6E6" : "#fff" }}></td>
-                    <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 800, background: p.nombre === ganador ? "#E7E6E6" : "#fff" }}>
-                      {p.estado === "cotizo" ? formatoPesos(p.mensual) : ""}
-                    </td>
-                  </Fragment>
-                ))}
+                <td colSpan={2 + listaVisible.length * 2} style={{ border: "1px solid #334155", padding: 6, background: "#D9D9D9", fontWeight: 800, textAlign: "right" }}>
+                  TOTAL MENSUAL ADJUDICADO: {formatoPesos(totalMensualAdjudicado(adjsGuardadas))}
+                </td>
               </tr>
             )}
           </tbody>
@@ -1870,9 +2086,17 @@ function RevisarCuadro({ exp }) {
         Los precios salen de los presupuestos cargados — si hay que corregir un precio, usá "↩️ Reabrir presupuestos". Los textos de abajo sí podés editarlos acá.
       </div>
 
-      <label style={S.label}>Texto de adjudicación (recuadro gris del cuadro)</label>
-      <textarea style={{ ...S.input, minHeight: 60 }} value={textos.adjudicacion}
-        onChange={(e) => setTextos({ ...textos, adjudicacion: e.target.value })} />
+      <label style={S.label}>
+        {(textos.adjudicaciones || []).length > 1 ? "Textos de adjudicación (un recuadro gris por módulo)" : "Texto de adjudicación (recuadro gris del cuadro)"}
+      </label>
+      {(textos.adjudicaciones || []).map((t, k) => (
+        <textarea key={k} style={{ ...S.input, minHeight: 60, marginBottom: 6 }} value={t}
+          onChange={(e) => {
+            const arr = [...textos.adjudicaciones];
+            arr[k] = e.target.value;
+            setTextos({ ...textos, adjudicaciones: arr });
+          }} />
+      ))}
 
       <label style={S.label}>Texto de constancia (proveedores consultados)</label>
       <textarea style={{ ...S.input, minHeight: 90 }} value={textos.constancia}
@@ -2141,7 +2365,10 @@ function RegistroPresupuestos({ exp }) {
     const nuevos = items.map((it, idx) => (idx === i ? { ...it, [campo]: valor } : it));
     setItems(nuevos);
   };
-  const agregarItem = () => setItems([...items, { nombre: "", cantTexto: "", cantNum: "" }]);
+  const agregarItem = () => setItems([...items, {
+    nombre: "", cantTexto: "", cantNum: "",
+    modulo: items.length ? (items[items.length - 1].modulo || "") : "",
+  }]);
 
   const aplicarItemsNuevos = (nuevos, origen) => {
     if (!confirm(`Se van a reemplazar los ítems actuales por los extraídos ${origen}:\n\n${nuevos.map((p) => "• " + p.nombre + (p.cantTexto ? " (" + p.cantTexto + ")" : "")).join("\n")}\n\nLos precios ya cargados por ítem se limpian (los estados de los proveedores se mantienen). ¿Continuar?`)) return false;
@@ -2179,6 +2406,7 @@ function RegistroPresupuestos({ exp }) {
         estado: guardados[n]?.estado || "",
         pdfNombre: guardados[n]?.pdfNombre || "",
         items: itemsProveedorIniciales(guardados[n]),
+        modulos: guardados[n]?.modulos ? JSON.parse(JSON.stringify(guardados[n].modulos)) : {},
       };
     });
     return d;
@@ -2201,7 +2429,37 @@ function RegistroPresupuestos({ exp }) {
     setDatos({ ...datos, [nombre]: { ...d, items: arr } });
   };
 
+  const setProvModulo = (nombre, mod, campo, valor) => {
+    const d = datos[nombre] || {};
+    const mods = { ...(d.modulos || {}) };
+    mods[mod] = { ...(mods[mod] || {}), [campo]: valor };
+    setDatos({ ...datos, [nombre]: { ...d, modulos: mods } });
+  };
+
   const sumaMensual = (arrItems) => (arrItems || []).reduce((s, it) => s + (Number(it?.mensual) || 0), 0);
+
+  // Lista de módulos del expediente y si hay más de uno
+  const modulos = modulosDeItems(items);
+  const variosModulos = modulos.length > 1;
+  const nombreModulo = (m) => m || "Sin módulo";
+
+  // Subtotal en pantalla de un proveedor para un módulo (con lo tipeado, no lo guardado)
+  const subtotalEnPantalla = (nombre, mod) => {
+    const d = datos[nombre] || {};
+    const inf = (d.modulos || {})[mod] || {};
+    if (inf.noCotiza) return null;
+    if (inf.modo === "modulo") {
+      return inf.montoModulo !== "" && inf.montoModulo != null ? Number(inf.montoModulo) : null;
+    }
+    let suma = 0, hay = false;
+    itemsDelModulo(items, mod).forEach(({ i }) => {
+      const v = d.items?.[i]?.mensual;
+      if (v !== "" && v != null && !isNaN(Number(v))) { suma += Number(v); hay = true; }
+    });
+    return hay ? suma : null;
+  };
+  const mensualEnPantalla = (nombre) =>
+    modulos.reduce((s, m) => s + (subtotalEnPantalla(nombre, m) || 0), 0);
 
   // Registro parcial de un proveedor con lo tipeado hasta ahora (para el autoguardado)
   const registroParcial = (nombre) => {
@@ -2214,11 +2472,24 @@ function RegistroPresupuestos({ exp }) {
           mensual: d.items?.[i]?.mensual !== "" && d.items?.[i]?.mensual != null ? Number(d.items[i].mensual) : null,
         }))
       : [];
-    const cargados = its.filter((it) => it.mensual != null);
+    const mods = {};
+    if (d.estado === "cotizo") {
+      modulos.forEach((m) => {
+        const inf = (d.modulos || {})[m] || {};
+        mods[m] = {
+          modo: inf.modo === "modulo" ? "modulo" : "item",
+          noCotiza: !!inf.noCotiza,
+          montoModulo: inf.montoModulo !== "" && inf.montoModulo != null ? Number(inf.montoModulo) : null,
+          leyenda: inf.leyenda || "",
+        };
+      });
+    }
+    const totalMes = d.estado === "cotizo" ? mensualEnPantalla(nombre) : null;
     return {
       estado: d.estado,
       items: its,
-      mensual: d.estado === "cotizo" && cargados.length ? cargados.reduce((s, it) => s + it.mensual, 0) : null,
+      modulos: mods,
+      mensual: totalMes || null,
       unitario: d.estado === "cotizo" && its.length === 1 && its[0].unitario != null ? its[0].unitario : null,
       pdfNombre: d.pdfNombre || "",
       fecha: guardados[nombre]?.fecha || new Date().toISOString(),
@@ -2251,12 +2522,30 @@ function RegistroPresupuestos({ exp }) {
     const d = datos[nombre];
     if (!d.estado) { alert("Marcá el estado del presupuesto de " + nombre); return; }
     if (d.estado === "cotizo") {
-      for (let i = 0; i < items.length; i++) {
-        const it = d.items?.[i];
-        if (!it || it.unitario === "" || it.mensual === "") {
-          alert(`Cargá el precio unitario y el mensual de "${items[i].nombre || "ítem " + (i + 1)}" para ${nombre}.`);
-          return;
+      let algunModulo = false;
+      for (const mod of modulos) {
+        const inf = (d.modulos || {})[mod] || {};
+        if (inf.noCotiza) continue;
+        if (inf.modo === "modulo") {
+          if (inf.montoModulo === "" || inf.montoModulo == null) {
+            alert(`Cargá el monto mensual del módulo "${nombreModulo(mod)}" para ${nombre}, o marcalo como "no cotiza".`);
+            return;
+          }
+          algunModulo = true;
+          continue;
         }
+        for (const { it, i } of itemsDelModulo(items, mod)) {
+          const pi = d.items?.[i];
+          if (!pi || pi.unitario === "" || pi.unitario == null || pi.mensual === "" || pi.mensual == null) {
+            alert(`Cargá el precio unitario y el mensual de "${it.nombre || "ítem " + (i + 1)}" para ${nombre}.`);
+            return;
+          }
+        }
+        algunModulo = true;
+      }
+      if (!algunModulo) {
+        alert(`${nombre} quedó con todos los módulos marcados como "no cotiza". Si no cotizó nada, marcalo como negativa o sin respuesta.`);
+        return;
       }
     }
     setOcupado(true);
@@ -2281,14 +2570,27 @@ function RegistroPresupuestos({ exp }) {
       const itemsRegistro = d.estado === "cotizo"
         ? items.map((it, i) => ({
             nombre: it.nombre,
-            unitario: Number(d.items[i].unitario),
-            mensual: Number(d.items[i].mensual),
+            unitario: d.items?.[i]?.unitario !== "" && d.items?.[i]?.unitario != null ? Number(d.items[i].unitario) : null,
+            mensual: d.items?.[i]?.mensual !== "" && d.items?.[i]?.mensual != null ? Number(d.items[i].mensual) : null,
           }))
         : [];
+      const modulosRegistro = {};
+      if (d.estado === "cotizo") {
+        modulos.forEach((m) => {
+          const inf = (d.modulos || {})[m] || {};
+          modulosRegistro[m] = {
+            modo: inf.modo === "modulo" ? "modulo" : "item",
+            noCotiza: !!inf.noCotiza,
+            montoModulo: inf.montoModulo !== "" && inf.montoModulo != null ? Number(inf.montoModulo) : null,
+            leyenda: inf.leyenda || "",
+          };
+        });
+      }
       const registro = {
         estado: d.estado,
         items: itemsRegistro,
-        mensual: d.estado === "cotizo" ? sumaMensual(itemsRegistro) : null,
+        modulos: modulosRegistro,
+        mensual: d.estado === "cotizo" ? mensualEnPantalla(nombre) : null,
         unitario: d.estado === "cotizo" && itemsRegistro.length === 1 ? itemsRegistro[0].unitario : null,
         pdfNombre,
         fecha: new Date().toISOString(),
@@ -2317,39 +2619,70 @@ function RegistroPresupuestos({ exp }) {
     return [];
   };
 
+  const textoAdjudicacionDe = (a) =>
+    "CONFORME A LO DETALLADO EN EL CUADRO COMPARATIVO , SE ADJUDICA SERVICIO DE " +
+    ((variosModulos ? a.modulo : (exp.modulo || a.modulo)) || "").toUpperCase() +
+    " A LA FIRMA : " + (a.proveedor || "").toUpperCase();
+
   const abrirPrevia = () => {
     if (cotizantes.length === 0) { alert("Todavía no hay ningún proveedor con presupuesto cargado (Cotizó)."); return; }
     if (pendientes.length > 0 && !confirm(`Hay proveedores sin marcar: ${pendientes.join(", ")}.\n\nSi seguís, quedarán registrados como SIN RESPUESTA. ¿Continuar?`)) return;
-    for (const n of cotizantes) {
-      const its = itemsDeGuardado(guardados[n]);
-      const incompletos = items.some((_, i) => its[i]?.mensual == null || isNaN(Number(its[i]?.mensual)));
-      if (incompletos) { alert(`A ${n} le faltan precios por ítem. Completá el mensual de cada prestación antes de generar el cuadro.`); return; }
-    }
 
-    // ganador: menor mensual TOTAL (suma de todos los ítems) entre los que cotizaron
-    let ganador = null;
-    cotizantes.forEach((n) => {
-      if (!ganador || (guardados[n].mensual ?? Infinity) < (guardados[ganador].mensual ?? Infinity)) ganador = n;
-    });
-    const g = guardados[ganador];
-    const total = (g.mensual || 0) * Number(exp.periodoMeses || 6);
     const lista = consultados.map((n) => ({
       nombre: n,
       estado: guardados[n]?.estado || "sin_respuesta",
       mensual: guardados[n]?.mensual ?? null,
       items: itemsDeGuardado(guardados[n]),
+      modulos: guardados[n]?.modulos || {},
     }));
+
+    // Cada proveedor que cotizó tiene que tener, en cada módulo, precios completos o "no cotiza"
+    for (const p of lista.filter((x) => x.estado === "cotizo")) {
+      for (const mod of modulos) {
+        const inf = infoModulo(p, mod);
+        if (inf.noCotiza) continue;
+        if (inf.modo === "modulo") {
+          if (inf.montoModulo == null) {
+            alert(`A ${p.nombre} le falta el monto mensual del módulo "${nombreModulo(mod)}".`); return;
+          }
+          continue;
+        }
+        const falta = itemsDelModulo(items, mod).some(({ i }) => {
+          const v = (p.items || [])[i]?.mensual;
+          return v == null || v === "" || isNaN(Number(v));
+        });
+        if (falta) {
+          alert(`A ${p.nombre} le faltan precios en el módulo "${nombreModulo(mod)}". Completá el mensual de cada prestación (o marcá el módulo como "no cotiza") antes de generar el cuadro.`);
+          return;
+        }
+      }
+    }
+
+    const sinOferta = modulos.filter((m) => !ganadorDeModulo(lista, items, m));
+    if (sinOferta.length > 0 &&
+        !confirm(`Estos módulos quedaron sin ninguna oferta: ${sinOferta.map(nombreModulo).join(", ")}.\n\nEl cuadro se va a generar igual, pero sin firma adjudicada para ellos. ¿Continuar?`)) return;
+
+    const adjs = calcularAdjudicaciones(lista, items, {});
     const cotizaron = lista.filter((p) => p.estado === "cotizo").map((p) => p.nombre.toUpperCase());
     const negativas = lista.filter((p) => p.estado === "desestimo").map((p) => p.nombre.toUpperCase() + " (NEGATIVA)");
     setPrevia({
-      ganador, g, total, lista,
-      textoAdjudicacion:
-        "CONFORME A LO DETALLADO EN EL CUADRO COMPARATIVO , SE ADJUDICA SERVICIO DE " +
-        (exp.modulo || "").toUpperCase() + " A LA FIRMA : " + ganador.toUpperCase(),
+      lista, adjs, forzados: {},
+      textosAdjudicacion: adjs.filter((a) => a.proveedor).map(textoAdjudicacionDe),
       textoConstancia:
         "Se deja constancia que, habiendose solicitado cotizacion a " + lista.length +
         " proveedores del rubro, unicamente las firmas comerciales: " + cotizaron.concat(negativas).join("/") +
         " ; presentaron presupuestos dentro del plazo establecido. Los restantes proveedores convocados no remitieron cotizacion ni emitieron respuesta alguna al requerimiento efectuado a la fecha de adjudicacion.-",
+    });
+  };
+
+  // Cambiar a mano la firma adjudicada de un módulo (los textos se rehacen solos)
+  const adjudicarAMano = (mod, nombre) => {
+    const forzados = { ...(previa.forzados || {}) };
+    if (nombre) forzados[mod] = nombre; else delete forzados[mod];
+    const adjs = calcularAdjudicaciones(previa.lista, items, forzados);
+    setPrevia({
+      ...previa, forzados, adjs,
+      textosAdjudicacion: adjs.filter((a) => a.proveedor).map(textoAdjudicacionDe),
     });
   };
 
@@ -2359,14 +2692,18 @@ function RegistroPresupuestos({ exp }) {
       // PDF fabricado en el navegador con pdf-lib (grises y logos grabados en el archivo)
       if (!window.PDFLib) throw new Error("Falta pdf-lib: subí pdf-lib.min.js a la carpeta public y agregá la línea al index.html");
       const logosB = await obtenerLogosBytes();
+      const firmas = firmasAdjudicadas(previa.adjs);
+      const mensualAdj = totalMensualAdjudicado(previa.adjs);
+      const totalAdj = mensualAdj * Number(exp.periodoMeses || 6);
       const bytes = await crearPdfCuadro(window.PDFLib, {
         nroExpediente: exp.nroExpediente, paciente: exp.paciente, modulo: exp.modulo,
         periodoTexto: exp.periodoTexto, periodoMeses: exp.periodoMeses,
         fechaCorta: fechaCortaHoy(), fmt: formatoPesos,
         items, proveedores: previa.lista,
-        adjudicado: { nombre: previa.ganador },
-        textoAdjudicacion: previa.textoAdjudicacion ||
-          ("CONFORME A LO DETALLADO EN EL CUADRO COMPARATIVO , SE ADJUDICA SERVICIO DE " + (exp.modulo || "").toUpperCase() + " A LA FIRMA : " + previa.ganador.toUpperCase()),
+        adjudicado: { nombre: firmas.join(" / ") },
+        adjudicaciones: previa.adjs,
+        textosAdjudicacion: previa.textosAdjudicacion,
+        textoAdjudicacion: (previa.textosAdjudicacion || []).join("  "),
         textoConstancia: previa.textoConstancia,
       }, logosB.pris, logosB.gob);
       descargarBytes(bytes, "CUADRO COMPARATIVO " + exp.nroExpediente.replace(/\//g, "-") + " " + exp.paciente.toUpperCase() + ".pdf");
@@ -2378,9 +2715,12 @@ function RegistroPresupuestos({ exp }) {
           modulo: exp.modulo, detalleServicios: exp.detalleServicios,
           periodoTexto: exp.periodoTexto, periodoMeses: exp.periodoMeses,
           items,
-          textoAdjudicacion: previa.textoAdjudicacion, textoConstancia: previa.textoConstancia,
+          textoAdjudicacion: (previa.textosAdjudicacion || []).join("  "),
+          textosAdjudicacion: previa.textosAdjudicacion,
+          textoConstancia: previa.textoConstancia,
           proveedores: previa.lista,
-          adjudicado: { nombre: previa.ganador, mensual: previa.g.mensual, total: previa.total },
+          adjudicaciones: previa.adjs,
+          adjudicado: { nombre: firmas.join(" / "), mensual: mensualAdj, total: totalAdj },
         }, true, false);
       }
       await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
@@ -2388,12 +2728,15 @@ function RegistroPresupuestos({ exp }) {
         itemsPrestacion: items,
         cuadro: {
           fecha: new Date().toISOString(),
-          adjudicado: previa.ganador,
-          mensual: previa.g.mensual, total: previa.total,
-          textoAdjudicacion: previa.textoAdjudicacion, textoConstancia: previa.textoConstancia,
+          adjudicado: firmas.join(" / "),
+          adjudicaciones: previa.adjs,
+          mensual: mensualAdj, total: totalAdj,
+          textoAdjudicacion: (previa.textosAdjudicacion || []).join("  "),
+          textosAdjudicacion: previa.textosAdjudicacion,
+          textoConstancia: previa.textoConstancia,
         },
       });
-      alert("✅ Cuadro comparativo generado. Adjudicado: " + previa.ganador +
+      alert("✅ Cuadro comparativo generado. Adjudicado: " + firmas.join(" / ") +
         "\n\nSe descargó el PDF apaisado con los logos (para el SIGEDIG)" + (conExcel ? " y el Excel editable." : "."));
     } catch (e) {
       alert("❌ Error al generar el cuadro: " + e.message);
@@ -2403,62 +2746,121 @@ function RegistroPresupuestos({ exp }) {
 
   if (previa) {
     const listaVisible = previa.lista.filter((p) => p.estado !== "sin_respuesta");
+    const nCols = 2 + listaVisible.length * 2;
+    const adjDe = (mod) => previa.adjs.find((a) => a.modulo === mod) || { proveedor: "" };
+    const ganaMod = (mod, nombre) => !!nombre && adjDe(mod).proveedor === nombre;
+    const mensualAdj = totalMensualAdjudicado(previa.adjs);
+    const bc = { border: "1px solid #334155", padding: 6 };
     return (
       <div style={{ ...S.card, borderLeft: "5px solid #0891b2", background: "#f8fafc" }}>
         <div style={{ fontWeight: 800, color: "#075e75", marginBottom: 4 }}>👁️ Revisión del cuadro comparativo</div>
         <div style={{ fontSize: 13, color: "#64748b", marginBottom: 10 }}>
-          Una fila por prestación y el total mensual abajo. Revisá los precios y corregí los textos si hace falta.
+          {variosModulos
+            ? "El cuadro se agrupa por módulo. En cada fila de subtotal está marcada la firma adjudicada: el sistema propone la más barata y vos podés cambiarla con el redondel."
+            : "Una fila por prestación y el total mensual abajo. Revisá los precios y corregí los textos si hace falta."}
         </div>
 
         <div style={{ overflowX: "auto" }}>
           <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13, background: "#fff" }}>
             <thead>
               <tr>
-                <th style={{ border: "1px solid #334155", padding: 6, background: "#F2F2F2" }}>PRESTACION</th>
-                <th style={{ border: "1px solid #334155", padding: 6, background: "#F2F2F2" }}>CANT</th>
-                {listaVisible.map((p) => (
-                  <th key={p.nombre} colSpan={2} style={{ border: "1px solid #334155", padding: 6, background: p.nombre === previa.ganador ? "#D9D9D9" : "#F2F2F2" }}>{p.nombre.toUpperCase()}{p.nombre === previa.ganador ? " 🏆" : ""}</th>
-                ))}
+                <th style={{ ...bc, background: "#F2F2F2" }}>PRESTACION</th>
+                <th style={{ ...bc, background: "#F2F2F2" }}>CANT</th>
+                {listaVisible.map((p) => {
+                  const gana = previa.adjs.some((a) => a.proveedor === p.nombre);
+                  return (
+                    <th key={p.nombre} colSpan={2} style={{ ...bc, background: gana ? "#D9D9D9" : "#F2F2F2" }}>
+                      {p.nombre.toUpperCase()}{gana ? " 🏆" : ""}
+                    </th>
+                  );
+                })}
               </tr>
               <tr>
-                <th style={{ border: "1px solid #334155", padding: 6 }}></th>
-                <th style={{ border: "1px solid #334155", padding: 6 }}></th>
+                <th style={bc}></th>
+                <th style={bc}></th>
                 {listaVisible.map((p) => (
                   <Fragment key={p.nombre}>
-                    <th style={{ border: "1px solid #334155", padding: 6 }}>P. UNITARIO</th>
-                    <th style={{ border: "1px solid #334155", padding: 6 }}>P. MENSUAL</th>
+                    <th style={bc}>P. UNITARIO</th>
+                    <th style={bc}>P. MENSUAL</th>
                   </Fragment>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {items.map((it, i) => (
-                <tr key={i}>
-                  <td style={{ border: "1px solid #334155", padding: 6 }}>{it.nombre}</td>
-                  <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center" }}>{[it.cantTexto, it.cantNum].filter(Boolean).join(" / ")}</td>
-                  {listaVisible.map((p) => (
-                    <Fragment key={p.nombre}>
-                      <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 700, background: p.nombre === previa.ganador ? "#E7E6E6" : "#fff" }}>
-                        {p.estado === "cotizo" ? formatoPesos(p.items[i]?.unitario) : i === 0 ? "NO COTIZÓ" : ""}
+              {modulos.map((mod) => {
+                const delModulo = itemsDelModulo(items, mod);
+                const primerIndice = delModulo.length ? delModulo[0].i : -1;
+                return (
+                  <Fragment key={mod}>
+                    {variosModulos && (
+                      <tr>
+                        <td colSpan={nCols} style={{ ...bc, background: "#e2e8f0", fontWeight: 800, color: "#0f172a" }}>
+                          🧩 {nombreModulo(mod).toUpperCase()}
+                          {adjDe(mod).proveedor
+                            ? " — ADJUDICADO A: " + adjDe(mod).proveedor.toUpperCase()
+                            : " — sin oferta"}
+                        </td>
+                      </tr>
+                    )}
+                    {delModulo.map(({ it, i }) => (
+                      <tr key={i}>
+                        <td style={bc}>{it.nombre}</td>
+                        <td style={{ ...bc, textAlign: "center" }}>{[it.cantTexto, it.cantNum].filter(Boolean).join(" / ")}</td>
+                        {listaVisible.map((p) => {
+                          const inf = infoModulo(p, mod);
+                          const fondo = ganaMod(mod, p.nombre) ? "#E7E6E6" : "#fff";
+                          const primero = i === primerIndice;
+                          const sinPrecio = p.estado !== "cotizo" || inf.noCotiza;
+                          return (
+                            <Fragment key={p.nombre}>
+                              <td style={{ ...bc, textAlign: "center", fontWeight: 700, background: fondo, fontSize: inf.modo === "modulo" ? 11 : 13 }}>
+                                {sinPrecio
+                                  ? (primero ? "NO COTIZÓ" : "")
+                                  : inf.modo === "modulo"
+                                    ? (primero ? (inf.leyenda || "COTIZA POR MÓDULO") : "")
+                                    : formatoPesos(p.items[i]?.unitario)}
+                              </td>
+                              <td style={{ ...bc, textAlign: "center", fontWeight: 700, background: fondo }}>
+                                {!sinPrecio && inf.modo !== "modulo" ? formatoPesos(p.items[i]?.mensual) : ""}
+                              </td>
+                            </Fragment>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                    <tr>
+                      <td colSpan={2} style={{ ...bc, fontWeight: 800, background: "#f1f5f9" }}>
+                        {variosModulos ? "SUBTOTAL " + nombreModulo(mod).toUpperCase() : "TOTAL MENSUAL"}
                       </td>
-                      <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 700, background: p.nombre === previa.ganador ? "#E7E6E6" : "#fff" }}>
-                        {p.estado === "cotizo" ? formatoPesos(p.items[i]?.mensual) : ""}
-                      </td>
-                    </Fragment>
-                  ))}
-                </tr>
-              ))}
-              {items.length > 1 && (
+                      {listaVisible.map((p) => {
+                        const st = subtotalModulo(p, items, mod);
+                        const gana = ganaMod(mod, p.nombre);
+                        const fondo = gana ? "#E7E6E6" : "#f8fafc";
+                        return (
+                          <Fragment key={p.nombre}>
+                            <td style={{ ...bc, textAlign: "center", background: fondo }}>
+                              {st != null && (
+                                <label style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 4, cursor: "pointer", fontSize: 11, fontWeight: 800, color: gana ? "#166534" : "#94a3b8" }}>
+                                  <input type="radio" name={"adj-" + mod} checked={gana} onChange={() => adjudicarAMano(mod, p.nombre)} />
+                                  {gana ? "ADJUDICADO" : "adjudicar"}
+                                </label>
+                              )}
+                            </td>
+                            <td style={{ ...bc, textAlign: "center", fontWeight: 800, background: fondo }}>
+                              {st != null ? formatoPesos(st) : ""}
+                            </td>
+                          </Fragment>
+                        );
+                      })}
+                    </tr>
+                  </Fragment>
+                );
+              })}
+              {variosModulos && (
                 <tr>
-                  <td colSpan={2} style={{ border: "1px solid #334155", padding: 6, fontWeight: 800 }}>TOTAL MENSUAL</td>
-                  {listaVisible.map((p) => (
-                    <Fragment key={p.nombre}>
-                      <td style={{ border: "1px solid #334155", padding: 6, background: p.nombre === previa.ganador ? "#E7E6E6" : "#fff" }}></td>
-                      <td style={{ border: "1px solid #334155", padding: 6, textAlign: "center", fontWeight: 800, background: p.nombre === previa.ganador ? "#E7E6E6" : "#fff" }}>
-                        {p.estado === "cotizo" ? formatoPesos(p.mensual) : ""}
-                      </td>
-                    </Fragment>
-                  ))}
+                  <td colSpan={nCols} style={{ ...bc, background: "#D9D9D9", fontWeight: 800, textAlign: "right" }}>
+                    TOTAL MENSUAL ADJUDICADO: {formatoPesos(mensualAdj)}
+                  </td>
                 </tr>
               )}
             </tbody>
@@ -2466,12 +2868,28 @@ function RegistroPresupuestos({ exp }) {
         </div>
 
         <div style={{ background: "#e0f2fe", borderRadius: 8, padding: 10, marginTop: 12, fontSize: 14, color: "#075e75", fontWeight: 700 }}>
-          🏆 Adjudicado: {previa.ganador} · Mensual total: {formatoPesos(previa.g.mensual)} · Total {exp.periodoMeses} meses: {formatoPesos(previa.total)}
+          🏆 {previa.adjs.filter((a) => a.proveedor).map((a) => (variosModulos ? nombreModulo(a.modulo) + ": " : "") + a.proveedor + " (" + formatoPesos(a.mensual) + ")").join(" · ") || "Sin firma adjudicada"}
+          <div style={{ fontWeight: 600, marginTop: 4 }}>
+            Mensual adjudicado: {formatoPesos(mensualAdj)} · Total {exp.periodoMeses} meses: {formatoPesos(mensualAdj * Number(exp.periodoMeses || 6))}
+          </div>
+          {previa.adjs.some((a) => a.forzado) && (
+            <div style={{ fontWeight: 600, marginTop: 4, color: "#b45309" }}>
+              ⚠️ Hay adjudicaciones cambiadas a mano (no son la oferta más baja). Conviene dejar el motivo asentado en el expediente.
+            </div>
+          )}
         </div>
 
-        <label style={S.label}>Texto de adjudicación (recuadro gris del cuadro)</label>
-        <textarea style={{ ...S.input, minHeight: 60 }} value={previa.textoAdjudicacion}
-          onChange={(e) => setPrevia({ ...previa, textoAdjudicacion: e.target.value })} />
+        <label style={S.label}>
+          {previa.textosAdjudicacion.length > 1 ? "Textos de adjudicación (un recuadro gris por módulo)" : "Texto de adjudicación (recuadro gris del cuadro)"}
+        </label>
+        {previa.textosAdjudicacion.map((t, k) => (
+          <textarea key={k} style={{ ...S.input, minHeight: 60, marginBottom: 6 }} value={t}
+            onChange={(e) => {
+              const arr = [...previa.textosAdjudicacion];
+              arr[k] = e.target.value;
+              setPrevia({ ...previa, textosAdjudicacion: arr });
+            }} />
+        ))}
 
         <label style={S.label}>Texto de constancia (proveedores consultados)</label>
         <textarea style={{ ...S.input, minHeight: 90 }} value={previa.textoConstancia}
@@ -2511,7 +2929,7 @@ function RegistroPresupuestos({ exp }) {
         {editandoItems && (
           <div style={{ marginTop: 12, borderTop: "1px solid #e2e8f0", paddingTop: 12 }}>
             {items.map((it, i) => (
-              <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 170px 90px 40px", gap: 8, marginBottom: 8, alignItems: "end" }}>
+              <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 140px 80px 190px 40px", gap: 8, marginBottom: 8, alignItems: "end" }}>
                 <div>
                   {i === 0 && <label style={{ ...S.label, marginTop: 0 }}>Prestación</label>}
                   <input style={S.input} value={it.nombre} onChange={(e) => setItem(i, "nombre", e.target.value)} placeholder="Ej: Enfermería 12 hs diarias" />
@@ -2524,9 +2942,23 @@ function RegistroPresupuestos({ exp }) {
                   {i === 0 && <label style={{ ...S.label, marginTop: 0 }}>Hs/Ses. (opcional)</label>}
                   <input style={S.input} value={it.cantNum} onChange={(e) => setItem(i, "cantNum", e.target.value)} placeholder="—" />
                 </div>
+                <div>
+                  {i === 0 && <label style={{ ...S.label, marginTop: 0 }}>Módulo (opcional)</label>}
+                  <input style={S.input} list="modulos-sugeridos" value={it.modulo || ""}
+                    onChange={(e) => setItem(i, "modulo", e.target.value)}
+                    placeholder="dejar vacío = uno solo" />
+                </div>
                 <button style={{ ...S.btnSec, padding: "10px 0", color: "#b91c1c", borderColor: "#fca5a5" }} title="Quitar ítem" onClick={() => quitarItem(i)}>🗑</button>
               </div>
             ))}
+            <datalist id="modulos-sugeridos">
+              {["INTERNACION DOMICILIARIA", "ALIMENTACION ENTERAL"].concat(modulos.filter(Boolean)).filter((v, k, a) => a.indexOf(v) === k)
+                .map((m) => <option key={m} value={m} />)}
+            </datalist>
+            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 8 }}>
+              Poné un <b>módulo</b> solo si el expediente se puede adjudicar partido (por ejemplo internación a una firma y alimentación a otra).
+              Si dejás la columna vacía en todos los ítems, el cuadro sale como siempre, con una sola firma adjudicada.
+            </div>
             <div style={{ display: "flex", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
               <button style={S.btnSec} onClick={agregarItem}>➕ Agregar ítem</button>
               <button style={S.btnSec} onClick={() => {
@@ -2565,7 +2997,7 @@ function RegistroPresupuestos({ exp }) {
 
       {consultados.map((nombre) => {
         const d = datos[nombre] || { estado: "", items: [] };
-        const mensualTotal = sumaMensual(d.items);
+        const mensualTotal = mensualEnPantalla(nombre);
         const abierto = abiertos[nombre] ?? !guardados[nombre]?.estado;
         return (
           <div key={nombre} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 12, marginTop: 12 }}>
@@ -2595,18 +3027,70 @@ function RegistroPresupuestos({ exp }) {
 
             {(d.estado === "cotizo" || d.estado === "desestimo") && (
               <div style={{ marginTop: 10 }}>
-                {d.estado === "cotizo" && items.map((it, i) => (
-                  <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 150px 150px", gap: 8, marginBottom: 6, alignItems: "center" }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: "#334155" }}>
-                      {it.nombre || "Ítem " + (i + 1)}
-                      {it.cantTexto && <span style={{ color: "#94a3b8", fontWeight: 500 }}> — {it.cantTexto}</span>}
+                {d.estado === "cotizo" && modulos.map((mod) => {
+                  const inf = (d.modulos || {})[mod] || {};
+                  const modo = inf.modo === "modulo" ? "modulo" : "item";
+                  const noCotiza = !!inf.noCotiza;
+                  const st = subtotalEnPantalla(nombre, mod);
+                  return (
+                    <div key={mod} style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: 10, marginBottom: 10, background: noCotiza ? "#f8fafc" : "#fff" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+                        {variosModulos && (
+                          <div style={{ fontWeight: 800, color: "#334155", fontSize: 13 }}>🧩 {nombreModulo(mod)}</div>
+                        )}
+                        <div style={{ display: "flex", gap: 0, border: "1px solid #cbd5e1", borderRadius: 8, overflow: "hidden", opacity: noCotiza ? 0.4 : 1 }}>
+                          {[["item", "Por ítem"], ["modulo", "Por módulo"]].map(([v, t]) => (
+                            <button key={v} disabled={noCotiza}
+                              onClick={() => setProvModulo(nombre, mod, "modo", v)}
+                              style={{
+                                padding: "6px 12px", fontSize: 13, fontWeight: 700, cursor: noCotiza ? "default" : "pointer",
+                                border: "none", background: modo === v ? "#0891b2" : "#fff", color: modo === v ? "#fff" : "#475569",
+                              }}>{t}</button>
+                          ))}
+                        </div>
+                        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#b91c1c", fontWeight: 600, cursor: "pointer" }}>
+                          <input type="checkbox" checked={noCotiza}
+                            onChange={(e) => setProvModulo(nombre, mod, "noCotiza", e.target.checked)} />
+                          No cotiza {variosModulos ? "este módulo" : ""}
+                        </label>
+                        <div style={{ flex: 1 }} />
+                        {!noCotiza && st != null && (
+                          <div style={{ fontSize: 13, fontWeight: 800, color: "#075e75" }}>Subtotal: {formatoPesos(st)}</div>
+                        )}
+                      </div>
+
+                      {!noCotiza && modo === "item" && itemsDelModulo(items, mod).map(({ it, i }) => (
+                        <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 150px 150px", gap: 8, marginBottom: 6, alignItems: "center" }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: "#334155" }}>
+                            {it.nombre || "Ítem " + (i + 1)}
+                            {it.cantTexto && <span style={{ color: "#94a3b8", fontWeight: 500 }}> — {it.cantTexto}</span>}
+                          </div>
+                          <input style={S.input} type="number" placeholder="P. unitario ($)" value={d.items?.[i]?.unitario ?? ""}
+                            onChange={(e) => setProvItem(nombre, i, "unitario", e.target.value)} />
+                          <input style={S.input} type="number" placeholder="P. mensual ($)" value={d.items?.[i]?.mensual ?? ""}
+                            onChange={(e) => setProvItem(nombre, i, "mensual", e.target.value)} />
+                        </div>
+                      ))}
+
+                      {!noCotiza && modo === "modulo" && (
+                        <div style={{ display: "grid", gridTemplateColumns: "180px 1fr", gap: 8, alignItems: "center" }}>
+                          <input style={S.input} type="number" placeholder="Monto mensual ($)"
+                            value={inf.montoModulo ?? ""}
+                            onChange={(e) => setProvModulo(nombre, mod, "montoModulo", e.target.value)} />
+                          <input style={S.input} placeholder="Leyenda para la columna unitario (ej: COTIZA POR MODULO/DIA)"
+                            value={inf.leyenda ?? ""}
+                            onChange={(e) => setProvModulo(nombre, mod, "leyenda", e.target.value)} />
+                        </div>
+                      )}
+
+                      {noCotiza && (
+                        <div style={{ fontSize: 13, color: "#64748b" }}>
+                          En el cuadro va a figurar <b>NO COTIZÓ</b> {variosModulos ? "para este módulo" : ""}, y no compite en la adjudicación.
+                        </div>
+                      )}
                     </div>
-                    <input style={S.input} type="number" placeholder="P. unitario ($)" value={d.items?.[i]?.unitario ?? ""}
-                      onChange={(e) => setProvItem(nombre, i, "unitario", e.target.value)} />
-                    <input style={S.input} type="number" placeholder="P. mensual ($)" value={d.items?.[i]?.mensual ?? ""}
-                      onChange={(e) => setProvItem(nombre, i, "mensual", e.target.value)} />
-                  </div>
-                ))}
+                  );
+                })}
                 {d.estado === "cotizo" && (
                   <div style={{ textAlign: "right", fontWeight: 800, color: "#075e75", fontSize: 14, marginTop: 4 }}>
                     Mensual total: {formatoPesos(mensualTotal)} · Total por {exp.periodoMeses} meses: {formatoPesos(mensualTotal * Number(exp.periodoMeses || 6))}
