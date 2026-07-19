@@ -3768,24 +3768,37 @@ function OrdenCompraEnvio({ exp, proveedores }) {
   };
   const textoModulo = (nombres) => modulosDe(nombres).join(" y ") || exp.modulo || "";
 
+  // Órdenes que YA se enviaron (quedan grabadas en el expediente).
+  // Sirve para que, si cerrás la pantalla o se corta a mitad de camino,
+  // al volver no se pueda mandar dos veces la misma orden al mismo proveedor.
+  const ocGuardada = exp.oc || {};
+  const yaEnviados = ocGuardada.envios || [];
+  const modoInicial = ocGuardada.modo || (varias ? "porFirma" : "una");
+
   // Un bloque = una orden de compra a enviar
   const armarBloques = (m, quien) => {
     const grupos = m === "porFirma" ? firmas.map((fm) => [fm]) : [firmas];
-    return grupos.map((g) => ({
-      clave: g.join(" / "),
-      firmas: g,
-      nro: "",
-      destinatarios: emailsDe(g),
-      asunto: "ENVIO ORDEN DE COMPRA " + textoModulo(g).toUpperCase() + " " + exp.paciente.toUpperCase(),
-      cuerpo: generarCuerpoAdjudicacion(exp, "", quien, textoModulo(g)),
-      archivo: null,
-      enviado: false,
-    }));
+    return grupos.map((g) => {
+      const clave = g.join(" / ");
+      const ya = yaEnviados.find((e) => e.proveedor === clave);
+      return {
+        clave,
+        firmas: g,
+        nro: ya ? ya.nro || "" : "",
+        destinatarios: ya ? ya.destinatarios || emailsDe(g) : emailsDe(g),
+        asunto: "ENVIO ORDEN DE COMPRA " + textoModulo(g).toUpperCase() + " " + exp.paciente.toUpperCase(),
+        cuerpo: generarCuerpoAdjudicacion(exp, ya ? ya.nro || "" : "", quien, textoModulo(g)),
+        archivo: null,
+        enviado: !!ya,
+        pdfUrl: ya ? ya.pdfUrl || "" : "",
+        fechaEnvio: ya ? ya.fecha || "" : "",
+      };
+    });
   };
 
-  const [modo, setModo] = useState(varias ? "porFirma" : "una");
-  const [firmante, setFirmante] = useState(firmaInicial);
-  const [bloques, setBloques] = useState(() => armarBloques(varias ? "porFirma" : "una", firmaInicial));
+  const [modo, setModo] = useState(modoInicial);
+  const [firmante, setFirmante] = useState(ocGuardada.firmante || firmaInicial);
+  const [bloques, setBloques] = useState(() => armarBloques(modoInicial, ocGuardada.firmante || firmaInicial));
   const [enviando, setEnviando] = useState("");
 
   const cambiarModo = (m) => {
@@ -3835,7 +3848,8 @@ function OrdenCompraEnvio({ exp, proveedores }) {
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || "Error en Apps Script");
 
-      const nuevos = bloques.map((x, i) => (i === k ? { ...x, enviado: true, pdfUrl: data.ocPdfUrl || "" } : x));
+      const ahora = new Date().toISOString();
+      const nuevos = bloques.map((x, i) => (i === k ? { ...x, enviado: true, pdfUrl: data.ocPdfUrl || "", fechaEnvio: ahora } : x));
       setBloques(nuevos);
 
       const todasEnviadas = nuevos.every((x) => x.enviado);
@@ -3845,12 +3859,12 @@ function OrdenCompraEnvio({ exp, proveedores }) {
         nro: x.nro,
         destinatarios: x.destinatarios,
         pdfUrl: x.pdfUrl || "",
-        fecha: new Date().toISOString(),
+        fecha: x.fechaEnvio || ahora,
       }));
       await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
         ...(todasEnviadas ? { etapa: 8 } : {}),
         oc: {
-          fecha: new Date().toISOString(),
+          fecha: ahora,
           modo,
           envios,
           // se mantienen los campos de siempre para no romper lo ya guardado
@@ -3965,6 +3979,7 @@ function OrdenCompraEnvio({ exp, proveedores }) {
       {bloques.length > 1 && !bloques.every((b) => b.enviado) && (
         <div style={{ fontSize: 13, color: "#b45309", marginTop: 10, fontWeight: 600 }}>
           El expediente se cierra cuando estén enviadas las {bloques.length} órdenes.
+          {bloques.some((b) => b.enviado) && " Las que figuran en verde ya salieron y no se vuelven a enviar."}
         </div>
       )}
     </div>
