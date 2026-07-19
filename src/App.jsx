@@ -1615,6 +1615,24 @@ function NuevoExpediente({ modo = "nuevo", usuario = "", inicial = null, expId =
 /* ---------- Detalle de expediente ---------- */
 
 function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
+  // Etapa que se está mirando. Arranca en la actual y se mueve sola cuando el expediente avanza.
+  const [abierta, setAbierta] = useState(Math.min(exp.etapa, ETAPAS.length - 1));
+  const etapaRef = useRef(exp.etapa);
+  useEffect(() => {
+    if (etapaRef.current !== exp.etapa) {
+      etapaRef.current = exp.etapa;
+      setAbierta(Math.min(exp.etapa, ETAPAS.length - 1));
+    }
+  }, [exp.etapa]);
+
+  const aviso = (texto) => (
+    <div style={{ ...S.card, color: "#64748b", fontSize: 14, borderLeft: "5px solid #cbd5e1" }}>{texto}</div>
+  );
+
+  // Aviso de plazo: se ve SIEMPRE, aunque la etapa esté cerrada
+  const diasPlazo = exp.cotizacion ? diasHabilesDesde(exp.cotizacion.fecha) : null;
+  const plazoVencido = exp.etapa <= 1 && diasPlazo != null && diasPlazo > 5;
+
   return (
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
@@ -1635,143 +1653,209 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
         <div style={{ fontSize: 13, marginTop: 4, fontWeight: 700, color: "#0e7490" }}>👤 Responsable: {exp.responsable || "sin asignar"}</div>
       </div>
 
-      {/* semáforo de etapas */}
-      <div style={{ ...S.card, display: "flex", gap: 6, flexWrap: "wrap" }}>
-        {ETAPAS.map((nombre, i) => (
-          <span key={i} style={S.chip(i === exp.etapa, i < exp.etapa)}>
-            {i < exp.etapa ? "✓ " : ""}{nombre}
-          </span>
-        ))}
+      {/* semáforo de etapas: ahora cada chip abre su etapa */}
+      <div style={S.card}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {ETAPAS.map((nombre, i) => {
+            const hecha = i < exp.etapa;
+            const actual = i === exp.etapa;
+            const alcanzable = i <= exp.etapa;
+            const mirando = i === abierta;
+            return (
+              <button
+                key={i}
+                onClick={() => setAbierta(i)}
+                title={alcanzable ? "Ver esta etapa" : "Todavía no llegaste a esta etapa"}
+                style={{
+                  ...S.chip(actual, hecha),
+                  border: mirando ? "2.5px solid #0891b2" : "2.5px solid transparent",
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                  opacity: alcanzable ? 1 : 0.55,
+                }}
+              >
+                {hecha ? "✓ " : ""}{nombre}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 8 }}>
+          Estás viendo: <b style={{ color: "#0891b2" }}>{ETAPAS[abierta]}</b>. Tocá cualquier etapa para abrirla.
+        </div>
       </div>
+
+      {plazoVencido && (
+        <div style={{ ...S.card, borderLeft: "5px solid #dc2626", background: "#fef2f2", padding: "10px 14px" }}>
+          <span style={{ color: "#dc2626", fontWeight: 800, fontSize: 14 }}>
+            ⚠️ Plazo vencido — pasaron {diasPlazo} días hábiles desde el pedido de cotización
+          </span>
+        </div>
+      )}
 
       <PaseAuditoria exp={exp} />
 
-      {exp.etapa === 0 && <EnvioCotizacion exp={exp} proveedores={proveedores} />}
-      {exp.etapa >= 1 && exp.cotizacion && (
-        <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
-          <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Cotización enviada</div>
-          <div style={{ fontSize: 14, color: "#334155" }}>
-            <b>Fecha de envío:</b> {formatearFecha(exp.cotizacion.fecha)}{exp.cotizacion.manual && <span style={{ color: "#64748b" }}> (registrado manualmente — el mail salió por fuera del sistema)</span>}<br />
-            {exp.cotizacion.firmante && (<><b>Enviado por:</b> {exp.cotizacion.firmante}<br /></>)}
-            <b>Proveedores consultados:</b> {exp.cotizacion.proveedores}<br />
-            <b>Plazo:</b>{" "}
-            {(() => {
-              const d = diasHabilesDesde(exp.cotizacion.fecha);
-              return d > 5
-                ? <span style={{ color: "#dc2626", fontWeight: 700 }}>⚠️ Vencido — pasaron {d} días hábiles</span>
-                : <span style={{ color: "#f59e0b", fontWeight: 700 }}>Día hábil {d} de 5</span>;
-            })()}
-            {exp.cotizacion.carpetaUrl && (
-              <><br /><a href={exp.cotizacion.carpetaUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📁 Ver carpeta del expediente en Drive</a></>
+      {/* ---------- 0) Cotización enviada ---------- */}
+      {abierta === 0 && (<>
+        {exp.etapa === 0 && <EnvioCotizacion exp={exp} proveedores={proveedores} />}
+        {exp.etapa >= 1 && exp.cotizacion && (
+          <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
+            <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Cotización enviada</div>
+            <div style={{ fontSize: 14, color: "#334155" }}>
+              <b>Fecha de envío:</b> {formatearFecha(exp.cotizacion.fecha)}{exp.cotizacion.manual && <span style={{ color: "#64748b" }}> (registrado manualmente — el mail salió por fuera del sistema)</span>}<br />
+              {exp.cotizacion.firmante && (<><b>Enviado por:</b> {exp.cotizacion.firmante}<br /></>)}
+              <b>Proveedores consultados:</b> {exp.cotizacion.proveedores}<br />
+              <b>Plazo:</b>{" "}
+              {diasPlazo > 5
+                ? <span style={{ color: "#dc2626", fontWeight: 700 }}>⚠️ Vencido — pasaron {diasPlazo} días hábiles</span>
+                : <span style={{ color: "#f59e0b", fontWeight: 700 }}>Día hábil {diasPlazo} de 5</span>}
+              {exp.cotizacion.carpetaUrl && (
+                <><br /><a href={exp.cotizacion.carpetaUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📁 Ver carpeta del expediente en Drive</a></>
+              )}
+            </div>
+          </div>
+        )}
+      </>)}
+
+      {/* ---------- 1) Presupuestos ---------- */}
+      {abierta === 1 && (<>
+        {exp.etapa === 1 && <RegistroPresupuestos exp={exp} />}
+        {exp.etapa < 1 && aviso("Primero hay que enviar el pedido de cotización.")}
+        {exp.etapa > 1 && aviso("Los presupuestos ya están cargados y el cuadro generado. Si necesitás corregir un precio o un estado, entrá a la etapa Cuadro comparativo y usá ↩️ Reabrir presupuestos.")}
+      </>)}
+
+      {/* ---------- 2) Cuadro comparativo ---------- */}
+      {abierta === 2 && (<>
+        {exp.etapa >= 3 && exp.cuadro && (
+          <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
+            <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Cuadro comparativo generado — Adjudicado: {exp.cuadro.adjudicado}</div>
+            <div style={{ fontSize: 14, color: "#334155" }}>
+              <b>Fecha de adjudicación:</b> {formatearFecha(exp.cuadro.fecha)}<br />
+              <b>Precio mensual:</b> {formatoPesos(exp.cuadro.mensual)} · <b>Total {exp.periodoMeses} meses:</b> {formatoPesos(exp.cuadro.total)}
+            </div>
+            {(exp.cuadro.adjudicaciones || []).length > 1 && (
+              <div style={{ fontSize: 14, color: "#334155", marginTop: 4 }}>
+                {exp.cuadro.adjudicaciones.map((a, k) => (
+                  <div key={k}>🧩 <b>{a.modulo || "Sin módulo"}:</b> {a.proveedor} — {formatoPesos(a.mensual)}/mes</div>
+                ))}
+              </div>
             )}
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <RevisarCuadro exp={exp} />
+              <button
+                style={{ ...S.btnSec, marginTop: 10, color: "#b91c1c", borderColor: "#fca5a5" }}
+                onClick={async () => {
+                  if (!confirm(
+                    "↩️ REABRIR PRESUPUESTOS\n\n" +
+                    "El expediente vuelve a la etapa de Presupuestos para modificar estados o precios " +
+                    "(ej: un proveedor que mandó negativa y después se arrepintió y cotizó).\n\n" +
+                    "• Todo lo ya cargado se mantiene (precios, ítems, PDFs, estados)\n" +
+                    "• El cuadro comparativo ya generado queda DESACTUALIZADO: cuando termines, generalo de nuevo\n" +
+                    (exp.etapa >= 4 ? "• ⚠️ OJO: este expediente ya avanzó a etapas posteriores (nota/pases/resolución). Al reabrir, esas etapas se vuelven a recorrer y esos documentos también habrá que regenerarlos si cambia la adjudicación.\n" : "") +
+                    "\n¿Confirmás la reapertura?"
+                  )) return;
+                  try {
+                    await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), { etapa: 1 });
+                    alert("✅ Presupuestos reabiertos. Modificá lo que necesites y volvé a generar el cuadro.");
+                  } catch (e) {
+                    alert("❌ Error al reabrir: " + e.message);
+                  }
+                }}
+              >↩️ Reabrir presupuestos</button>
+            </div>
           </div>
-        </div>
-      )}
-      {exp.etapa === 1 && <RegistroPresupuestos exp={exp} />}
+        )}
+        {exp.etapa < 3 && aviso("El cuadro comparativo se arma desde la etapa Presupuestos, con el botón 👁️ GENERAR Y REVISAR EL CUADRO.")}
+      </>)}
 
-      {exp.etapa >= 3 && exp.cuadro && (
-        <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
-          <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Cuadro comparativo generado — Adjudicado: {exp.cuadro.adjudicado}</div>
-          <div style={{ fontSize: 14, color: "#334155" }}>
-            <b>Fecha de adjudicación:</b> {formatearFecha(exp.cuadro.fecha)}<br />
-            <b>Precio mensual:</b> {formatoPesos(exp.cuadro.mensual)} · <b>Total {exp.periodoMeses} meses:</b> {formatoPesos(exp.cuadro.total)}
+      {/* ---------- 3) Nota de afectación ---------- */}
+      {abierta === 3 && (<>
+        {exp.etapa === 3 && <GenerarNota exp={exp} />}
+        {exp.etapa >= 4 && exp.nota && (
+          <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
+            <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Nota de afectación presupuestaria generada</div>
+            <div style={{ fontSize: 14, color: "#334155" }}>
+              <b>Importe total:</b> {formatoPesos(exp.nota.monto)} ({exp.nota.montoLetras})
+            </div>
+            <ReabrirGenerador etiqueta="✏️ Modificar y regenerar (fecha, subpartidas, importe)" render={() => <GenerarNota exp={exp} />} />
           </div>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-            <RevisarCuadro exp={exp} />
-            <button
-              style={{ ...S.btnSec, marginTop: 10, color: "#b91c1c", borderColor: "#fca5a5" }}
-              onClick={async () => {
-                if (!confirm(
-                  "↩️ REABRIR PRESUPUESTOS\n\n" +
-                  "El expediente vuelve a la etapa de Presupuestos para modificar estados o precios " +
-                  "(ej: un proveedor que mandó negativa y después se arrepintió y cotizó).\n\n" +
-                  "• Todo lo ya cargado se mantiene (precios, ítems, PDFs, estados)\n" +
-                  "• El cuadro comparativo ya generado queda DESACTUALIZADO: cuando termines, generalo de nuevo\n" +
-                  (exp.etapa >= 4 ? "• ⚠️ OJO: este expediente ya avanzó a etapas posteriores (nota/pases/resolución). Al reabrir, esas etapas se vuelven a recorrer y esos documentos también habrá que regenerarlos si cambia la adjudicación.\n" : "") +
-                  "\n¿Confirmás la reapertura?"
-                )) return;
-                try {
-                  await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), { etapa: 1 });
-                  alert("✅ Presupuestos reabiertos. Modificá lo que necesites y volvé a generar el cuadro.");
-                } catch (e) {
-                  alert("❌ Error al reabrir: " + e.message);
-                }
-              }}
-            >↩️ Reabrir presupuestos</button>
+        )}
+        {exp.etapa < 3 && aviso("Todavía falta generar el cuadro comparativo.")}
+      </>)}
+
+      {/* ---------- 4) Asesoría Letrada ---------- */}
+      {abierta === 4 && (<>
+        {exp.etapa === 4 && <PaseLetrada exp={exp} />}
+        {exp.etapa >= 5 && exp.paseLetrada && (
+          <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
+            <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Pase a Asesoría Letrada generado</div>
+            <div style={{ fontSize: 14, color: "#334155" }}>
+              <b>Fecha:</b> {formatearFecha(exp.paseLetrada.fecha)}
+            </div>
+            <BotonRevisar construirPlantilla={(logos) => plantillaPase(datosPaseLetrada(exp), logos)} />
           </div>
-        </div>
-      )}
+        )}
+        {exp.etapa < 4 && aviso("Todavía falta la nota de afectación presupuestaria.")}
+      </>)}
 
-      {exp.etapa === 3 && <GenerarNota exp={exp} />}
-
-      {exp.etapa >= 4 && exp.nota && (
-        <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
-          <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Nota de afectación presupuestaria generada</div>
-          <div style={{ fontSize: 14, color: "#334155" }}>
-            <b>Importe total:</b> {formatoPesos(exp.nota.monto)} ({exp.nota.montoLetras})
+      {/* ---------- 5) Resolución ---------- */}
+      {abierta === 5 && (<>
+        {exp.etapa === 5 && <GenerarResolucion exp={exp} />}
+        {exp.etapa >= 6 && exp.resolucion && (
+          <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
+            <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Resolución Interna Nº {exp.resolucion.nro} generada</div>
+            <div style={{ fontSize: 14, color: "#334155" }}>
+              <b>Fecha:</b> {formatearFecha(exp.resolucion.fecha)}<br />
+              <b>Adjudicado:</b> {exp.resolucion.adjudicado} · <b>Monto total:</b> {formatoPesos(exp.resolucion.total)}
+            </div>
+            <ReabrirGenerador etiqueta="✏️ Modificar y regenerar (firmante, subpartidas, fojas, N°)" render={() => <GenerarResolucion exp={exp} />} />
           </div>
-          <ReabrirGenerador etiqueta="✏️ Modificar y regenerar (fecha, subpartidas, importe)" render={() => <GenerarNota exp={exp} />} />
-        </div>
-      )}
+        )}
+        {exp.etapa < 5 && aviso("Todavía falta el pase a Asesoría Letrada.")}
+      </>)}
 
-      {/* ============ FASE 3 ============ */}
-
-      {exp.etapa >= 5 && exp.paseLetrada && (
-        <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
-          <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Pase a Asesoría Letrada generado</div>
-          <div style={{ fontSize: 14, color: "#334155" }}>
-            <b>Fecha:</b> {formatearFecha(exp.paseLetrada.fecha)}
+      {/* ---------- 6) Tribunal de Cuentas ---------- */}
+      {abierta === 6 && (<>
+        {exp.etapa === 6 && <PaseTribunal exp={exp} />}
+        {exp.etapa >= 7 && exp.paseTribunal && (
+          <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
+            <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Pase al Tribunal de Cuentas generado</div>
+            <div style={{ fontSize: 14, color: "#334155" }}>
+              <b>Fecha:</b> {formatearFecha(exp.paseTribunal.fecha)}
+            </div>
+            <BotonRevisar construirPlantilla={(logos) => plantillaPase(datosPaseTribunal(exp), logos)} />
           </div>
-          <BotonRevisar construirPlantilla={(logos) => plantillaPase(datosPaseLetrada(exp), logos)} />
-        </div>
-      )}
-      {exp.etapa === 4 && <PaseLetrada exp={exp} />}
+        )}
+        {exp.etapa < 6 && aviso("Todavía falta la Resolución Interna.")}
+      </>)}
 
-      {exp.etapa >= 6 && exp.resolucion && (
-        <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
-          <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Resolución Interna Nº {exp.resolucion.nro} generada</div>
-          <div style={{ fontSize: 14, color: "#334155" }}>
-            <b>Fecha:</b> {formatearFecha(exp.resolucion.fecha)}<br />
-            <b>Adjudicado:</b> {exp.resolucion.adjudicado} · <b>Monto total:</b> {formatoPesos(exp.resolucion.total)}
+      {/* ---------- 7) Orden de compra ---------- */}
+      {abierta === 7 && (<>
+        {exp.etapa === 7 && <OrdenCompraEnvio exp={exp} proveedores={proveedores} />}
+        {exp.etapa >= 8 && exp.oc && (
+          <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
+            <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Orden de Compra Nº {exp.oc.nro} enviada al adjudicado</div>
+            <div style={{ fontSize: 14, color: "#334155" }}>
+              <b>Fecha de envío:</b> {formatearFecha(exp.oc.fecha)}<br />
+              {exp.oc.firmante && (<><b>Enviado por:</b> {exp.oc.firmante}<br /></>)}
+              <b>Destinatarios:</b> {exp.oc.destinatarios}<br />
+              {(exp.oc.envios || []).length > 1 && exp.oc.envios.map((e, k) => (
+                <div key={k}>🧾 <b>{e.proveedor}</b> — OC Nº {e.nro}{e.modulo ? " (" + e.modulo + ")" : ""}</div>
+              ))}
+              {exp.oc.pdfUrl && <a href={exp.oc.pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📄 Orden de compra en el Drive</a>}
+            </div>
           </div>
-          <ReabrirGenerador etiqueta="✏️ Modificar y regenerar (firmante, subpartidas, fojas, N°)" render={() => <GenerarResolucion exp={exp} />} />
-        </div>
-      )}
-      {exp.etapa === 5 && <GenerarResolucion exp={exp} />}
-
-      {exp.etapa >= 7 && exp.paseTribunal && (
-        <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
-          <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Pase al Tribunal de Cuentas generado</div>
-          <div style={{ fontSize: 14, color: "#334155" }}>
-            <b>Fecha:</b> {formatearFecha(exp.paseTribunal.fecha)}
+        )}
+        {exp.etapa >= 8 && (
+          <div style={{ ...S.card, background: "#f0fdf4", border: "2px solid #16a34a", textAlign: "center" }}>
+            <div style={{ fontSize: 22 }}>🎉</div>
+            <div style={{ fontWeight: 800, color: "#166534", fontSize: 16 }}>Expediente completo</div>
+            <div style={{ fontSize: 13, color: "#475569", marginTop: 4 }}>
+              Las 8 etapas del circuito están cerradas. Cuando se acerque el fin del período, usá <b>🔄 Renovar período</b> para arrancar el trámite nuevo con los datos ya cargados.
+            </div>
           </div>
-          <BotonRevisar construirPlantilla={(logos) => plantillaPase(datosPaseTribunal(exp), logos)} />
-        </div>
-      )}
-      {exp.etapa === 6 && <PaseTribunal exp={exp} />}
-
-      {exp.etapa >= 8 && exp.oc && (
-        <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
-          <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Orden de Compra Nº {exp.oc.nro} enviada al adjudicado</div>
-          <div style={{ fontSize: 14, color: "#334155" }}>
-            <b>Fecha de envío:</b> {formatearFecha(exp.oc.fecha)}<br />
-            {exp.oc.firmante && (<><b>Enviado por:</b> {exp.oc.firmante}<br /></>)}
-            <b>Destinatarios:</b> {exp.oc.destinatarios}<br />
-            {exp.oc.pdfUrl && <a href={exp.oc.pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📄 Orden de compra en el Drive</a>}
-          </div>
-        </div>
-      )}
-      {exp.etapa === 7 && <OrdenCompraEnvio exp={exp} proveedores={proveedores} />}
-
-      {exp.etapa >= 8 && (
-        <div style={{ ...S.card, background: "#f0fdf4", border: "2px solid #16a34a", textAlign: "center" }}>
-          <div style={{ fontSize: 22 }}>🎉</div>
-          <div style={{ fontWeight: 800, color: "#166534", fontSize: 16 }}>Expediente completo</div>
-          <div style={{ fontSize: 13, color: "#475569", marginTop: 4 }}>
-            Las 8 etapas del circuito están cerradas. Cuando se acerque el fin del período, usá <b>🔄 Renovar período</b> para arrancar el trámite nuevo con los datos ya cargados.
-          </div>
-        </div>
-      )}
+        )}
+        {exp.etapa < 7 && aviso("Todavía falta el pase al Tribunal de Cuentas.")}
+      </>)}
 
       <BotonEliminar exp={exp} volver={volver} />
     </div>
@@ -3123,11 +3207,13 @@ function RegistroPresupuestos({ exp }) {
 
 function GenerarNota({ exp }) {
   const total = (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6);
+  // Si el cuadro adjudicó más de un módulo, el gasto toca las dos subpartidas
+  const subDefecto = (exp.cuadro?.adjudicaciones || []).length > 1 ? "ambas" : "322";
   const [monto, setMonto] = useState(exp.nota?.monto ?? total);
   const [directora, setDirectora] = useState(exp.nota?.directora || "Dra. Noellia Bottone");
   const [fechaTexto, setFechaTexto] = useState(exp.nota?.fechaTexto || fechaLargaHoy());
-  const [subpartida, setSubpartida] = useState(exp.nota?.subpartida || "322");
-  const [imputacion, setImputacion] = useState(exp.nota?.imputacion || imputacionNotaPorSubpartida(exp.nota?.subpartida || "322"));
+  const [subpartida, setSubpartida] = useState(exp.nota?.subpartida || subDefecto);
+  const [imputacion, setImputacion] = useState(exp.nota?.imputacion || imputacionNotaPorSubpartida(exp.nota?.subpartida || subDefecto));
   const [revisando, setRevisando] = useState(false);
 
   const cambiarSubpartida = (s) => {
@@ -3260,27 +3346,64 @@ function GenerarResolucion({ exp }) {
 
   // Lo que el cuadro comparativo adjudicó: prestaciones y precios del ganador,
   // para armar la resolución sin volver a escribir nada.
+  const esAlimentacion = (n) => /aliment|bomba|nutri|enteral|m[oó]dulo alim/i.test(n || "");
+
+  // Módulos del expediente y qué firma ganó cada uno (viene del cuadro comparativo)
+  const adjsExp = exp.cuadro?.adjudicaciones || [];
+  const modsExp = modulosDeItems(exp.itemsPrestacion || []);
+  const variosExp = modsExp.length > 1;
+  const provDelModulo = (mod) => {
+    const a = adjsExp.find((x) => x.modulo === mod);
+    return (a && a.proveedor) || exp.cuadro?.adjudicado || "";
+  };
+  // Por convención de la oficina: bloque A = internación (subp. 342), bloque B = alimentación (subp. 322)
+  let modInternacion = modsExp[0], modAlimentacion = modsExp[1];
+  if (variosExp) {
+    const kAli = modsExp.findIndex((m) => esAlimentacion(m));
+    if (kAli >= 0) {
+      modAlimentacion = modsExp[kAli];
+      modInternacion = modsExp.find((m, k) => k !== kAli);
+    }
+  }
+
+  // Precios de cada ítem, tomados del proveedor que ganó SU módulo
   const itemsAdjudicados = (() => {
-    const g = (exp.presupuestos || {})[exp.cuadro?.adjudicado || ""];
     const its = exp.itemsPrestacion || [];
-    return its.map((it, i) => ({
-      nombre: it.nombre,
-      cantTexto: it.cantTexto || "",
-      mensual: Number(g?.items?.[i]?.mensual ?? (its.length === 1 ? g?.mensual : 0)) || 0,
-    }));
+    return its.map((it, i) => {
+      const mod = it.modulo ? String(it.modulo).trim() : "";
+      const g = (exp.presupuestos || {})[provDelModulo(mod)];
+      const inf = (g?.modulos || {})[mod] || {};
+      let mensual;
+      if (inf.modo === "modulo") {
+        // cotizado por módulo global: el importe se muestra en el primer ítem del módulo
+        const primero = itemsDelModulo(its, mod)[0];
+        mensual = primero && primero.i === i ? Number(inf.montoModulo || 0) : 0;
+      } else {
+        mensual = Number(g?.items?.[i]?.mensual ?? (its.length === 1 ? g?.mensual : 0)) || 0;
+      }
+      return { nombre: it.nombre, cantTexto: it.cantTexto || "", modulo: mod, mensual: mensual || 0 };
+    });
   })();
   const detalleDeItems = (lista) =>
     lista.map((it) => it.nombre + (it.cantTexto ? ": " + it.cantTexto : "")).join("\n");
-  const esAlimentacion = (n) => /aliment|bomba|nutri|enteral|m[oó]dulo alim/i.test(n || "");
-  const itemsInternacion = itemsAdjudicados.filter((it) => !esAlimentacion(it.nombre));
-  const itemsAlimentacion = itemsAdjudicados.filter((it) => esAlimentacion(it.nombre));
+  const itemsInternacion = variosExp
+    ? itemsAdjudicados.filter((it) => it.modulo === modInternacion)
+    : itemsAdjudicados.filter((it) => !esAlimentacion(it.nombre));
+  const itemsAlimentacion = variosExp
+    ? itemsAdjudicados.filter((it) => it.modulo === modAlimentacion)
+    : itemsAdjudicados.filter((it) => esAlimentacion(it.nombre));
   const sumar = (lista) => lista.reduce((s, it) => s + (it.mensual || 0), 0);
+
+  // Modo sugerido: dos firmas distintas -> modelo doble; misma firma en los dos módulos -> mismo proveedor
+  const firmaInt = variosExp ? provDelModulo(modInternacion) : (exp.cuadro?.adjudicado || "");
+  const firmaAli = variosExp ? provDelModulo(modAlimentacion) : "";
+  const subModoSugerido = !variosExp ? "una" : (firmaInt && firmaAli && firmaInt !== firmaAli ? "dos" : "dosMismo");
 
   const [f, setF] = useState({
     nroResolucion: r.nro || "/DGPRIS",
     tipoTramite: r.tipoTramite || "inicio",
     firmante: r.firmante || "directora",
-    subModo: r.subModo || "una",
+    subModo: r.subModo || subModoSugerido,
     subpartida: r.subpartida || "322",
     fsSolicitud: r.fojas?.solicitud || "02,04",
     fsPresupuesto: r.fojas?.presupuesto || "",
@@ -3290,12 +3413,12 @@ function GenerarResolucion({ exp }) {
     imputacion: r.imputacion || imputacionResolucionPorSubpartida(r.subpartida || "322"),
     // modelo doble (322 y 342)
     subA: r.subA || "342",
-    firmaA: r.firmaA || (exp.cuadro?.adjudicado || ""),
+    firmaA: r.firmaA || firmaInt,
     tituloA: r.tituloA || "",
     detalleA: r.detalleA || detalleDeItems(itemsInternacion.length ? itemsInternacion : itemsAdjudicados),
     mensualA: r.mensualA || (sumar(itemsInternacion.length ? itemsInternacion : itemsAdjudicados) || ""),
     subB: r.subB || "322",
-    firmaB: r.firmaB || "",
+    firmaB: r.firmaB || firmaAli,
     tituloB: r.tituloB || "",
     detalleB: r.detalleB || detalleDeItems(itemsAlimentacion),
     mensualB: r.mensualB || (sumar(itemsAlimentacion) || ""),
@@ -3600,11 +3723,12 @@ function PaseTribunal({ exp }) {
   );
 }
 
-function generarCuerpoAdjudicacion(exp, nroOC, firmante) {
+function generarCuerpoAdjudicacion(exp, nroOC, firmante, moduloTexto) {
+  const moduloMail = String(moduloTexto || exp.modulo || "").toUpperCase();
   return (
 `Estimados:
 
-*INICIO DE PRESTACIÓN expte ${exp.nroExpediente} ${exp.paciente.toUpperCase()}. ${(exp.modulo || "").toUpperCase()}.* En la que se Adjudica a uds como Proveedores de la Prestación de Servicios.
+*INICIO DE PRESTACIÓN expte ${exp.nroExpediente} ${exp.paciente.toUpperCase()}. ${moduloMail}.* En la que se Adjudica a uds como Proveedores de la Prestación de Servicios.
 
 *Se solicita se nos informe vía mail:*
 
@@ -3624,113 +3748,225 @@ Gerencia Administrativa.`
 }
 
 function OrdenCompraEnvio({ exp, proveedores }) {
-  const adjudicado = exp.cuadro?.adjudicado || "";
-  const provAdj = proveedores.find((p) => p.nombre === adjudicado);
+  // Firmas que quedaron adjudicadas en el cuadro (una o varias)
+  const adjsExp = exp.cuadro?.adjudicaciones || [];
+  const firmasAdj = firmasAdjudicadas(adjsExp);
+  const firmas = firmasAdj.length
+    ? firmasAdj
+    : String(exp.cuadro?.adjudicado || "").split(" / ").map((x) => x.trim()).filter(Boolean);
+  const varias = firmas.length > 1;
   const firmaInicial = (USUARIOS.find((u) => u.id === exp.responsable)?.firma) || FIRMANTES[0];
 
-  const [nroOC, setNroOC] = useState("");
-  const [destinatarios, setDestinatarios] = useState(provAdj?.emails || "");
-  const [firmante, setFirmante] = useState(firmaInicial);
-  const [asunto, setAsunto] = useState(
-    `ENVIO ORDEN DE COMPRA ${(exp.modulo || "").toUpperCase()} ${exp.paciente.toUpperCase()}`
-  );
-  const [cuerpo, setCuerpo] = useState(generarCuerpoAdjudicacion(exp, "", firmaInicial));
-  const [archivo, setArchivo] = useState(null);
-  const [enviando, setEnviando] = useState(false);
+  const emailsDe = (nombres) =>
+    nombres.map((n) => (proveedores.find((p) => p.nombre === n)?.emails) || "").filter(Boolean).join(", ");
+  const modulosDe = (nombres) => {
+    const ms = [];
+    adjsExp.forEach((a) => {
+      if (nombres.includes(a.proveedor) && a.modulo && !ms.includes(a.modulo)) ms.push(a.modulo);
+    });
+    return ms;
+  };
+  const textoModulo = (nombres) => modulosDe(nombres).join(" y ") || exp.modulo || "";
 
+  // Un bloque = una orden de compra a enviar
+  const armarBloques = (m, quien) => {
+    const grupos = m === "porFirma" ? firmas.map((fm) => [fm]) : [firmas];
+    return grupos.map((g) => ({
+      clave: g.join(" / "),
+      firmas: g,
+      nro: "",
+      destinatarios: emailsDe(g),
+      asunto: "ENVIO ORDEN DE COMPRA " + textoModulo(g).toUpperCase() + " " + exp.paciente.toUpperCase(),
+      cuerpo: generarCuerpoAdjudicacion(exp, "", quien, textoModulo(g)),
+      archivo: null,
+      enviado: false,
+    }));
+  };
+
+  const [modo, setModo] = useState(varias ? "porFirma" : "una");
+  const [firmante, setFirmante] = useState(firmaInicial);
+  const [bloques, setBloques] = useState(() => armarBloques(varias ? "porFirma" : "una", firmaInicial));
+  const [enviando, setEnviando] = useState("");
+
+  const cambiarModo = (m) => {
+    if (bloques.some((b) => b.enviado)) {
+      alert("Ya enviaste una de las órdenes. Si necesitás cambiar el modo, recargá la pantalla.");
+      return;
+    }
+    setModo(m);
+    setBloques(armarBloques(m, firmante));
+  };
   const cambiarFirmante = (nuevo) => {
     setFirmante(nuevo);
-    setCuerpo(generarCuerpoAdjudicacion(exp, nroOC, nuevo));
+    setBloques(bloques.map((b) => ({
+      ...b, cuerpo: generarCuerpoAdjudicacion(exp, b.nro, nuevo, textoModulo(b.firmas)),
+    })));
   };
-  const cambiarNroOC = (v) => {
-    setNroOC(v);
-    setCuerpo(generarCuerpoAdjudicacion(exp, v, firmante));
-  };
+  const setB = (k, campo, valor) =>
+    setBloques(bloques.map((b, i) => (i === k
+      ? {
+          ...b,
+          [campo]: valor,
+          cuerpo: campo === "nro" ? generarCuerpoAdjudicacion(exp, valor, firmante, textoModulo(b.firmas)) : b.cuerpo,
+        }
+      : b)));
 
-  const enviar = async () => {
-    if (!nroOC) { alert("Cargá el N° de la orden de compra."); return; }
-    if (!archivo) { alert("Adjuntá el PDF de la orden de compra (la que hiciste en el sistema del SIPROSA)."); return; }
-    const listaDest = destinatarios.split(",").map((e) => e.trim()).filter(Boolean);
-    if (listaDest.length === 0) { alert("Cargá al menos un correo de destino."); return; }
-    if (!confirm(`Se enviará el mail de adjudicación con la OC Nº ${nroOC} adjunta a:\n\n${listaDest.map((d) => "• " + d).join("\n")}\n\n¿Confirmás el envío?`)) return;
+  const enviar = async (k) => {
+    const b = bloques[k];
+    if (!b.nro) { alert("Cargá el N° de la orden de compra de " + b.clave + "."); return; }
+    if (!b.archivo) { alert("Adjuntá el PDF de la orden de compra de " + b.clave + "."); return; }
+    const listaDest = b.destinatarios.split(",").map((e) => e.trim()).filter(Boolean);
+    if (listaDest.length === 0) { alert("Cargá al menos un correo de destino para " + b.clave + "."); return; }
+    if (!confirm(`Se enviará el mail de adjudicación con la OC Nº ${b.nro} adjunta a:\n\n${listaDest.map((d) => "• " + d).join("\n")}\n\n¿Confirmás el envío?`)) return;
 
-    setEnviando(true);
+    setEnviando(b.clave);
     try {
-      const base64 = await leerArchivoBase64(archivo);
+      const base64 = await leerArchivoBase64(b.archivo);
       const res = await fetch(APPS_SCRIPT_URL, {
         method: "POST",
         body: JSON.stringify({
           accion: "enviarAdjudicacion", clave: APPS_SCRIPT_CLAVE,
           nroExpediente: exp.nroExpediente, paciente: exp.paciente,
-          modulo: exp.modulo, nroOC, firmante,
-          asunto, cuerpo, destinatarios: listaDest,
-          adjunto: { nombre: archivo.name, mimeType: archivo.type || "application/pdf", base64 },
+          modulo: textoModulo(b.firmas), nroOC: b.nro, firmante,
+          asunto: b.asunto, cuerpo: b.cuerpo, destinatarios: listaDest,
+          adjunto: { nombre: b.archivo.name, mimeType: b.archivo.type || "application/pdf", base64 },
         }),
       });
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || "Error en Apps Script");
 
+      const nuevos = bloques.map((x, i) => (i === k ? { ...x, enviado: true, pdfUrl: data.ocPdfUrl || "" } : x));
+      setBloques(nuevos);
+
+      const todasEnviadas = nuevos.every((x) => x.enviado);
+      const envios = nuevos.filter((x) => x.enviado).map((x) => ({
+        proveedor: x.clave,
+        modulo: textoModulo(x.firmas),
+        nro: x.nro,
+        destinatarios: x.destinatarios,
+        pdfUrl: x.pdfUrl || "",
+        fecha: new Date().toISOString(),
+      }));
       await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
-        etapa: 8,
+        ...(todasEnviadas ? { etapa: 8 } : {}),
         oc: {
           fecha: new Date().toISOString(),
-          nro: nroOC, firmante,
-          destinatarios: listaDest.join(", "),
-          pdfUrl: data.ocPdfUrl || "",
+          modo,
+          envios,
+          // se mantienen los campos de siempre para no romper lo ya guardado
+          nro: envios.map((e) => e.nro).join(" / "),
+          firmante,
+          destinatarios: envios.map((e) => e.destinatarios).join(" / "),
+          pdfUrl: envios[0]?.pdfUrl || "",
         },
       });
-      alert("✅ Mail de adjudicación enviado con la OC Nº " + nroOC + ". ¡Expediente completo! 🎉");
+      alert(todasEnviadas
+        ? "✅ Mail de adjudicación enviado con la OC Nº " + b.nro + ". ¡Expediente completo! 🎉"
+        : "✅ Enviada la OC Nº " + b.nro + " a " + b.clave + ".\n\nTodavía queda por enviar: " +
+          nuevos.filter((x) => !x.enviado).map((x) => x.clave).join(", "));
     } catch (e) {
       alert("❌ Error al enviar: " + e.message);
     }
-    setEnviando(false);
+    setEnviando("");
   };
+
+  const chipOC = (activo) => ({
+    display: "flex", alignItems: "center", gap: 6, padding: "7px 12px",
+    borderRadius: 8, border: "1.5px solid " + (activo ? "#0891b2" : "#cbd5e1"),
+    background: activo ? "#e0f2fe" : "#fff", cursor: "pointer", fontSize: 14, fontWeight: 600,
+  });
 
   return (
     <div style={{ ...S.card, borderLeft: "5px solid #f59e0b" }}>
       <h3 style={{ color: "#075e75", marginBottom: 4 }}>🧾 Orden de compra y mail al adjudicado</h3>
       <div style={{ fontSize: 13, color: "#64748b" }}>
-        La OC la emitís en el sistema del SIPROSA como siempre. Acá la subís en PDF, cargás el número, y el sistema se la manda a <b>{adjudicado || "el proveedor adjudicado"}</b> con el texto oficial, tu firma y los logos. La OC queda guardada también en el Drive del expediente.
+        La OC la emitís en el sistema del SIPROSA como siempre. Acá cargás el número, subís el PDF y el sistema se lo manda a{" "}
+        <b>{firmas.join(" y ") || "el proveedor adjudicado"}</b> con el texto oficial, tu firma y los logos. La OC queda guardada también en el Drive del expediente.
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "180px 1fr", gap: 10 }}>
-        <div>
-          <label style={S.label}>N° de orden de compra</label>
-          <input style={S.input} value={nroOC} onChange={(e) => cambiarNroOC(e.target.value)} placeholder="18344" />
-        </div>
-        <div>
-          <label style={S.label}>Correo(s) del adjudicado — separados por coma</label>
-          <input style={S.input} value={destinatarios} onChange={(e) => setDestinatarios(e.target.value)} placeholder="correo@proveedor.com.ar" />
-        </div>
-      </div>
+      {varias && (
+        <>
+          <label style={S.label}>El expediente se adjudicó a {firmas.length} firmas. ¿Cuántas órdenes de compra son?</label>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+            <label style={chipOC(modo === "porFirma")}>
+              <input type="radio" name="modo-oc" checked={modo === "porFirma"} onChange={() => cambiarModo("porFirma")} />
+              Una orden por firma ({firmas.length} órdenes, {firmas.length} PDF)
+            </label>
+            <label style={chipOC(modo === "una")}>
+              <input type="radio" name="modo-oc" checked={modo === "una"} onChange={() => cambiarModo("una")} />
+              Una sola orden para las {firmas.length} firmas
+            </label>
+          </div>
+        </>
+      )}
 
-      <label style={S.label}>PDF de la orden de compra (obligatorio — va adjunto al mail)</label>
-      <input type="file" accept="application/pdf" style={{ marginTop: 6 }} onChange={(e) => setArchivo(e.target.files[0])} />
-      {archivo && <div style={{ fontSize: 13, color: "#334155", marginTop: 6 }}>📎 {archivo.name} ({(archivo.size / 1024 / 1024).toFixed(1)} MB)</div>}
-
-      <label style={S.label}>¿Quién envía este mail? (la firma sale en el mail)</label>
+      <label style={S.label}>¿Quién envía {bloques.length > 1 ? "los mails" : "este mail"}? (la firma sale en el mail)</label>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
         {FIRMANTES.map((fi) => (
-          <label key={fi} style={{
-            display: "flex", alignItems: "center", gap: 6, padding: "7px 12px",
-            borderRadius: 8, border: "1.5px solid " + (firmante === fi ? "#0891b2" : "#cbd5e1"),
-            background: firmante === fi ? "#e0f2fe" : "#fff", cursor: "pointer", fontSize: 14, fontWeight: 600,
-          }}>
+          <label key={fi} style={chipOC(firmante === fi)}>
             <input type="radio" name="firmante-oc" checked={firmante === fi} onChange={() => cambiarFirmante(fi)} />
             {fi}
           </label>
         ))}
       </div>
 
-      <label style={S.label}>Asunto</label>
-      <input style={S.input} value={asunto} onChange={(e) => setAsunto(e.target.value)} />
+      {bloques.map((b, k) => (
+        <div key={b.clave} style={{
+          border: "1px solid " + (b.enviado ? "#86efac" : "#e2e8f0"), borderRadius: 10,
+          padding: 12, marginTop: 14, background: b.enviado ? "#f0fdf4" : "#fff",
+        }}>
+          {bloques.length > 1 && (
+            <div style={{ fontWeight: 800, color: "#075e75", marginBottom: 8 }}>
+              {b.enviado ? "✅ " : "📄 "}Orden de compra para {b.clave}
+              {modulosDe(b.firmas).length > 0 && (
+                <span style={{ fontWeight: 600, color: "#64748b" }}> — {modulosDe(b.firmas).join(" y ")}</span>
+              )}
+            </div>
+          )}
 
-      <label style={S.label}>Cuerpo del mail — lo que ves acá es lo que sale. Para NEGRITA encerrá la palabra entre asteriscos: *así*.</label>
-      <textarea style={{ ...S.input, minHeight: 220, fontFamily: "inherit", fontSize: 14 }} value={cuerpo} onChange={(e) => setCuerpo(e.target.value)} />
+          {b.enviado ? (
+            <div style={{ fontSize: 14, color: "#166534", fontWeight: 600 }}>
+              Enviada la OC Nº {b.nro} a {b.destinatarios}
+            </div>
+          ) : (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "180px 1fr", gap: 10 }}>
+                <div>
+                  <label style={S.label}>N° de orden de compra</label>
+                  <input style={S.input} value={b.nro} onChange={(e) => setB(k, "nro", e.target.value)} placeholder="18344" />
+                </div>
+                <div>
+                  <label style={S.label}>Correo(s) del adjudicado — separados por coma</label>
+                  <input style={S.input} value={b.destinatarios} onChange={(e) => setB(k, "destinatarios", e.target.value)} placeholder="correo@proveedor.com.ar" />
+                </div>
+              </div>
 
-      <button style={{ ...S.btn, marginTop: 18, width: "100%", fontSize: 16, opacity: enviando ? 0.6 : 1 }} disabled={enviando} onClick={enviar}>
-        {enviando ? "⏳ Enviando mail y guardando en Drive..." : "📨 ENVIAR ORDEN DE COMPRA AL ADJUDICADO"}
-      </button>
+              <label style={S.label}>PDF de la orden de compra (obligatorio — va adjunto al mail)</label>
+              <input type="file" accept="application/pdf" style={{ marginTop: 6 }} onChange={(e) => setB(k, "archivo", e.target.files[0])} />
+              {b.archivo && <div style={{ fontSize: 13, color: "#334155", marginTop: 6 }}>📎 {b.archivo.name} ({(b.archivo.size / 1024 / 1024).toFixed(1)} MB)</div>}
+
+              <label style={S.label}>Asunto</label>
+              <input style={S.input} value={b.asunto} onChange={(e) => setB(k, "asunto", e.target.value)} />
+
+              <label style={S.label}>Cuerpo del mail — lo que ves acá es lo que sale. Para NEGRITA encerrá la palabra entre asteriscos: *así*.</label>
+              <textarea style={{ ...S.input, minHeight: 220, fontFamily: "inherit", fontSize: 14 }} value={b.cuerpo} onChange={(e) => setB(k, "cuerpo", e.target.value)} />
+
+              <button style={{ ...S.btn, marginTop: 14, width: "100%", fontSize: 16, opacity: enviando ? 0.6 : 1 }}
+                disabled={!!enviando} onClick={() => enviar(k)}>
+                {enviando === b.clave
+                  ? "⏳ Enviando mail y guardando en Drive..."
+                  : "📨 ENVIAR ORDEN DE COMPRA A " + b.clave.toUpperCase()}
+              </button>
+            </>
+          )}
+        </div>
+      ))}
+
+      {bloques.length > 1 && !bloques.every((b) => b.enviado) && (
+        <div style={{ fontSize: 13, color: "#b45309", marginTop: 10, fontWeight: 600 }}>
+          El expediente se cierra cuando estén enviadas las {bloques.length} órdenes.
+        </div>
+      )}
     </div>
   );
 }
