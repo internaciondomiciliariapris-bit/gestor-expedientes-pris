@@ -463,6 +463,14 @@ function plantillaResolucion(d, logos) {
     const mensualUnico = Number(d.mensualUnico || 0) || (Number(d.mensualA || 0) + Number(d.mensualB || 0));
     const total = mensualUnico * meses6;
     const letras = numeroALetras(total);
+    // Imputación SEPARADA: lo de internación va a la subpartida A (342) y lo de
+    // alimentación a la B (322). Si no vinieran cargados, todo cae en la A.
+    const mensualSubA = Number(d.mensualA || 0);
+    const mensualSubB = Number(d.mensualB || 0);
+    const totalSubA = (mensualSubA || mensualUnico) * meses6;
+    const totalSubB = mensualSubB * meses6;
+    const letrasSubA = numeroALetras(totalSubA);
+    const letrasSubB = numeroALetras(totalSubB);
     const adj = esc(d.firmaA).toUpperCase();
     const mod = esc(moduloSinPeriodo(d.modulo, d.periodoTexto));
 
@@ -504,9 +512,11 @@ function plantillaResolucion(d, logos) {
       '<div class="pagina ultima">' + encabezadoDoc(logos) +
       '<p style="text-align:justify; line-height:1.18; margin-top:12pt;">Por un monto total por ' + meses + " meses <b>" +
       formatoPesos(total) + "</b> (" + letras + "). Dicho servicio comprenderá a partir de la fecha de la orden de compra, comprendiendo desde los Meses de <b>" + per + "</b>.</p>" +
-      art("Imputar a <b>Subpartida " + esc(d.subA) + " y " + esc(d.subB) + "</b> la suma de <b>" + formatoPesos(total) + "</b> (" + letras +
-        ") correspondiente al servicio de Internación Domiciliaria y Módulo de Alimentación domiciliaria (por " + meses + " meses), para la firma <b>" + adj +
-        "</b>; a Jurisdicción 67 - Unid. Org. 965 - Recurso 10 - Finalidad/Función 314 - Programa 19 - Actividad 01 - Partida 300 - con cargo al <b>Presupuesto del año " + esc(d.anioPresupuesto) + "</b>.") +
+      art("Imputar a <b>Subpartida " + esc(d.subA) + "</b> la suma de <b>" + formatoPesos(totalSubA) + "</b> (" + letrasSubA +
+        ") correspondiente al servicio de Internación Domiciliaria, para la firma <b>" + adj + "</b> (por " + meses + " meses).<br>" +
+        "Imputar a <b>Subpartida " + esc(d.subB) + "</b> la suma de <b>" + formatoPesos(totalSubB) + "</b> (" + letrasSubB +
+        ") correspondiente al Módulo de Alimentación domiciliaria, para la firma <b>" + adj + "</b> (por " + meses + " meses)" +
+        "; a Jurisdicción 67 - Unid. Org. 965 - Recurso 10 - Finalidad/Función 314 - Programa 19 - Actividad 01 - Partida 300 - con cargo al <b>Presupuesto del año " + esc(d.anioPresupuesto) + "</b>.") +
       cierreArticulos() +
       pieFinal +
       "</div>";
@@ -3497,6 +3507,11 @@ function GenerarResolucion({ exp }) {
       if (!f.firmaA) { alert("Cargá la firma comercial adjudicada."); return; }
       const mensualTot = Number(f.mensualUnico ?? exp.cuadro?.mensual ?? 0);
       if (!mensualTot) { alert("Cargá el precio mensual total adjudicado."); return; }
+      const m342 = Number(f.montoSub342 || 0);
+      if (m342 <= 0 || m342 > mensualTot) {
+        alert(`Revisá el reparto del ARTÍCULO 2º: el monto mensual de internación (Subp. ${f.subA}) tiene que ser mayor a cero y no puede superar el mensual total de ${formatoPesos(mensualTot)}.`);
+        return;
+      }
     }
     if (!f.fsPresupuesto || !f.fsCuadro || !f.fsDictamen) {
       if (!confirm("Faltan números de fojas (presupuesto, cuadro o dictamen). El documento va a salir con esos espacios vacíos — igual podés completarlos a mano en la vista previa. ¿Continuar?")) return;
@@ -3554,7 +3569,7 @@ function GenerarResolucion({ exp }) {
         </label>
         <label style={chip(esDobleMismo)}>
           <input type="radio" name="submodo-res" checked={esDobleMismo} onChange={() => setF({ ...f, subModo: "dosMismo", firmaA: f.firmaA || (exp.cuadro?.adjudicado || "") })} />
-          322 y 342 — mismo proveedor (una firma, imputación conjunta)
+          322 y 342 — mismo proveedor (una firma, imputación separada)
         </label>
       </div>
 
@@ -3617,18 +3632,53 @@ function GenerarResolucion({ exp }) {
           <label style={{ ...S.label, fontWeight: 600 }}>Detalle de las prestaciones (celda del cuadro)</label>
           <textarea style={{ ...S.input, minHeight: 78 }} value={f.detalleUnico} onChange={set("detalleUnico")} />
 
-          <div style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>
-            El ARTÍCULO 2º va a imputar el total a las <b>Subpartidas {f.subA} y {f.subB}</b> juntas, para esta firma.
+          <div style={{ marginTop: 12, borderTop: "1px dashed #cbd5e1", paddingTop: 10 }}>
+            <div style={{ fontWeight: 800, color: "#334155", fontSize: 14 }}>
+              💰 Reparto para el ARTÍCULO 2º — las subpartidas se imputan por separado
+            </div>
+            <div style={{ fontSize: 12, color: "#64748b", marginTop: 2, marginBottom: 8 }}>
+              Cargá cuánto del mensual corresponde a internación. El resto se imputa solo a alimentación.
+            </div>
+            {(() => {
+              const mensualTot = Number(f.mensualUnico ?? exp.cuadro?.mensual ?? 0);
+              const m342 = Number(f.montoSub342 || 0);
+              const m322 = mensualTot - m342;
+              const meses = Number(exp.periodoMeses || 6);
+              const mal = m342 < 0 || m322 < 0 || m342 > mensualTot;
+              return (
+                <>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <div>
+                      <label style={{ ...S.label, fontWeight: 600 }}>Mensual internación — Subp. {f.subA} ($)</label>
+                      <input style={S.input} type="number" value={f.montoSub342 ?? ""}
+                        onChange={(e) => setF({ ...f, montoSub342: e.target.value })} />
+                    </div>
+                    <div>
+                      <label style={{ ...S.label, fontWeight: 600 }}>Mensual alimentación — Subp. {f.subB} ($)</label>
+                      <div style={{ ...S.input, background: "#f1f5f9", fontWeight: 800, color: mal ? "#b91c1c" : "#075e75" }}>
+                        {formatoPesos(m322)}
+                      </div>
+                    </div>
+                  </div>
+                  {mal && (
+                    <div style={{ color: "#b91c1c", fontWeight: 700, fontSize: 13, marginTop: 6 }}>
+                      ⚠️ El monto de internación no puede ser mayor que el mensual total.
+                    </div>
+                  )}
+                  {mensualTot > 0 && (
+                    <div style={{ background: "#e0f2fe", borderRadius: 8, padding: 10, marginTop: 10, fontSize: 14, color: "#075e75" }}>
+                      <div style={{ fontWeight: 700 }}>Por {meses} meses el Artículo 2º va a decir:</div>
+                      <div style={{ marginTop: 4 }}>Subp. <b>{f.subA}</b> (internación): <b>{formatoPesos(m342 * meses)}</b></div>
+                      <div>Subp. <b>{f.subB}</b> (alimentación): <b>{formatoPesos(m322 * meses)}</b></div>
+                      <div style={{ borderTop: "1px solid #bae6fd", marginTop: 6, paddingTop: 6, fontWeight: 800, textAlign: "right" }}>
+                        Total: {formatoPesos(mensualTot * meses)}
+                      </div>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </div>
-
-          {(() => {
-            const mensualTot = Number(f.mensualUnico ?? exp.cuadro?.mensual ?? 0);
-            return mensualTot > 0 ? (
-              <div style={{ background: "#e0f2fe", borderRadius: 8, padding: 10, marginTop: 10, fontSize: 14, color: "#075e75", fontWeight: 800, textAlign: "right" }}>
-                Monto total por {exp.periodoMeses} meses: {formatoPesos(mensualTot * Number(exp.periodoMeses || 6))}
-              </div>
-            ) : null;
-          })()}
         </div>
       )}
 
