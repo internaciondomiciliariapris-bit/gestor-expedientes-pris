@@ -512,11 +512,13 @@ function plantillaResolucion(d, logos) {
       '<div class="pagina ultima">' + encabezadoDoc(logos) +
       '<p style="text-align:justify; line-height:1.18; margin-top:12pt;">Por un monto total por ' + meses + " meses <b>" +
       formatoPesos(total) + "</b> (" + letras + "). Dicho servicio comprenderá a partir de la fecha de la orden de compra, comprendiendo desde los Meses de <b>" + per + "</b>.</p>" +
-      art("Imputar a <b>Subpartida " + esc(d.subA) + "</b> la suma de <b>" + formatoPesos(totalSubA) + "</b> (" + letrasSubA +
-        ") correspondiente al servicio de Internación Domiciliaria, para la firma <b>" + adj + "</b> (por " + meses + " meses).<br>" +
-        "Imputar a <b>Subpartida " + esc(d.subB) + "</b> la suma de <b>" + formatoPesos(totalSubB) + "</b> (" + letrasSubB +
-        ") correspondiente al Módulo de Alimentación domiciliaria, para la firma <b>" + adj + "</b> (por " + meses + " meses)" +
-        "; a Jurisdicción 67 - Unid. Org. 965 - Recurso 10 - Finalidad/Función 314 - Programa 19 - Actividad 01 - Partida 300 - con cargo al <b>Presupuesto del año " + esc(d.anioPresupuesto) + "</b>.") +
+      '<p style="text-align:justify; line-height:1.18; margin-top:14pt;"><b>ARTICULO ' + (n++) + 'º)</b> ' +
+      "Imputar a <b>Subpartida " + esc(d.subA) + "</b> la suma de <b>" + formatoPesos(totalSubA) + "</b> (" + letrasSubA +
+      ") correspondiente al servicio de Internación Domiciliaria, para la firma <b>" + adj + "</b> (por " + meses + " meses).</p>" +
+      '<p style="text-align:justify; line-height:1.18; margin-top:0; text-indent:88pt;">' +
+      "Imputar a <b>Subpartida " + esc(d.subB) + "</b> la suma de <b>" + formatoPesos(totalSubB) + "</b> (" + letrasSubB +
+      ") correspondiente al Módulo de Alimentación domiciliaria, para la firma <b>" + adj + "</b> (por " + meses + " meses)" +
+      "; a Jurisdicción 67 - Unid. Org. 965 - Recurso 10 - Finalidad/Función 314 - Programa 19 - Actividad 01 - Partida 300 - con cargo al <b>Presupuesto del año " + esc(d.anioPresupuesto) + "</b>.</p>" +
       cierreArticulos() +
       pieFinal +
       "</div>";
