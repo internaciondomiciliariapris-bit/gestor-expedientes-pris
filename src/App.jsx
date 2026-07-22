@@ -1648,20 +1648,29 @@ function BusquedaRapida({ expedientes, onVolver }) {
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: "#0e7490" }}>
-              {lista.length} {lista.length === 1 ? "paciente encontrado" : "pacientes encontrados"} de {fichas.length}
+            <span style={{ fontSize: 13, fontWeight: 700, color: hayFiltros ? "#0e7490" : "#94a3b8" }}>
+              {hayFiltros
+                ? `${lista.length} ${lista.length === 1 ? "paciente encontrado" : "pacientes encontrados"} de ${fichas.length}`
+                : `${fichas.length} pacientes cargados`}
             </span>
             {hayFiltros && <button style={S.btnRojo} onClick={limpiar}>Limpiar filtros</button>}
           </div>
         </div>
 
-        {lista.length === 0 && (
+        {!hayFiltros && (
+          <div style={{ ...S.card, textAlign: "center", color: "#64748b", padding: 40 }}>
+            🔍 Escribí un apellido, DNI o número de expediente<br />
+            <span style={{ fontSize: 13 }}>(o usá los filtros de arriba) para ver la ficha del paciente.</span>
+          </div>
+        )}
+
+        {hayFiltros && lista.length === 0 && (
           <div style={{ ...S.card, textAlign: "center", color: "#64748b", padding: 40 }}>
             No hay pacientes que coincidan con la búsqueda.
           </div>
         )}
 
-        {lista.map((f) => (
+        {hayFiltros && lista.map((f) => (
           <div key={f.id} style={{ ...S.card, borderLeft: "5px solid " + (f.fechaAdjudicacion ? "#16a34a" : "#94a3b8") }}>
             <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
               <div>
