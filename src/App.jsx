@@ -1230,6 +1230,7 @@ export default function App() {
   const [expedientes, setExpedientes] = useState([]);
   const [proveedores, setProveedores] = useState([]);
   const [expedienteSel, setExpedienteSel] = useState(null);
+  const [busqueda, setBusqueda] = useState(false); // pantalla de consulta rápida (solo lectura)
 
   const elegirUsuario = (id) => {
     localStorage.setItem("gexp_usuario", id);
@@ -1262,10 +1263,12 @@ export default function App() {
   );
 
   if (!logueado) return <Login onOk={() => { localStorage.setItem("gexp_login", "ok"); setLogueado(true); }} />;
+  if (busqueda) return <BusquedaRapida expedientes={expedientes} onVolver={() => setBusqueda(false)} />;
   if (!usuario) return (
     <SeleccionUsuario
       onElegir={elegirUsuario}
       onVolver={() => { localStorage.removeItem("gexp_login"); setLogueado(false); }}
+      onBuscar={() => setBusqueda(true)}
     />
   );
 
@@ -1401,9 +1404,20 @@ function Login({ onOk }) {
 
 /* ---------- Selección de usuario ---------- */
 
-function SeleccionUsuario({ onElegir, onVolver }) {
+function SeleccionUsuario({ onElegir, onVolver, onBuscar }) {
   return (
-    <div style={{ ...S.page, display: "flex", alignItems: "center", justifyContent: "center" }}>
+    <div style={{ ...S.page, display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
+      {/* Consulta rápida: queda afuera del panel, arriba a la derecha */}
+      <button
+        onClick={onBuscar}
+        title="Consultar pacientes sin entrar como usuario (solo lectura)"
+        style={{
+          position: "fixed", top: 16, right: 18, zIndex: 20,
+          background: "#fff", color: "#0e7490", border: "2px solid #0891b2",
+          borderRadius: 999, padding: "9px 16px", fontSize: 14, fontWeight: 700,
+          cursor: "pointer", boxShadow: "0 2px 8px rgba(7,94,117,.15)",
+        }}
+      >🔍 Búsqueda rápida</button>
       <div style={{ ...S.card, width: 400, textAlign: "center" }}>
         <img src={LOGO_PRIS} alt="" style={{ maxWidth: "75%", height: "auto", marginBottom: 10 }} onError={(e) => (e.target.style.display = "none")} />
         <h2 style={{ color: "#075e75", marginBottom: 4 }}>¿Quién sos?</h2>
@@ -1418,6 +1432,301 @@ function SeleccionUsuario({ onElegir, onVolver }) {
           ))}
         </div>
         <button style={{ ...S.btnSec, width: "100%", marginTop: 14 }} onClick={onVolver}>← Volver al inicio</button>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Búsqueda rápida (solo lectura) ----------
+   Pantalla de consulta: NO modifica ningún expediente. Sale de la misma
+   colección gexp_expedientes y arma una ficha por paciente con las
+   prestaciones adjudicadas, el proveedor de cada módulo, el período,
+   la adjudicación, la resolución y la orden de compra. */
+
+function fechaCortaISO(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  return d.toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
+
+// Año del expediente: sale del número NNNN/NNN/L/AAAA; si no, de la fecha de carga
+function anioDeExpediente(exp) {
+  const m = String(exp.nroExpediente || "").match(/(\d{4})\s*$/);
+  if (m) return m[1];
+  const f = exp.creado || exp.cuadro?.fecha || "";
+  const d = f ? new Date(f) : null;
+  return d && !isNaN(d) ? String(d.getFullYear()) : "";
+}
+
+function periodoDeExpediente(exp) {
+  const t = String(exp.periodoTexto || "").trim();
+  if (t) return t;
+  return exp.periodoMeses ? exp.periodoMeses + " meses" : "";
+}
+
+// Arma la ficha de consulta de un expediente (un bloque por módulo adjudicado)
+function fichaPaciente(exp) {
+  const items = exp.itemsPrestacion || [];
+  const cuadro = exp.cuadro || {};
+  const envios = exp.oc?.envios || [];
+
+  // Base de módulos: lo que quedó adjudicado en el cuadro. Si todavía no hay
+  // cuadro, se listan igual los módulos de las prestaciones cargadas.
+  let base = cuadro.adjudicaciones?.length ? cuadro.adjudicaciones : null;
+  if (!base) {
+    base = modulosDeItems(items).map((m, i) => ({
+      modulo: m,
+      proveedor: i === 0 ? (cuadro.adjudicado || "") : "",
+      mensual: i === 0 ? (cuadro.mensual ?? null) : null,
+    }));
+  }
+
+  // A qué orden de compra corresponde cada módulo
+  const buscarEnvio = (a) => {
+    if (!envios.length) return null;
+    const porModulo = envios.find((e) => a.modulo && String(e.modulo || "").includes(a.modulo));
+    if (porModulo) return porModulo;
+    const porProv = envios.find((e) =>
+      a.proveedor && String(e.proveedor || "").split(" / ").map((x) => x.trim()).includes(a.proveedor));
+    if (porProv) return porProv;
+    return envios.length === 1 ? envios[0] : null;
+  };
+
+  const modulos = base.map((a) => {
+    const its = itemsDelModulo(items, a.modulo).map(({ it }) => ({
+      nombre: it.nombre || "",
+      cant: it.cantTexto || (it.cantNum ? String(it.cantNum) : ""),
+    }));
+    const env = buscarEnvio(a);
+    return {
+      modulo: a.modulo || MODULO_SIN_NOMBRE,
+      proveedor: a.proveedor || "",
+      mensual: a.mensual ?? null,
+      items: its,
+      ocNro: (env?.nro || exp.oc?.nro || "").toString(),
+      ocFecha: env?.fecha || exp.oc?.fecha || "",
+    };
+  });
+
+  const proveedores = [];
+  modulos.forEach((m) => { if (m.proveedor && !proveedores.includes(m.proveedor)) proveedores.push(m.proveedor); });
+
+  return {
+    id: exp.id,
+    paciente: exp.paciente || "",
+    dni: exp.dni || "",
+    nroExpediente: exp.nroExpediente || "",
+    responsable: exp.responsable || "",
+    etapa: exp.etapa || 0,
+    moduloTexto: exp.modulo || "",
+    periodo: periodoDeExpediente(exp),
+    periodoMeses: exp.periodoMeses || "",
+    anio: anioDeExpediente(exp),
+    fechaAdjudicacion: cuadro.fecha || "",
+    resolucionNro: exp.resolucion?.nro || "",
+    resolucionFecha: exp.resolucion?.fecha || "",
+    detalleServicios: exp.detalleServicios || "",
+    modulos,
+    proveedores,
+  };
+}
+
+function BusquedaRapida({ expedientes, onVolver }) {
+  const [texto, setTexto] = useState("");
+  const [fProv, setFProv] = useState("");
+  const [fMod, setFMod] = useState("");
+  const [fAnio, setFAnio] = useState("");
+  const [fPeriodo, setFPeriodo] = useState("");
+  const [fEstado, setFEstado] = useState("");
+
+  const fichas = useMemo(() => expedientes.map(fichaPaciente), [expedientes]);
+
+  const opciones = useMemo(() => {
+    const prov = [], mods = [], anios = [], pers = [];
+    fichas.forEach((f) => {
+      f.proveedores.forEach((p) => { if (!prov.includes(p)) prov.push(p); });
+      f.modulos.forEach((m) => { if (m.modulo && !mods.includes(m.modulo)) mods.push(m.modulo); });
+      if (f.anio && !anios.includes(f.anio)) anios.push(f.anio);
+      if (f.periodo && !pers.includes(f.periodo)) pers.push(f.periodo);
+    });
+    return {
+      prov: prov.sort((a, b) => a.localeCompare(b)),
+      mods: mods.sort((a, b) => a.localeCompare(b)),
+      anios: anios.sort().reverse(),
+      pers: pers.sort((a, b) => a.localeCompare(b)),
+    };
+  }, [fichas]);
+
+  const norm = (s) => String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const q = norm(texto).trim();
+
+  const lista = useMemo(() => {
+    return fichas.filter((f) => {
+      if (q) {
+        const heno = norm([f.paciente, f.dni, f.nroExpediente, f.proveedores.join(" "), f.moduloTexto].join(" "));
+        if (!q.split(/\s+/).every((t) => heno.includes(t))) return false;
+      }
+      if (fProv && !f.proveedores.includes(fProv)) return false;
+      if (fMod && !f.modulos.some((m) => m.modulo === fMod)) return false;
+      if (fAnio && f.anio !== fAnio) return false;
+      if (fPeriodo && f.periodo !== fPeriodo) return false;
+      if (fEstado === "adjudicado" && !f.fechaAdjudicacion) return false;
+      if (fEstado === "resolucion" && !(f.resolucionNro || f.resolucionFecha)) return false;
+      if (fEstado === "oc" && !f.modulos.some((m) => m.ocNro || m.ocFecha)) return false;
+      if (fEstado === "tramite" && f.fechaAdjudicacion) return false;
+      return true;
+    }).sort((a, b) => a.paciente.localeCompare(b.paciente));
+  }, [fichas, q, fProv, fMod, fAnio, fPeriodo, fEstado]);
+
+  const hayFiltros = !!(texto || fProv || fMod || fAnio || fPeriodo || fEstado);
+  const limpiar = () => { setTexto(""); setFProv(""); setFMod(""); setFAnio(""); setFPeriodo(""); setFEstado(""); };
+
+  const sel = { width: "100%", padding: "9px 10px", fontSize: 14, border: "1.5px solid #cbd5e1", borderRadius: 8, background: "#fff", marginTop: 4 };
+  const etiq = { fontSize: 12, fontWeight: 700, color: "#475569" };
+  const dato = { fontSize: 13, color: "#334155" };
+
+  return (
+    <div style={S.page}>
+      <header style={S.header}>
+        <img src={LOGO_PRIS} alt="" style={S.logo} onError={(e) => (e.target.style.display = "none")} />
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 19, fontWeight: 800, letterSpacing: 0.3 }}>Búsqueda rápida</div>
+          <div style={{ fontSize: 12, opacity: 0.9 }}>Consulta de pacientes · solo lectura</div>
+        </div>
+        <img src={LOGO_GOBIERNO} alt="" style={S.logo} onError={(e) => (e.target.style.display = "none")} />
+      </header>
+
+      <div style={S.container}>
+        <button style={{ ...S.btnSec, marginBottom: 12 }} onClick={onVolver}>← Volver</button>
+
+        <div style={{ ...S.card }}>
+          <input
+            style={{ ...S.input, fontSize: 16 }}
+            placeholder="🔍 Buscar por apellido, DNI, expediente o proveedor..."
+            value={texto}
+            onChange={(e) => setTexto(e.target.value)}
+          />
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10, marginTop: 12 }}>
+            <div>
+              <span style={etiq}>Proveedor</span>
+              <select style={sel} value={fProv} onChange={(e) => setFProv(e.target.value)}>
+                <option value="">Todos</option>
+                {opciones.prov.map((p) => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+            <div>
+              <span style={etiq}>Prestación / módulo</span>
+              <select style={sel} value={fMod} onChange={(e) => setFMod(e.target.value)}>
+                <option value="">Todas</option>
+                {opciones.mods.map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+            <div>
+              <span style={etiq}>Período</span>
+              <select style={sel} value={fPeriodo} onChange={(e) => setFPeriodo(e.target.value)}>
+                <option value="">Todos</option>
+                {opciones.pers.map((p) => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+            <div>
+              <span style={etiq}>Año</span>
+              <select style={sel} value={fAnio} onChange={(e) => setFAnio(e.target.value)}>
+                <option value="">Todos</option>
+                {opciones.anios.map((a) => <option key={a} value={a}>{a}</option>)}
+              </select>
+            </div>
+            <div>
+              <span style={etiq}>Estado</span>
+              <select style={sel} value={fEstado} onChange={(e) => setFEstado(e.target.value)}>
+                <option value="">Todos</option>
+                <option value="adjudicado">Ya adjudicados</option>
+                <option value="resolucion">Con resolución</option>
+                <option value="oc">Con orden de compra</option>
+                <option value="tramite">Todavía en trámite</option>
+              </select>
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "#0e7490" }}>
+              {lista.length} {lista.length === 1 ? "paciente encontrado" : "pacientes encontrados"} de {fichas.length}
+            </span>
+            {hayFiltros && <button style={S.btnRojo} onClick={limpiar}>Limpiar filtros</button>}
+          </div>
+        </div>
+
+        {lista.length === 0 && (
+          <div style={{ ...S.card, textAlign: "center", color: "#64748b", padding: 40 }}>
+            No hay pacientes que coincidan con la búsqueda.
+          </div>
+        )}
+
+        {lista.map((f) => (
+          <div key={f.id} style={{ ...S.card, borderLeft: "5px solid " + (f.fechaAdjudicacion ? "#16a34a" : "#94a3b8") }}>
+            <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+              <div>
+                <div style={{ fontWeight: 800, fontSize: 16, color: "#075e75" }}>{f.paciente.toUpperCase()}</div>
+                <div style={{ fontSize: 13, color: "#475569" }}>Expte. {f.nroExpediente} · DNI {f.dni}</div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <span style={S.chip(true, f.etapa > 0)}>
+                  {f.etapa === 0 ? "⏳ Sin cotizar" : ETAPAS[f.etapa - 1] + " ✓"}
+                </span>
+                <div style={{ fontSize: 12, marginTop: 6, color: "#64748b", fontWeight: 700 }}>👤 {f.responsable || "—"}</div>
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 8, marginTop: 12, padding: "10px 12px", background: "#f1f5f9", borderRadius: 8 }}>
+              <div>
+                <div style={etiq}>Período</div>
+                <div style={dato}>{f.periodo || "—"}{f.periodoMeses ? ` · ${f.periodoMeses} meses` : ""}</div>
+              </div>
+              <div>
+                <div style={etiq}>Fecha de adjudicación</div>
+                <div style={dato}>{f.fechaAdjudicacion ? fechaCortaISO(f.fechaAdjudicacion) : "—"}</div>
+              </div>
+              <div>
+                <div style={etiq}>Resolución</div>
+                <div style={dato}>
+                  {f.resolucionNro ? "Nº " + f.resolucionNro : "—"}
+                  {f.resolucionFecha ? " · " + fechaCortaISO(f.resolucionFecha) : ""}
+                </div>
+              </div>
+            </div>
+
+            {f.modulos.map((m, i) => (
+              <div key={i} style={{ marginTop: 10, padding: "10px 12px", border: "1.5px solid #e2e8f0", borderRadius: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
+                  <div style={{ fontWeight: 800, fontSize: 14, color: "#0e7490" }}>
+                    {m.modulo === MODULO_SIN_NOMBRE ? (f.moduloTexto || "Prestaciones") : m.modulo}
+                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: m.proveedor ? "#166534" : "#94a3b8" }}>
+                    🏢 {m.proveedor || "Sin adjudicar"}
+                  </div>
+                </div>
+
+                {m.items.length > 0 ? (
+                  <ul style={{ margin: "8px 0 0 18px", padding: 0, fontSize: 13, color: "#334155" }}>
+                    {m.items.map((it, k) => (
+                      <li key={k} style={{ marginBottom: 2 }}>
+                        {it.nombre}{it.cant ? ": " + it.cant : ""}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  f.detalleServicios
+                    ? <div style={{ fontSize: 13, color: "#475569", whiteSpace: "pre-wrap", marginTop: 6 }}>{f.detalleServicios}</div>
+                    : <div style={{ fontSize: 13, color: "#94a3b8", marginTop: 6 }}>Sin prestaciones cargadas.</div>
+                )}
+
+                <div style={{ fontSize: 12, color: "#475569", marginTop: 8 }}>
+                  <b>Orden de compra:</b> {m.ocNro ? "Nº " + m.ocNro : "—"}
+                  {m.ocFecha ? " · " + fechaCortaISO(m.ocFecha) : ""}
+                </div>
+              </div>
+            ))}
+          </div>
+        ))}
       </div>
     </div>
   );
