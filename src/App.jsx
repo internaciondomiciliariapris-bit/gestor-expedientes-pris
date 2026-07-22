@@ -1069,13 +1069,19 @@ function extraerItemsDeTexto(texto) {
    Un ítem puede llevar un campo "modulo" (texto libre). Si ningún ítem lo tiene,
    o todos comparten el mismo, el cuadro se comporta exactamente como antes. */
 
+// Placeholder para ítems sin módulo cargado. Nunca debe ser "" porque se usa
+// como clave de campo en Firestore (presupuestos.PROVEEDOR.modulos.<clave>),
+// y Firestore rechaza el updateDoc() si algún nombre de campo está vacío.
+const MODULO_SIN_NOMBRE = "Sin módulo";
+
 function modulosDeItems(items) {
   const vistos = [];
   (items || []).forEach((it) => {
     const m = it && it.modulo ? String(it.modulo).trim() : "";
-    if (!vistos.includes(m)) vistos.push(m);
+    const clave = m || MODULO_SIN_NOMBRE;
+    if (!vistos.includes(clave)) vistos.push(clave);
   });
-  return vistos.length ? vistos : [""];
+  return vistos.length ? vistos : [MODULO_SIN_NOMBRE];
 }
 
 function hayVariosModulos(items) { return modulosDeItems(items).length > 1; }
@@ -1084,7 +1090,8 @@ function itemsDelModulo(items, mod) {
   const salida = [];
   (items || []).forEach((it, i) => {
     const m = it && it.modulo ? String(it.modulo).trim() : "";
-    if (m === mod) salida.push({ it, i });
+    const clave = m || MODULO_SIN_NOMBRE;
+    if (clave === mod) salida.push({ it, i });
   });
   return salida;
 }
