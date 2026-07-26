@@ -1656,6 +1656,21 @@ function BusquedaRapida({ expedientes, onVolver }) {
     setBuscandoCorreos(false);
   };
 
+  // Al cambiar la búsqueda: limpia el resultado viejo de Gmail y, si el término está
+  // completo y dejaste de tipear, lo busca solo (con pausa para no gastar cuota por tecla).
+  useEffect(() => {
+    const t = texto.trim();
+    if (t !== claveCorreos && (correos.length || prestaciones.length || claveCorreos || errorCorreos)) {
+      setCorreos([]); setPrestaciones([]); setClaveCorreos(""); setErrorCorreos(""); setVerCorreos(false);
+    }
+    const dni = t.replace(/\D/g, "");
+    const completo = /^\d{7,9}$/.test(dni) || t.split(/\s+/).filter(Boolean).length >= 2 || t.length >= 5;
+    if (!completo || t === claveCorreos) return;
+    const id = setTimeout(() => { buscarEnCorreos("enviados", false); }, 1200);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [texto]);
+
   const sel = { width: "100%", padding: "9px 10px", fontSize: 14, border: "1.5px solid #cbd5e1", borderRadius: 8, background: "#fff", marginTop: 4 };
   const etiq = { fontSize: 12, fontWeight: 700, color: "#475569" };
   const dato = { fontSize: 13, color: "#334155" };
@@ -1818,10 +1833,10 @@ function BusquedaRapida({ expedientes, onVolver }) {
           </div>
         ))}
 
-        {(buscandoCorreos || errorCorreos || claveCorreos) && (
+        {(buscandoCorreos || errorCorreos || claveCorreos || prestacionesSistema.length > 0) && (
           <div style={{ ...S.card, borderLeft: "5px solid #0e7490" }}>
             <div style={{ fontWeight: 800, color: "#0e7490", marginBottom: 8, fontSize: 16 }}>
-              🩺 Prestaciones solicitadas{claveCorreos ? ` · "${claveCorreos}"` : ""}
+              🩺 Prestaciones solicitadas{(claveCorreos || texto.trim()) ? ` · "${claveCorreos || texto.trim()}"` : ""}
             </div>
 
             {buscandoCorreos && <div style={{ fontSize: 14, color: "#64748b" }}>Buscando en el Gmail…</div>}
