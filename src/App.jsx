@@ -1547,6 +1547,12 @@ function BusquedaRapida({ expedientes, onVolver }) {
   const [fPeriodo, setFPeriodo] = useState("");
   const [fEstado, setFEstado] = useState("");
 
+  // Búsqueda en el Gmail de internación (fuente adicional, aparte de Firestore)
+  const [correos, setCorreos] = useState([]);
+  const [buscandoCorreos, setBuscandoCorreos] = useState(false);
+  const [errorCorreos, setErrorCorreos] = useState("");
+  const [claveCorreos, setClaveCorreos] = useState(""); // término con el que se buscó en el Gmail
+
   const fichas = useMemo(() => expedientes.map(fichaPaciente), [expedientes]);
 
   const opciones = useMemo(() => {
@@ -1587,7 +1593,30 @@ function BusquedaRapida({ expedientes, onVolver }) {
   }, [fichas, q, fProv, fMod, fAnio, fPeriodo, fEstado]);
 
   const hayFiltros = !!(texto || fProv || fMod || fAnio || fPeriodo || fEstado);
-  const limpiar = () => { setTexto(""); setFProv(""); setFMod(""); setFAnio(""); setFPeriodo(""); setFEstado(""); };
+  const limpiar = () => { setTexto(""); setFProv(""); setFMod(""); setFAnio(""); setFPeriodo(""); setFEstado(""); setCorreos([]); setClaveCorreos(""); setErrorCorreos(""); };
+
+  // Busca en el Gmail de internación los correos más recientes del término tipeado
+  const buscarEnCorreos = async () => {
+    const t = texto.trim();
+    if (!t) return;
+    setBuscandoCorreos(true);
+    setErrorCorreos("");
+    try {
+      const res = await fetch(APPS_SCRIPT_URL, {
+        method: "POST",
+        body: JSON.stringify({ clave: APPS_SCRIPT_CLAVE, accion: "buscarCorreos", texto: t }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "Error desconocido en Apps Script");
+      setCorreos(data.correos || []);
+      setClaveCorreos(t);
+    } catch (e) {
+      setErrorCorreos(e.message || "No se pudo buscar en el Gmail.");
+      setCorreos([]);
+      setClaveCorreos(t);
+    }
+    setBuscandoCorreos(false);
+  };
 
   const sel = { width: "100%", padding: "9px 10px", fontSize: 14, border: "1.5px solid #cbd5e1", borderRadius: 8, background: "#fff", marginTop: 4 };
   const etiq = { fontSize: 12, fontWeight: 700, color: "#475569" };
@@ -1661,6 +1690,13 @@ function BusquedaRapida({ expedientes, onVolver }) {
                 : `${fichas.length} pacientes cargados`}
             </span>
             {hayFiltros && <button style={S.btnRojo} onClick={limpiar}>Limpiar filtros</button>}
+            <button
+              style={{ ...S.btn, marginLeft: "auto", opacity: texto.trim() && !buscandoCorreos ? 1 : 0.55 }}
+              disabled={!texto.trim() || buscandoCorreos}
+              onClick={buscarEnCorreos}
+            >
+              {buscandoCorreos ? "Buscando correos…" : "📧 Buscar también en el Gmail"}
+            </button>
           </div>
         </div>
 
@@ -1743,6 +1779,43 @@ function BusquedaRapida({ expedientes, onVolver }) {
             ))}
           </div>
         ))}
+
+        {(buscandoCorreos || errorCorreos || claveCorreos) && (
+          <div style={{ ...S.card, borderLeft: "5px solid #ea4335" }}>
+            <div style={{ fontWeight: 800, color: "#b91c1c", marginBottom: 4 }}>
+              📧 Correos de internación{claveCorreos ? ` · "${claveCorreos}"` : ""}
+            </div>
+            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 10 }}>
+              Los correos más recientes donde aparece la búsqueda (lo pedido y las prestaciones). Fuente: Gmail de internación domiciliaria.
+            </div>
+
+            {buscandoCorreos && <div style={{ fontSize: 14, color: "#64748b" }}>Buscando en el Gmail…</div>}
+            {errorCorreos && <div style={{ fontSize: 14, color: "#b91c1c" }}>⚠️ {errorCorreos}</div>}
+            {!buscandoCorreos && !errorCorreos && correos.length === 0 && (
+              <div style={{ fontSize: 14, color: "#94a3b8" }}>No se encontraron correos para “{claveCorreos}”.</div>
+            )}
+
+            {!buscandoCorreos && correos.map((c, i) => (
+              <div key={i} style={{ marginTop: 10, padding: "10px 12px", border: "1.5px solid #e2e8f0", borderRadius: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: "#0e7490" }}>{c.asunto || "(sin asunto)"}</div>
+                  <div style={{ fontSize: 12, color: "#64748b" }}>{c.fecha}</div>
+                </div>
+                <div style={{ fontSize: 12, color: "#475569", marginTop: 2 }}>De: {c.de}</div>
+                {c.resumen && (
+                  <div style={{ fontSize: 13, color: "#334155", whiteSpace: "pre-wrap", marginTop: 8, maxHeight: 170, overflow: "auto", background: "#f8fafc", padding: "8px 10px", borderRadius: 6 }}>
+                    {c.resumen}
+                  </div>
+                )}
+                {c.url && (
+                  <a href={c.url} target="_blank" rel="noreferrer" style={{ display: "inline-block", marginTop: 8, fontSize: 13, fontWeight: 700, color: "#075e75", textDecoration: "none" }}>
+                    Abrir en Gmail →
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
