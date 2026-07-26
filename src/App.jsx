@@ -1552,7 +1552,11 @@ function BusquedaRapida({ expedientes, onVolver }) {
   const [buscandoCorreos, setBuscandoCorreos] = useState(false);
   const [errorCorreos, setErrorCorreos] = useState("");
   const [claveCorreos, setClaveCorreos] = useState(""); // término con el que se buscó en el Gmail
-  const [filtroCorreo, setFiltroCorreo] = useState("todos"); // todos | recibidos | enviados
+  const [filtroCorreo, setFiltroCorreo] = useState("enviados"); // enviados | recibidos | todos
+  const [prestaciones, setPrestaciones] = useState([]); // vista principal: prestaciones del pedido
+  const [pedidoFecha, setPedidoFecha] = useState("");
+  const [pedidoUrl, setPedidoUrl] = useState("");
+  const [verCorreos, setVerCorreos] = useState(false); // los correos son OPCIONALES (ocultos por defecto)
 
   const fichas = useMemo(() => expedientes.map(fichaPaciente), [expedientes]);
 
@@ -1594,14 +1598,16 @@ function BusquedaRapida({ expedientes, onVolver }) {
   }, [fichas, q, fProv, fMod, fAnio, fPeriodo, fEstado]);
 
   const hayFiltros = !!(texto || fProv || fMod || fAnio || fPeriodo || fEstado);
-  const limpiar = () => { setTexto(""); setFProv(""); setFMod(""); setFAnio(""); setFPeriodo(""); setFEstado(""); setCorreos([]); setClaveCorreos(""); setErrorCorreos(""); setFiltroCorreo("todos"); };
+  const limpiar = () => { setTexto(""); setFProv(""); setFMod(""); setFAnio(""); setFPeriodo(""); setFEstado(""); setCorreos([]); setClaveCorreos(""); setErrorCorreos(""); setFiltroCorreo("enviados"); setPrestaciones([]); setPedidoFecha(""); setPedidoUrl(""); setVerCorreos(false); };
 
-  // Busca en el Gmail de internación los correos más recientes del término tipeado.
-  // filtro: "todos" | "recibidos" | "enviados" (opcional)
-  const buscarEnCorreos = async (filtro = filtroCorreo) => {
+  // Busca en el Gmail de internación. Vista principal = prestaciones del pedido.
+  // filtro: enviados | recibidos | todos (para la sección OPCIONAL de correos)
+  // mantenerAbierto: true cuando se cambia de pestaña (no cierra la sección de correos)
+  const buscarEnCorreos = async (filtro = "enviados", mantenerAbierto = false) => {
     const t = texto.trim();
     if (!t) return;
     setFiltroCorreo(filtro);
+    if (!mantenerAbierto) setVerCorreos(false); // búsqueda nueva: arranca mostrando SOLO prestaciones
     setBuscandoCorreos(true);
     setErrorCorreos("");
     try {
@@ -1611,10 +1617,14 @@ function BusquedaRapida({ expedientes, onVolver }) {
       });
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || "Error desconocido en Apps Script");
+      setPrestaciones(data.prestaciones || []);
+      setPedidoFecha(data.pedidoFecha || "");
+      setPedidoUrl(data.pedidoUrl || "");
       setCorreos(data.correos || []);
       setClaveCorreos(t);
     } catch (e) {
       setErrorCorreos(e.message || "No se pudo buscar en el Gmail.");
+      setPrestaciones([]);
       setCorreos([]);
       setClaveCorreos(t);
     }
@@ -1698,7 +1708,7 @@ function BusquedaRapida({ expedientes, onVolver }) {
               disabled={!texto.trim() || buscandoCorreos}
               onClick={() => buscarEnCorreos()}
             >
-              {buscandoCorreos ? "Buscando correos…" : "📧 Buscar también en el Gmail"}
+              {buscandoCorreos ? "Buscando…" : "🩺 Ver prestaciones (Gmail)"}
             </button>
           </div>
         </div>
@@ -1784,38 +1794,79 @@ function BusquedaRapida({ expedientes, onVolver }) {
         ))}
 
         {(buscandoCorreos || errorCorreos || claveCorreos) && (
-          <div style={{ ...S.card, borderLeft: "5px solid #ea4335" }}>
-            <div style={{ fontWeight: 800, color: "#b91c1c", marginBottom: 4 }}>
-              📧 Correos de internación{claveCorreos ? ` · "${claveCorreos}"` : ""}
-            </div>
-            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 10 }}>
-              Los correos más recientes donde aparece la búsqueda (lo pedido y las prestaciones). Fuente: Gmail de internación domiciliaria.
-            </div>
-
-            <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
-              {[["todos", "Todos"], ["recibidos", "Recibidos"], ["enviados", "Enviados"]].map(([val, lbl]) => (
-                <button
-                  key={val}
-                  disabled={buscandoCorreos}
-                  onClick={() => buscarEnCorreos(val)}
-                  style={{
-                    padding: "5px 12px", fontSize: 13, fontWeight: 700, borderRadius: 20,
-                    cursor: buscandoCorreos ? "default" : "pointer",
-                    border: "1.5px solid " + (filtroCorreo === val ? "#0e7490" : "#cbd5e1"),
-                    background: filtroCorreo === val ? "#0e7490" : "#fff",
-                    color: filtroCorreo === val ? "#fff" : "#475569",
-                  }}
-                >{lbl}</button>
-              ))}
+          <div style={{ ...S.card, borderLeft: "5px solid #0e7490" }}>
+            <div style={{ fontWeight: 800, color: "#0e7490", marginBottom: 8, fontSize: 16 }}>
+              🩺 Prestaciones solicitadas{claveCorreos ? ` · "${claveCorreos}"` : ""}
             </div>
 
             {buscandoCorreos && <div style={{ fontSize: 14, color: "#64748b" }}>Buscando en el Gmail…</div>}
             {errorCorreos && <div style={{ fontSize: 14, color: "#b91c1c" }}>⚠️ {errorCorreos}</div>}
-            {!buscandoCorreos && !errorCorreos && correos.length === 0 && (
-              <div style={{ fontSize: 14, color: "#94a3b8" }}>No se encontraron correos para “{claveCorreos}”.</div>
+
+            {/* VISTA PRINCIPAL: solo las prestaciones del último pedido */}
+            {!buscandoCorreos && !errorCorreos && (
+              prestaciones.length > 0 ? (
+                <div>
+                  <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
+                    {prestaciones.map((p, i) => (
+                      <li key={i} style={{ padding: "7px 0", borderBottom: "1px solid #f1f5f9", fontSize: 15, color: "#0f172a", display: "flex", gap: 8 }}>
+                        <span style={{ color: "#0e7490", fontWeight: 800 }}>•</span>
+                        <span>{renderConNegritas(p)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  {pedidoFecha && (
+                    <div style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>
+                      Según el pedido del {pedidoFecha}
+                      {pedidoUrl && <> · <a href={pedidoUrl} target="_blank" rel="noreferrer" style={{ color: "#075e75", fontWeight: 700, textDecoration: "none" }}>Abrir en Gmail →</a></>}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ fontSize: 14, color: "#94a3b8" }}>
+                  No pude extraer una lista de prestaciones del último pedido de “{claveCorreos}”. Podés revisar los correos en “Ver correos”.
+                </div>
+              )
             )}
 
-            {!buscandoCorreos && correos.map((c, i) => <TarjetaCorreo key={i} c={c} />)}
+            {/* OPCIONAL: correos (enviados / recibidos), ocultos por defecto */}
+            {!buscandoCorreos && !errorCorreos && (
+              <div style={{ marginTop: 14, borderTop: "1px dashed #e2e8f0", paddingTop: 12 }}>
+                <button
+                  onClick={() => setVerCorreos((v) => !v)}
+                  style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontSize: 13, fontWeight: 700, color: "#0e7490" }}
+                >
+                  {verCorreos ? "▲ Ocultar correos" : "📩 Ver correos (enviados / recibidos)"}
+                </button>
+
+                {verCorreos && (
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+                      {[["enviados", "Enviados"], ["recibidos", "Recibidos"], ["todos", "Todos"]].map(([val, lbl]) => (
+                        <button
+                          key={val}
+                          disabled={buscandoCorreos}
+                          onClick={() => buscarEnCorreos(val, true)}
+                          style={{
+                            padding: "5px 12px", fontSize: 13, fontWeight: 700, borderRadius: 20,
+                            cursor: buscandoCorreos ? "default" : "pointer",
+                            border: "1.5px solid " + (filtroCorreo === val ? "#0e7490" : "#cbd5e1"),
+                            background: filtroCorreo === val ? "#0e7490" : "#fff",
+                            color: filtroCorreo === val ? "#fff" : "#475569",
+                          }}
+                        >{lbl}</button>
+                      ))}
+                    </div>
+
+                    {correos.length === 0 && (
+                      <div style={{ fontSize: 14, color: "#94a3b8" }}>
+                        No hay correos {filtroCorreo === "todos" ? "" : filtroCorreo} para “{claveCorreos}”.{filtroCorreo !== "todos" ? " Probá otra pestaña." : ""}
+                      </div>
+                    )}
+                    {correos.map((c, i) => <TarjetaCorreo key={i} c={c} />)}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
