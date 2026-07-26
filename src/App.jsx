@@ -310,6 +310,11 @@ function plantillaNota(d, logos) {
   const letras = numeroALetras(d.monto);
   const moduloLimpio = limpiarModulo(d.modulo);
   const lineaModulo = /^m[oó]dulo/i.test(moduloLimpio) ? esc(moduloLimpio) : "Modulo de " + esc(moduloLimpio);
+  // Prestaciones del módulo (sin precios): "Enfermería: 24hs por día", etc.
+  const itemsNota = (d.items || []).filter((it) => it && it.nombre);
+  const prestacionesHtml = itemsNota
+    .map((it) => '<p style="margin-left:176pt; margin-top:2pt;">' + esc(it.nombre) + (it.cantTexto ? ": " + esc(it.cantTexto) : "") + "</p>")
+    .join("");
   const impHtml = esc(d.imputacion)
     .replace(/Subp:\s*3\d\d/g, "<b>$&</b>")
     .replace(/Presupuesto\s*\d{4}/, "<b>$&</b>");
@@ -325,7 +330,8 @@ function plantillaNota(d, logos) {
     '<p style="text-align:justify; text-indent:135pt; margin-left:5pt; line-height:1.5; margin-top:16pt;">' +
     "Me dirijo a usted a fines de informarle la afectación presupuestaria, en virtud de la prestación del servicio " +
     esc(moduloLimpio) + " correspondiente al paciente<b>; " + esc(d.paciente) + " </b>la cual solicita:</p>" +
-    '<p style="margin-left:146pt; margin-top:12pt;">' + lineaModulo + "</p>" +
+    '<p style="margin-left:146pt; margin-top:12pt;">' + lineaModulo + (itemsNota.length ? ":" : "") + "</p>" +
+    prestacionesHtml +
     '<p style="text-align:justify; text-indent:135pt; line-height:1.5; margin-top:14pt;">' +
     "Para los periodos de <b>" + esc(d.periodoTexto) + "</b>, por el importe total por " + esc(d.periodoMeses) +
     " meses de <b>" + esc(d.montoFormato) + "</b> (" + letras + ") a la " + impHtml + ".</p>" +
@@ -968,6 +974,7 @@ function fechaLargaHoy() {
 const datosNota = (exp, extra = {}) => ({
   nroExpediente: exp.nroExpediente, paciente: exp.paciente, dni: exp.dni,
   modulo: exp.modulo, periodoTexto: exp.periodoTexto || exp.periodoMeses + " meses", periodoMeses: exp.periodoMeses,
+  items: extra.items ?? exp.itemsPrestacion ?? [],
   monto: extra.monto ?? exp.nota?.monto ?? (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6),
   montoFormato: formatoPesos(extra.monto ?? exp.nota?.monto ?? (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6)),
   directora: extra.directora ?? exp.nota?.directora ?? "Dra. Noellia Bottone",
