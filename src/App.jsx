@@ -1597,6 +1597,31 @@ function BusquedaRapida({ expedientes, onVolver }) {
     }).sort((a, b) => a.paciente.localeCompare(b.paciente));
   }, [fichas, q, fProv, fMod, fAnio, fPeriodo, fEstado]);
 
+  // Prestaciones cargadas en el SISTEMA para los pacientes que matchean la búsqueda
+  const prestacionesSistema = useMemo(() => {
+    const out = [];
+    lista.forEach((f) => f.modulos.forEach((m) => (m.items || []).forEach((it) => {
+      if (it.nombre) out.push(it.nombre + (it.cant ? ": " + it.cant : ""));
+    })));
+    return out;
+  }, [lista]);
+
+  // Cruce SISTEMA + GMAIL: unifica ambas fuentes y saca duplicados por nombre de prestación
+  const etiquetaPrestacion = (s) => norm(String(s || "").split(":")[0] || "");
+  const prestacionesCombinadas = useMemo(() => {
+    const out = [];
+    const vistos = new Set();
+    [...prestaciones, ...prestacionesSistema].forEach((p) => {
+      const k = etiquetaPrestacion(p);
+      if (k && !vistos.has(k)) { vistos.add(k); out.push(p); }
+    });
+    return out;
+  }, [prestaciones, prestacionesSistema]);
+  const fuentesPrestaciones = [
+    prestaciones.length ? "Gmail" : null,
+    prestacionesSistema.length ? "sistema" : null,
+  ].filter(Boolean);
+
   const hayFiltros = !!(texto || fProv || fMod || fAnio || fPeriodo || fEstado);
   const limpiar = () => { setTexto(""); setFProv(""); setFMod(""); setFAnio(""); setFPeriodo(""); setFEstado(""); setCorreos([]); setClaveCorreos(""); setErrorCorreos(""); setFiltroCorreo("enviados"); setPrestaciones([]); setPedidoFecha(""); setPedidoUrl(""); setVerCorreos(false); };
 
@@ -1802,28 +1827,27 @@ function BusquedaRapida({ expedientes, onVolver }) {
             {buscandoCorreos && <div style={{ fontSize: 14, color: "#64748b" }}>Buscando en el Gmail…</div>}
             {errorCorreos && <div style={{ fontSize: 14, color: "#b91c1c" }}>⚠️ {errorCorreos}</div>}
 
-            {/* VISTA PRINCIPAL: solo las prestaciones del último pedido */}
+            {/* VISTA PRINCIPAL: prestaciones cruzando SISTEMA + GMAIL */}
             {!buscandoCorreos && !errorCorreos && (
-              prestaciones.length > 0 ? (
+              prestacionesCombinadas.length > 0 ? (
                 <div>
                   <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
-                    {prestaciones.map((p, i) => (
+                    {prestacionesCombinadas.map((p, i) => (
                       <li key={i} style={{ padding: "7px 0", borderBottom: "1px solid #f1f5f9", fontSize: 15, color: "#0f172a", display: "flex", gap: 8 }}>
                         <span style={{ color: "#0e7490", fontWeight: 800 }}>•</span>
                         <span>{renderConNegritas(p)}</span>
                       </li>
                     ))}
                   </ul>
-                  {pedidoFecha && (
-                    <div style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>
-                      Según el pedido del {pedidoFecha}
-                      {pedidoUrl && <> · <a href={pedidoUrl} target="_blank" rel="noreferrer" style={{ color: "#075e75", fontWeight: 700, textDecoration: "none" }}>Abrir en Gmail →</a></>}
-                    </div>
-                  )}
+                  <div style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>
+                    {fuentesPrestaciones.length ? "Fuente: " + fuentesPrestaciones.join(" + ") : ""}
+                    {pedidoFecha ? ` · pedido del ${pedidoFecha}` : ""}
+                    {pedidoUrl && <> · <a href={pedidoUrl} target="_blank" rel="noreferrer" style={{ color: "#075e75", fontWeight: 700, textDecoration: "none" }}>Abrir en Gmail →</a></>}
+                  </div>
                 </div>
               ) : (
                 <div style={{ fontSize: 14, color: "#94a3b8" }}>
-                  No pude extraer una lista de prestaciones del último pedido de “{claveCorreos}”. Podés revisar los correos en “Ver correos”.
+                  No encontré prestaciones para “{claveCorreos}” ni en el sistema ni en el pedido de Gmail. Podés revisar los correos en “Ver correos”.
                 </div>
               )
             )}
