@@ -4,6 +4,7 @@ import {
   getFirestore, collection, addDoc, doc, updateDoc, deleteDoc, onSnapshot,
 } from "firebase/firestore";
 import { getAuth, signInAnonymously } from "firebase/auth";
+import { PACIENTES_USUARIOS } from "./usuarios.js";
 
 /* ================================================================
    CONSTANTES CRÍTICAS — VERIFICAR SIEMPRE ANTES DE REEMPLAZAR ESTE ARCHIVO
@@ -1473,6 +1474,68 @@ function periodoDeExpediente(exp) {
 }
 
 // Arma la ficha de consulta de un expediente (un bloque por módulo adjudicado)
+/* ---------- USUARIOS (base LISTADO_PACIENTES_INTERNACION) ---------- */
+const USUARIOS_ORDEN = ["JORGE", "YAMILA", "PAULA", "JULIETA"];
+
+// Normaliza un nombre para comparar: MAYÚSCULAS, sin acentos, sin "(ALIMENTACION)" etc.
+function normNombrePac(s) {
+  return String(s || "")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/[^A-Z0-9Ñ ]/g, " ")
+    .replace(/\s+/g, " ").trim();
+}
+
+// Pacientes agrupados por usuario (sin duplicar el mismo paciente que aparece con dos módulos)
+const PACIENTES_POR_USUARIO = (() => {
+  const map = {};
+  USUARIOS_ORDEN.forEach((u) => { map[u] = []; });
+  const vistos = {};
+  PACIENTES_USUARIOS.forEach(({ n, u }) => {
+    const U = String(u || "").toUpperCase();
+    if (!map[U]) map[U] = [];
+    if (!vistos[U]) vistos[U] = new Set();
+    const key = normNombrePac(n);
+    if (!key || vistos[U].has(key)) return;
+    vistos[U].add(key);
+    map[U].push(String(n || "").replace(/\s*\([^)]*\)\s*$/, "").trim());
+  });
+  Object.keys(map).forEach((u) => map[u].sort((a, b) => a.localeCompare(b, "es")));
+  return map;
+})();
+
+// Índice nombre-normalizado -> usuario(s)
+const INDICE_USUARIO = (() => {
+  const idx = {};
+  PACIENTES_USUARIOS.forEach(({ n, u }) => {
+    const key = normNombrePac(n);
+    if (!key) return;
+    if (!idx[key]) idx[key] = new Set();
+    idx[key].add(String(u || "").toUpperCase());
+  });
+  return idx;
+})();
+
+// Usuario(s) a los que pertenece un nombre (match exacto normalizado, o por tokens apellido+nombre)
+function usuariosDeNombre(nombre) {
+  const key = normNombrePac(nombre);
+  if (!key) return [];
+  if (INDICE_USUARIO[key]) return [...INDICE_USUARIO[key]];
+  const toks = key.split(" ").filter(Boolean);
+  if (toks.length < 2) return [];
+  const out = new Set();
+  Object.keys(INDICE_USUARIO).forEach((k) => {
+    const kt = k.split(" ").filter(Boolean);
+    const chico = toks.length <= kt.length ? toks : kt;
+    const grande = toks.length <= kt.length ? kt : toks;
+    if (chico.length >= 2 && chico.every((t) => grande.includes(t))) {
+      INDICE_USUARIO[k].forEach((u) => out.add(u));
+    }
+  });
+  return [...out];
+}
+
 function fichaPaciente(exp) {
   const items = exp.itemsPrestacion || [];
   const cuadro = exp.cuadro || {};
@@ -1539,6 +1602,76 @@ function fichaPaciente(exp) {
   };
 }
 
+/* ---------- Panel USUARIOS (colapsable) ---------- */
+function PanelUsuarios({ onElegirPaciente }) {
+  const [abierto, setAbierto] = useState(false);
+  const [usuarioSel, setUsuarioSel] = useState("");
+  const total = USUARIOS_ORDEN.reduce((a, u) => a + (PACIENTES_POR_USUARIO[u]?.length || 0), 0);
+  const cap = (u) => u.charAt(0) + u.slice(1).toLowerCase();
+
+  return (
+    <div style={{ ...S.card, padding: 0, overflow: "hidden" }}>
+      <button
+        onClick={() => setAbierto((v) => !v)}
+        style={{
+          width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+          background: "#0e7490", color: "#fff", border: "none", padding: "12px 16px",
+          cursor: "pointer", fontSize: 15, fontWeight: 800,
+        }}
+      >
+        <span>👥 USUARIOS</span>
+        <span style={{ fontSize: 13, fontWeight: 700, opacity: 0.9 }}>{total} pacientes {abierto ? "▲" : "▼"}</span>
+      </button>
+
+      {abierto && (
+        <div style={{ padding: 14 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: usuarioSel ? 12 : 0 }}>
+            {USUARIOS_ORDEN.map((u) => {
+              const n = PACIENTES_POR_USUARIO[u]?.length || 0;
+              const activo = usuarioSel === u;
+              return (
+                <button
+                  key={u}
+                  onClick={() => setUsuarioSel(activo ? "" : u)}
+                  style={{
+                    padding: "7px 14px", borderRadius: 20, fontSize: 14, fontWeight: 800, cursor: "pointer",
+                    border: "1.5px solid " + (activo ? "#0e7490" : "#cbd5e1"),
+                    background: activo ? "#0e7490" : "#fff", color: activo ? "#fff" : "#334155",
+                  }}
+                >
+                  {cap(u)} <span style={{ opacity: 0.75 }}>({n})</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {usuarioSel && (
+            <div>
+              <div style={{ fontSize: 12, color: "#64748b", marginBottom: 6 }}>
+                Pacientes de {cap(usuarioSel)} — tocá uno para buscarlo:
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: 380, overflowY: "auto" }}>
+                {PACIENTES_POR_USUARIO[usuarioSel].map((nombre, i) => (
+                  <button
+                    key={i}
+                    onClick={() => onElegirPaciente && onElegirPaciente(nombre)}
+                    style={{
+                      textAlign: "left", padding: "8px 10px", border: "1px solid #eef2f7", borderRadius: 6,
+                      background: "#fff", cursor: "pointer", fontSize: 14, color: "#0f172a",
+                    }}
+                  >
+                    {nombre}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BusquedaRapida({ expedientes, onVolver }) {
   const [texto, setTexto] = useState("");
   const [fProv, setFProv] = useState("");
@@ -1556,6 +1689,7 @@ function BusquedaRapida({ expedientes, onVolver }) {
   const [prestaciones, setPrestaciones] = useState([]); // vista principal: prestaciones del pedido
   const [pedidoFecha, setPedidoFecha] = useState("");
   const [pedidoUrl, setPedidoUrl] = useState("");
+  const [pacienteNombreGmail, setPacienteNombreGmail] = useState(""); // nombre del paciente según el pedido de Gmail
   const [verCorreos, setVerCorreos] = useState(false); // los correos son OPCIONALES (ocultos por defecto)
 
   const fichas = useMemo(() => expedientes.map(fichaPaciente), [expedientes]);
@@ -1622,8 +1756,21 @@ function BusquedaRapida({ expedientes, onVolver }) {
     prestacionesSistema.length ? "sistema" : null,
   ].filter(Boolean);
 
+  // Responsable/s del paciente buscado, cruzando contra el listado de USUARIOS.
+  // Candidatos de nombre: fichas del sistema que matchean, el nombre del pedido (Gmail) y el texto tipeado.
+  const responsables = useMemo(() => {
+    const candidatos = new Set();
+    lista.forEach((f) => { if (f.paciente) candidatos.add(f.paciente); });
+    if (pacienteNombreGmail) candidatos.add(pacienteNombreGmail);
+    const t = texto.trim();
+    if (t && !/^\d{6,9}$/.test(t.replace(/\D/g, ""))) candidatos.add(t);
+    const us = new Set();
+    candidatos.forEach((n) => usuariosDeNombre(n).forEach((u) => us.add(u)));
+    return [...us];
+  }, [lista, pacienteNombreGmail, texto]);
+
   const hayFiltros = !!(texto || fProv || fMod || fAnio || fPeriodo || fEstado);
-  const limpiar = () => { setTexto(""); setFProv(""); setFMod(""); setFAnio(""); setFPeriodo(""); setFEstado(""); setCorreos([]); setClaveCorreos(""); setErrorCorreos(""); setFiltroCorreo("enviados"); setPrestaciones([]); setPedidoFecha(""); setPedidoUrl(""); setVerCorreos(false); };
+  const limpiar = () => { setTexto(""); setFProv(""); setFMod(""); setFAnio(""); setFPeriodo(""); setFEstado(""); setCorreos([]); setClaveCorreos(""); setErrorCorreos(""); setFiltroCorreo("enviados"); setPrestaciones([]); setPedidoFecha(""); setPedidoUrl(""); setVerCorreos(false); setPacienteNombreGmail(""); };
 
   // Busca en el Gmail de internación. Vista principal = prestaciones del pedido.
   // filtro: enviados | recibidos | todos (para la sección OPCIONAL de correos)
@@ -1645,6 +1792,7 @@ function BusquedaRapida({ expedientes, onVolver }) {
       setPrestaciones(data.prestaciones || []);
       setPedidoFecha(data.pedidoFecha || "");
       setPedidoUrl(data.pedidoUrl || "");
+      setPacienteNombreGmail(data.pacienteNombre || "");
       setCorreos(data.correos || []);
       setClaveCorreos(t);
     } catch (e) {
@@ -1661,7 +1809,7 @@ function BusquedaRapida({ expedientes, onVolver }) {
   useEffect(() => {
     const t = texto.trim();
     if (t !== claveCorreos && (correos.length || prestaciones.length || claveCorreos || errorCorreos)) {
-      setCorreos([]); setPrestaciones([]); setClaveCorreos(""); setErrorCorreos(""); setVerCorreos(false);
+      setCorreos([]); setPrestaciones([]); setClaveCorreos(""); setErrorCorreos(""); setVerCorreos(false); setPacienteNombreGmail("");
     }
     const dni = t.replace(/\D/g, "");
     const completo = /^\d{7,9}$/.test(dni) || t.split(/\s+/).filter(Boolean).length >= 2 || t.length >= 5;
@@ -1688,6 +1836,10 @@ function BusquedaRapida({ expedientes, onVolver }) {
 
       <div style={S.container}>
         <button style={{ ...S.btnSec, marginBottom: 12 }} onClick={onVolver}>← Volver</button>
+
+        <div style={{ marginBottom: 12 }}>
+          <PanelUsuarios onElegirPaciente={(nombre) => setTexto(nombre)} />
+        </div>
 
         <div style={{ ...S.card }}>
           <input
@@ -1838,6 +1990,15 @@ function BusquedaRapida({ expedientes, onVolver }) {
             <div style={{ fontWeight: 800, color: "#0e7490", marginBottom: 8, fontSize: 16 }}>
               🩺 Prestaciones solicitadas{(claveCorreos || texto.trim()) ? ` · "${claveCorreos || texto.trim()}"` : ""}
             </div>
+
+            {responsables.length > 0 && (
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 10, padding: "4px 12px", borderRadius: 20, background: "#ecfeff", border: "1.5px solid #a5f3fc" }}>
+                <span style={{ fontSize: 13, color: "#155e75" }}>👤 Responsable:</span>
+                <span style={{ fontSize: 13, fontWeight: 800, color: "#0e7490" }}>
+                  {responsables.map((u) => u.charAt(0) + u.slice(1).toLowerCase()).join(" / ")}
+                </span>
+              </div>
+            )}
 
             {buscandoCorreos && <div style={{ fontSize: 14, color: "#64748b" }}>Buscando en el Gmail…</div>}
             {errorCorreos && <div style={{ fontSize: 14, color: "#b91c1c" }}>⚠️ {errorCorreos}</div>}
