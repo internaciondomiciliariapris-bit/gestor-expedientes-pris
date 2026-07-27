@@ -2138,9 +2138,12 @@ function TarjetaCorreo({ c }) {
 
 function Tablero({ expedientes, usuario, abrir }) {
   const [filtro, setFiltro] = useState("mios"); // mios | todos
-  const lista = filtro === "mios"
+  const lista = (filtro === "mios"
     ? expedientes.filter((e) => (e.responsable || "") === usuario)
-    : expedientes;
+    : [...expedientes]
+  ).sort((a, b) =>
+    (a.paciente || "").localeCompare(b.paciente || "", "es", { sensitivity: "base" })
+  );
 
   return (
     <div>
