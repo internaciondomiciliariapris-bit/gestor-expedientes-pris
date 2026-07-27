@@ -988,7 +988,7 @@ const datosPaseAuditoria = (exp, extra = {}) => ({
   tipo: "auditoria",
   nroExpediente: exp.nroExpediente, paciente: exp.paciente, dni: exp.dni,
   destinataria: extra.destinataria ?? exp.paseAuditoria?.destinataria ?? "Farm. María Gabriela Policelli",
-  asunto: extra.asunto ?? exp.paseAuditoria?.asunto ?? "Renovación Internación Domiciliaria",
+  asunto: extra.asunto ?? exp.paseAuditoria?.asunto ?? asuntoAuditoria(exp),
   fechaTexto: fechaLargaHoy(),
 });
 
@@ -1095,6 +1095,39 @@ function modulosDeItems(items) {
 }
 
 function hayVariosModulos(items) { return modulosDeItems(items).length > 1; }
+
+// Asunto (3ª línea de la REF) del pase de Auditoría Médica.
+// Se arma automáticamente con los módulos adjudicados en el cuadro comparativo
+// (o, si todavía no hay cuadro, con los módulos de los ítems). Cada módulo va con
+// mayúscula inicial y tildes, y se antepone "Renovación" si el expediente lo es.
+const ACENTOS_MODULO = {
+  internacion: "Internación", alimentacion: "Alimentación", nutricion: "Nutrición",
+  oxigenoterapia: "Oxigenoterapia", enteral: "Enteral", parenteral: "Parenteral",
+  domiciliaria: "Domiciliaria", kinesiologia: "Kinesiología", fonoaudiologia: "Fonoaudiología",
+  rehabilitacion: "Rehabilitación",
+};
+function tituloModulo(m) {
+  return String(m || "")
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((p) => ACENTOS_MODULO[p] || (p.charAt(0).toUpperCase() + p.slice(1)))
+    .join(" ");
+}
+function asuntoAuditoria(exp) {
+  const crudos = (exp.cuadro?.adjudicaciones?.length
+    ? exp.cuadro.adjudicaciones.map((a) => a.modulo)
+    : modulosDeItems(exp.itemsPrestacion)
+  ).map((m) => String(m || "").trim()).filter((m) => m && m !== MODULO_SIN_NOMBRE);
+  const vistos = [];
+  crudos.forEach((m) => { if (!vistos.some((v) => v.toLowerCase() === m.toLowerCase())) vistos.push(m); });
+  const nombres = vistos.map(tituloModulo);
+  const cuerpo = nombres.length === 0 ? "Internación Domiciliaria"
+    : nombres.length === 1 ? nombres[0]
+    : nombres.slice(0, -1).join(", ") + " y " + nombres[nombres.length - 1];
+  const esRenov = /renov/i.test(exp.modulo || "") || /renov/i.test(exp.periodoTexto || "");
+  return (esRenov ? "Renovación " : "") + cuerpo;
+}
 
 function itemsDelModulo(items, mod) {
   const salida = [];
@@ -2970,7 +3003,7 @@ function RevisarCuadro({ exp }) {
 
 function PaseAuditoria({ exp }) {
   const [destinataria, setDestinataria] = useState(exp.paseAuditoria?.destinataria || "Farm. María Gabriela Policelli");
-  const [asunto, setAsunto] = useState(exp.paseAuditoria?.asunto || "Renovación Internación Domiciliaria");
+  const [asunto, setAsunto] = useState(exp.paseAuditoria?.asunto || asuntoAuditoria(exp));
   const [revisando, setRevisando] = useState(false);
 
   if (revisando) {
