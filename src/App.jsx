@@ -2300,6 +2300,17 @@ function NuevoExpediente({ modo = "nuevo", usuario = "", inicial = null, expId =
         .replace(/^m[oó]dulo de\s+/i, "")
         .replace(/[-–—]\s*renovaci[oó]n.*$/i, "")
         .trim();
+      // DIAGNÓSTICO: dejar ver exactamente qué texto leyó el navegador
+      console.log("[DICTAMEN] " + texto.length + " caracteres leídos:\n" + texto);
+      if (!d.nroDictamen && !d.paciente && !d.dni) {
+        alert(
+          "⚠️ Leí el archivo pero no reconocí datos del dictamen.\n\n" +
+          "Caracteres leídos: " + texto.length + "\n\n" +
+          "Primeros 220:\n" + (texto.slice(0, 220) || "(vacío)") + "\n\n" +
+          "Sacá una captura de este aviso y pasámela: con eso ajusto la lectura. Por ahora, cargá los datos a mano."
+        );
+        return;
+      }
       const prestArr = PRESTACIONES_DICTAMEN.map((n) => ({ nombre: n, cantidad: d.prestaciones[n] || "" }));
       // detalle de servicios = solo las prestaciones autorizadas (con cantidad), una por línea
       const detalle = prestArr
