@@ -2270,8 +2270,58 @@ function NuevoExpediente({ modo = "nuevo", usuario = "", inicial = null, expId =
     };
   });
   const [guardando, setGuardando] = useState(false);
+  const [leyendoDic, setLeyendoDic] = useState(false);
+  const [dictamenCargado, setDictamenCargado] = useState(inicial?.dictamen || null);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const edad = calcularEdad(f.fechaNacimiento);
+
+  // Sube el dictamen desde el alta: pre-llena los datos del paciente y deja
+  // el dictamen listo para guardarse con el expediente (cruce armado de entrada).
+  const prefillDesdeDictamen = async (file) => {
+    setLeyendoDic(true);
+    try {
+      let texto = "";
+      const esPdf = /pdf/i.test(file.type) || /\.pdf$/i.test(file.name);
+      if (esPdf) {
+        texto = await textoDePdf(file);
+        if (_norm(texto).replace(/[^a-z]/g, "").length < 30) texto = await ocrPdfEscaneado(file);
+      } else {
+        texto = await ocrImagen(file);
+      }
+      if (!texto || texto.length < 10) {
+        alert("No pude leer texto del archivo. Cargá los datos a mano.");
+        return;
+      }
+      const d = parsearDictamen(texto);
+      // módulo derivado de la línea "Solicita ..."
+      let modulo = (d.solicita || "")
+        .replace(/^solicita\s+/i, "")
+        .replace(/^renovaci[oó]n de\s+/i, "")
+        .replace(/^m[oó]dulo de\s+/i, "")
+        .replace(/[-–—]\s*renovaci[oó]n.*$/i, "")
+        .trim();
+      setF((prev) => ({
+        ...prev,
+        nroExpediente: (d.nroDictamen || prev.nroExpediente || "").toUpperCase(),
+        paciente: d.paciente || prev.paciente,
+        dni: d.dni || prev.dni,
+        diagnostico: d.diagnostico || prev.diagnostico,
+        modulo: modulo ? modulo.toUpperCase() : prev.modulo,
+        periodoTexto: d.periodoAutorizado || prev.periodoTexto,
+      }));
+      const prestArr = PRESTACIONES_DICTAMEN.map((n) => ({ nombre: n, cantidad: d.prestaciones[n] || "" }));
+      setDictamenCargado({
+        nroDictamen: d.nroDictamen || "", fechaDictamen: d.fechaDictamen || "", solicita: d.solicita || "",
+        esRenovacion: !!d.esRenovacion, periodoAutorizado: d.periodoAutorizado || "", firmante: d.firmante || "",
+        observaciones: "", prestaciones: prestArr, cargadoEl: new Date().toISOString(),
+      });
+      alert("✅ Leí el dictamen. Pre-llené los datos del paciente y el dictamen quedó cargado: el cruce ya arranca armado. Revisá y completá lo que falte antes de guardar.");
+    } catch (e) {
+      alert("No pude leer el archivo automáticamente (" + (e.message || e) + "). Cargá los datos a mano.");
+    } finally {
+      setLeyendoDic(false);
+    }
+  };
 
   const titulos = {
     nuevo: ["Nuevo expediente", "Estos datos se usan para el mail de cotización y para todos los documentos posteriores. Se cargan una sola vez."],
@@ -2290,7 +2340,7 @@ function NuevoExpediente({ modo = "nuevo", usuario = "", inicial = null, expId =
         await updateDoc(doc(db, COL_EXPEDIENTES, expId), { ...f, edad });
         onCreado({ id: expId, ...f, edad });
       } else {
-        const data = { ...f, edad, etapa: 0, sv: 2, creado: new Date().toISOString() };
+        const data = { ...f, edad, etapa: 0, sv: 2, creado: new Date().toISOString(), ...(dictamenCargado ? { dictamen: dictamenCargado } : {}) };
         const ref = await addDoc(collection(db, COL_EXPEDIENTES), data);
         onCreado({ id: ref.id, ...data });
       }
@@ -2302,8 +2352,39 @@ function NuevoExpediente({ modo = "nuevo", usuario = "", inicial = null, expId =
 
   return (
     <div style={S.card}>
-      <h3 style={{ color: "#075e75", marginBottom: 4 }}>{titulos[modo][0]}</h3>
-      <div style={{ fontSize: 13, color: "#64748b" }}>{titulos[modo][1]}</div>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <h3 style={{ color: "#075e75", marginBottom: 4 }}>{titulos[modo][0]}</h3>
+          <div style={{ fontSize: 13, color: "#64748b" }}>{titulos[modo][1]}</div>
+        </div>
+        {modo !== "editar" && (
+          <label
+            style={{
+              ...S.btn, whiteSpace: "nowrap", cursor: leyendoDic ? "default" : "pointer",
+              opacity: leyendoDic ? 0.6 : 1,
+            }}
+            title="Subí el PDF o la foto del dictamen y se pre-llenan los datos"
+          >
+            {leyendoDic ? "Leyendo…" : "📎 Cargar dictamen y pre-llenar"}
+            <input
+              type="file"
+              accept=".pdf,image/*"
+              style={{ display: "none" }}
+              disabled={leyendoDic}
+              onChange={(e) => {
+                const file = e.target.files && e.target.files[0];
+                if (file) prefillDesdeDictamen(file);
+                e.target.value = "";
+              }}
+            />
+          </label>
+        )}
+      </div>
+      {dictamenCargado && (
+        <div style={{ fontSize: 12, fontWeight: 700, color: "#166534", marginTop: 6 }}>
+          🩺 Dictamen cargado{dictamenCargado.nroDictamen ? " (N° " + dictamenCargado.nroDictamen + ")" : ""} — se guarda junto con el expediente y el cruce arranca armado.
+        </div>
+      )}
 
       <label style={S.label}>N° de expediente (ej: 1694/415/G/2026) — tip: apretá TAB y la barra / se pone sola{modo === "renovar" && " — PONÉ EL NÚMERO NUEVO"}</label>
       <input
@@ -2515,7 +2596,7 @@ function parsearDictamen(texto) {
   const t = texto.replace(/[\uE000-\uF8FF]/g, " ").replace(/\r/g, "").replace(/[ \t]+/g, " ");
   const tn = _norm(t);
   const out = {
-    nroDictamen: "", fechaDictamen: "", solicita: "",
+    nroDictamen: "", fechaDictamen: "", paciente: "", dni: "", diagnostico: "", solicita: "",
     esRenovacion: false, periodoAutorizado: "", firmante: "", prestaciones: {},
   };
 
@@ -2526,6 +2607,14 @@ function parsearDictamen(texto) {
   // Fecha de cabecera (única con año de 4 dígitos; la doc. adjunta usa 2 dígitos)
   const mFecha = t.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
   if (mFecha) out.fechaDictamen = mFecha[1];
+
+  // Datos del paciente (para pre-llenar el alta del expediente)
+  const mPac = t.match(/PACIENTE\s*:?\s*([^\n]+?)(?=\s+DNI|\n|$)/i);
+  if (mPac) out.paciente = mPac[1].replace(/\s+/g, " ").trim();
+  const mDni = t.match(/DNI\s*:?\s*([\d.\s]{6,15})/i);
+  if (mDni) out.dni = mDni[1].replace(/\s+/g, "").trim();
+  const mDiag = t.match(/DIAGN[ÓO]STICO\s*:?\s*([^\n]+?)(?=\s+DETALLE|\n|$)/i);
+  if (mDiag) out.diagnostico = mDiag[1].replace(/\s+/g, " ").trim();
 
   // Línea "Solicita ..." hasta DOCUMENTACIÓN / DETALLE / salto
   const mSol = t.match(/Solicita\b[\s\S]*?(?=DOCUMENTACI|DETALLE|\n|$)/i);
@@ -2807,6 +2896,155 @@ function FichaDictamen({ exp }) {
   );
 }
 
+/* ================================================================
+   PASO 2 — CRUCE Dictamen (autorizado) ↔ Presupuesto (cotizado)
+   Compara, prestación por prestación, lo que autorizó Auditoría
+   contra los ítems cotizados/adjudicados (itemsPrestacion). Marca:
+   - verde: coincide;  ámbar: coincide la prestación pero difiere la cantidad;
+   - rojo "falta": autorizado por Auditoría pero NO cotizado;
+   - rojo "de más": cotizado pero NO autorizado por el dictamen.
+   Es una ayuda visual para confirmar de un vistazo; Jorge decide.
+   ================================================================ */
+
+// ¿Refieren a la misma prestación? (tolerante a acentos, mayúsculas y texto extra)
+function matchPrestacion(a, b) {
+  const na = _norm(a).replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+  const nb = _norm(b).replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  // claves específicas (distingue kinesio respiratoria de motora)
+  const claves = [
+    ["kinesi", "respirator"], ["kinesi", "motor"],
+    ["medic"], ["enfermer"], ["fonoaud"], ["aliment"], ["internac"],
+  ];
+  for (const ks of claves) {
+    if (ks.every((k) => na.includes(k)) && ks.every((k) => nb.includes(k))) return true;
+  }
+  if (na.length >= 5 && (na.includes(nb) || nb.includes(na))) return true;
+  return false;
+}
+
+// Normaliza una cantidad para comparar (saca espacios/acentos/puntuación menor)
+function _normCant(s) {
+  return _norm(s).replace(/\s+/g, "").replace(/[.\-–]/g, "");
+}
+
+function cruzarDictamen(autorizadas, items) {
+  const usados = new Set();
+  const filas = [];
+  autorizadas.forEach((a) => {
+    let mIdx = -1;
+    for (let i = 0; i < items.length; i++) {
+      if (usados.has(i)) continue;
+      if (matchPrestacion(a.nombre, items[i].nombre)) { mIdx = i; break; }
+    }
+    if (mIdx >= 0) {
+      usados.add(mIdx);
+      const it = items[mIdx];
+      const cotCant = it.cantTexto || (it.cantNum ? String(it.cantNum) : "") || "";
+      const igual = _normCant(a.cantidad) === _normCant(cotCant);
+      filas.push({ tipo: igual ? "ok" : "dif", izq: a, der: { nombre: it.nombre, cantidad: cotCant } });
+    } else {
+      filas.push({ tipo: "falta", izq: a, der: null });
+    }
+  });
+  items.forEach((it, i) => {
+    if (usados.has(i)) return;
+    const cotCant = it.cantTexto || (it.cantNum ? String(it.cantNum) : "") || "";
+    if (!(it.nombre || "").trim() && !cotCant.trim()) return; // ítem vacío, ignorar
+    filas.push({ tipo: "extra", izq: null, der: { nombre: it.nombre, cantidad: cotCant } });
+  });
+  return filas;
+}
+
+function CruceDictamenPresupuesto({ exp }) {
+  if (!exp.dictamen) return null; // sin dictamen no hay contra qué cruzar
+
+  const autorizadas = (exp.dictamen.prestaciones || []).filter((p) => (p.cantidad || "").trim() !== "");
+  const items = exp.itemsPrestacion || [];
+
+  // Sin ítems cargados todavía: aviso suave, el cruce aparece después
+  if (!items.length) {
+    return (
+      <div style={{ ...S.card, borderLeft: "5px solid #cbd5e1" }}>
+        <div style={{ fontWeight: 800, color: "#475569" }}>🔀 Cruce con lo cotizado</div>
+        <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>
+          Todavía no hay ítems de presupuesto cargados en el expediente. El cruce contra el dictamen aparece acá en cuanto los cargues.
+        </div>
+      </div>
+    );
+  }
+
+  const filas = cruzarDictamen(autorizadas, items);
+  const difs = filas.filter((f) => f.tipo !== "ok").length;
+  const colores = {
+    ok: { bg: "#f0fdf4", bd: "#86efac", tag: "#166534", txt: "✔ coincide" },
+    dif: { bg: "#fffbeb", bd: "#fcd34d", tag: "#b45309", txt: "⚠ cantidad distinta" },
+    falta: { bg: "#fef2f2", bd: "#fca5a5", tag: "#b91c1c", txt: "✖ autorizado, no cotizado" },
+    extra: { bg: "#fef2f2", bd: "#fca5a5", tag: "#b91c1c", txt: "✖ cotizado, no autorizado" },
+  };
+
+  const borde = difs === 0 ? "5px solid #16a34a" : "5px solid #ef4444";
+
+  return (
+    <div style={{ ...S.card, borderLeft: borde }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ fontWeight: 800, color: difs === 0 ? "#166534" : "#b91c1c" }}>
+          🔀 Cruce Dictamen ↔ Cotizado
+        </div>
+        <div style={{ flex: 1 }} />
+        <div style={{ fontSize: 13, fontWeight: 700, color: difs === 0 ? "#166534" : "#b91c1c" }}>
+          {difs === 0 ? "✅ Todo lo autorizado coincide con lo cotizado" : `⚠️ ${difs} diferencia${difs === 1 ? "" : "s"} para revisar`}
+        </div>
+      </div>
+
+      {/* encabezado de las dos columnas */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, marginTop: 12, fontSize: 12, fontWeight: 800, color: "#334155" }}>
+        <div>🩺 AUTORIZADO (Dictamen)</div>
+        <div>💰 COTIZADO / ADJUDICADO</div>
+        <div style={{ textAlign: "right" }}>Estado</div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
+        {filas.map((f, i) => {
+          const c = colores[f.tipo];
+          return (
+            <div
+              key={i}
+              style={{
+                display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, alignItems: "center",
+                background: c.bg, border: `1px solid ${c.bd}`, borderRadius: 8, padding: "8px 10px",
+              }}
+            >
+              <div style={{ fontSize: 13 }}>
+                {f.izq ? (
+                  <><b>{f.izq.nombre}</b>{f.izq.cantidad ? `: ${f.izq.cantidad}` : ""}</>
+                ) : (
+                  <span style={{ color: "#94a3b8", fontStyle: "italic" }}>— sin autorización —</span>
+                )}
+              </div>
+              <div style={{ fontSize: 13 }}>
+                {f.der ? (
+                  <><b>{f.der.nombre}</b>{f.der.cantidad ? `: ${f.der.cantidad}` : ""}</>
+                ) : (
+                  <span style={{ color: "#94a3b8", fontStyle: "italic" }}>— no cotizado —</span>
+                )}
+              </div>
+              <div style={{ fontSize: 11, fontWeight: 800, color: c.tag, textAlign: "right", whiteSpace: "nowrap" }}>
+                {c.txt}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ fontSize: 12, color: "#64748b", marginTop: 10 }}>
+        El cruce es una ayuda para revisar de un vistazo: puede marcar diferencias por cómo esté redactado un ítem. Confirmá vos antes de avanzar.
+      </div>
+    </div>
+  );
+}
+
 function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
   // Etapa que se está mirando. Arranca en la actual y se mueve sola cuando el expediente avanza.
   const [abierta, setAbierta] = useState(Math.min(exp.etapa, ETAPAS.length - 1));
@@ -2848,6 +3086,9 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
 
       {/* ====== DICTAMEN DE AUDITORÍA MÉDICA (documento madre — ancla de todo el expediente) ====== */}
       <FichaDictamen exp={exp} />
+
+      {/* ====== PASO 2: cruce de lo autorizado (dictamen) contra lo cotizado/adjudicado ====== */}
+      <CruceDictamenPresupuesto exp={exp} />
 
       {/* semáforo de etapas: ahora cada chip abre su etapa */}
       <div style={S.card}>
