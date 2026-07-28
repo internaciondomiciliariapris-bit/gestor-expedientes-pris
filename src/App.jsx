@@ -2300,6 +2300,12 @@ function NuevoExpediente({ modo = "nuevo", usuario = "", inicial = null, expId =
         .replace(/^m[oó]dulo de\s+/i, "")
         .replace(/[-–—]\s*renovaci[oó]n.*$/i, "")
         .trim();
+      const prestArr = PRESTACIONES_DICTAMEN.map((n) => ({ nombre: n, cantidad: d.prestaciones[n] || "" }));
+      // detalle de servicios = solo las prestaciones autorizadas (con cantidad), una por línea
+      const detalle = prestArr
+        .filter((p) => (p.cantidad || "").trim() !== "")
+        .map((p) => `${p.nombre}: ${p.cantidad}`)
+        .join("\n");
       setF((prev) => ({
         ...prev,
         nroExpediente: (d.nroDictamen || prev.nroExpediente || "").toUpperCase(),
@@ -2308,8 +2314,8 @@ function NuevoExpediente({ modo = "nuevo", usuario = "", inicial = null, expId =
         diagnostico: d.diagnostico || prev.diagnostico,
         modulo: modulo ? modulo.toUpperCase() : prev.modulo,
         periodoTexto: d.periodoAutorizado || prev.periodoTexto,
+        detalleServicios: detalle || prev.detalleServicios,
       }));
-      const prestArr = PRESTACIONES_DICTAMEN.map((n) => ({ nombre: n, cantidad: d.prestaciones[n] || "" }));
       setDictamenCargado({
         nroDictamen: d.nroDictamen || "", fechaDictamen: d.fechaDictamen || "", solicita: d.solicita || "",
         esRenovacion: !!d.esRenovacion, periodoAutorizado: d.periodoAutorizado || "", firmante: d.firmante || "",
@@ -2601,7 +2607,7 @@ function parsearDictamen(texto) {
   };
 
   // N° de expediente / dictamen
-  const mExp = t.match(/EXPEDIENTE\s*N[°ºo]?\s*:?\s*([0-9]{2,5}\s*\/\s*[0-9]{2,4}\s*\/\s*[A-Z]\s*\/\s*[0-9]{4})/i);
+  const mExp = t.match(/EXPEDIENTE\s*N[°ºo]?\s*:?\s*([0-9]{2,5}\s*\/\s*[0-9]{2,4}\s*\/\s*[A-Z]{1,3}\s*\/\s*[0-9]{4})/i);
   if (mExp) out.nroDictamen = mExp[1].replace(/\s+/g, "");
 
   // Fecha de cabecera (única con año de 4 dígitos; la doc. adjunta usa 2 dígitos)
