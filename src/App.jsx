@@ -2607,8 +2607,10 @@ function parsearDictamen(texto) {
   };
 
   // N° de expediente / dictamen
-  const mExp = t.match(/EXPEDIENTE\s*N[°ºo]?\s*:?\s*([0-9]{2,5}\s*\/\s*[0-9]{2,4}\s*\/\s*[A-Z]{1,3}\s*\/\s*[0-9]{4})/i);
-  if (mExp) out.nroDictamen = mExp[1].replace(/\s+/g, "");
+  // N° de expediente: tolerante a cómo venga "N°:" (pdf.js/OCR varían mucho) + plan B global.
+  let mExp = t.match(/EXPEDIENTE[^0-9]{0,15}([0-9]{2,5}\s*\/\s*[0-9]{2,4}\s*\/\s*[A-Za-z]{1,3}\s*\/\s*20[0-9]{2})/i);
+  if (!mExp) mExp = t.match(/([0-9]{3,5}\s*\/\s*[0-9]{2,4}\s*\/\s*[A-Za-z]{1,3}\s*\/\s*20[0-9]{2})/);
+  if (mExp) out.nroDictamen = mExp[1].replace(/\s+/g, "").toUpperCase();
 
   // Fecha de cabecera (única con año de 4 dígitos; la doc. adjunta usa 2 dígitos)
   const mFecha = t.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
