@@ -3053,6 +3053,132 @@ function CruceDictamenPresupuesto({ exp }) {
   );
 }
 
+/* ================================================================
+   PASO 3 — CÁLCULO DE AFECTACIÓN (según lo autorizado por Auditoría)
+   Alimentación: precio diario × días autorizados (31) × meses.
+   Internación / módulo mensual fijo: precio mensual × meses.
+   El total calculado se guarda en el expediente para usarlo luego en
+   la nota de afectación y la resolución (Paso 4).
+   ================================================================ */
+function CalculoAfectacion({ exp }) {
+  const alimAut = (exp.dictamen?.prestaciones || []).find(
+    (p) => /aliment/i.test(p.nombre || "") && (p.cantidad || "").trim() !== ""
+  );
+  const diasDefault = alimAut ? ((String(alimAut.cantidad).match(/\d+/) || [])[0] || "31") : "31";
+  const mesesDefault = String(exp.periodoMeses || 6);
+  const c = exp.calculoAfectacion || {};
+
+  const [d, setD] = useState({
+    precioDiario: c.precioDiario != null ? String(c.precioDiario) : "",
+    diasAlim: c.diasAlim != null ? String(c.diasAlim) : diasDefault,
+    precioMensual: c.precioMensual != null ? String(c.precioMensual) : "",
+    meses: c.meses != null ? String(c.meses) : mesesDefault,
+  });
+  const [guardando, setGuardando] = useState(false);
+  const set = (k) => (e) => setD((p) => ({ ...p, [k]: e.target.value }));
+
+  if (!exp.dictamen) return null;
+
+  const precioDiario = Number(d.precioDiario) || 0;
+  const dias = Number(d.diasAlim) || 0;
+  const precioMensual = Number(d.precioMensual) || 0;
+  const meses = Number(d.meses) || 0;
+  const mensualAlim = precioDiario * dias;
+  const totalAlim = mensualAlim * meses;
+  const totalInt = precioMensual * meses;
+  const totalAfectar = totalAlim + totalInt;
+
+  const guardar = async () => {
+    setGuardando(true);
+    try {
+      await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
+        calculoAfectacion: {
+          precioDiario, diasAlim: dias, precioMensual, meses,
+          mensualAlim, totalAlim, totalInt, totalAfectar,
+          calculadoEl: new Date().toISOString(),
+        },
+      });
+      alert("✅ Cálculo de afectación guardado.");
+    } catch (e) {
+      alert("❌ Error al guardar el cálculo: " + e.message);
+    }
+    setGuardando(false);
+  };
+
+  const numStyle = { ...S.input, marginTop: 0 };
+
+  return (
+    <div style={{ ...S.card, borderLeft: "5px solid #0e7490" }}>
+      <div style={{ fontWeight: 800, color: "#0e7490" }}>🧮 Cálculo de afectación (según lo autorizado)</div>
+      <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>
+        La afectación se calcula sobre lo que autorizó Auditoría. Cargá el precio del proveedor adjudicado; usá el bloque que corresponda al módulo.
+      </div>
+
+      {/* Módulo Alimentación (precio diario) */}
+      <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: 12, marginTop: 12 }}>
+        <div style={{ fontWeight: 700, color: "#334155", marginBottom: 8 }}>🍽️ Módulo Alimentación (precio diario)</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+          <div>
+            <label style={{ ...S.label, marginTop: 0 }}>Precio por día</label>
+            <input type="number" style={numStyle} value={d.precioDiario} onChange={set("precioDiario")} placeholder="0" />
+          </div>
+          <div>
+            <label style={{ ...S.label, marginTop: 0 }}>Días autorizados</label>
+            <input type="number" style={numStyle} value={d.diasAlim} onChange={set("diasAlim")} />
+          </div>
+          <div>
+            <label style={{ ...S.label, marginTop: 0 }}>Meses</label>
+            <input type="number" style={numStyle} value={d.meses} onChange={set("meses")} />
+          </div>
+        </div>
+        <div style={{ fontSize: 13, color: "#475569", marginTop: 8 }}>
+          Mensual: <b>{formatoPesos(mensualAlim)}</b> ({formatoPesos(precioDiario)} × {dias} días){"  ·  "}
+          Total {meses} {meses === 1 ? "mes" : "meses"}: <b>{formatoPesos(totalAlim)}</b>
+        </div>
+        {dias !== 0 && dias !== 30 && precioDiario > 0 && (
+          <div style={{ fontSize: 12, color: "#b45309", marginTop: 6 }}>
+            ⚠️ El presupuesto suele cotizarse sobre 30 días; acá la afectación se calcula sobre los {dias} días autorizados por Auditoría. La aclaración formal irá en la resolución.
+          </div>
+        )}
+      </div>
+
+      {/* Módulo mensual fijo (internación) */}
+      <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: 12, marginTop: 10 }}>
+        <div style={{ fontWeight: 700, color: "#334155", marginBottom: 8 }}>🏠 Módulo mensual fijo (internación)</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div>
+            <label style={{ ...S.label, marginTop: 0 }}>Precio mensual</label>
+            <input type="number" style={numStyle} value={d.precioMensual} onChange={set("precioMensual")} placeholder="0" />
+          </div>
+          <div>
+            <label style={{ ...S.label, marginTop: 0 }}>Meses</label>
+            <input type="number" style={numStyle} value={d.meses} onChange={set("meses")} />
+          </div>
+        </div>
+        <div style={{ fontSize: 13, color: "#475569", marginTop: 8 }}>
+          Total {meses} {meses === 1 ? "mes" : "meses"}: <b>{formatoPesos(totalInt)}</b> ({formatoPesos(precioMensual)} × {meses})
+        </div>
+      </div>
+
+      {/* Total a afectar */}
+      <div style={{ background: "#ecfeff", border: "1px solid #67e8f9", borderRadius: 10, padding: 12, marginTop: 12 }}>
+        <div style={{ fontSize: 15, fontWeight: 800, color: "#0e7490" }}>TOTAL A AFECTAR: {formatoPesos(totalAfectar)}</div>
+        {totalAfectar > 0 && (
+          <div style={{ fontSize: 12, color: "#0e7490", marginTop: 2 }}>En letras: {numeroALetras(totalAfectar)}</div>
+        )}
+      </div>
+
+      <button
+        style={{ ...S.btn, marginTop: 14, width: "100%", opacity: guardando ? 0.6 : 1 }}
+        onClick={guardar}
+        disabled={guardando}
+      >
+        {guardando ? "Guardando…" : "💾 Guardar cálculo"}
+      </button>
+    </div>
+  );
+}
+
 function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
   // Etapa que se está mirando. Arranca en la actual y se mueve sola cuando el expediente avanza.
   const [abierta, setAbierta] = useState(Math.min(exp.etapa, ETAPAS.length - 1));
@@ -3097,6 +3223,9 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
 
       {/* ====== PASO 2: cruce de lo autorizado (dictamen) contra lo cotizado/adjudicado ====== */}
       <CruceDictamenPresupuesto exp={exp} />
+
+      {/* ====== PASO 3: cálculo de afectación según lo autorizado (Alimentación × días × meses) ====== */}
+      <CalculoAfectacion exp={exp} />
 
       {/* semáforo de etapas: ahora cada chip abre su etapa */}
       <div style={S.card}>
