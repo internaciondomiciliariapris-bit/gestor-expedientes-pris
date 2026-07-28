@@ -2560,6 +2560,26 @@ async function cargarPdfJs() {
   return pdfjs;
 }
 
+// Reconstruye el texto usando la posición (x,y) de cada fragmento. Es independiente
+// de si pdf.js devuelve palabras enteras o letra por letra; esto último es lo que en
+// algunos navegadores rompía la lectura (unir con espacios daba "E X P E D I E N T E").
+function reconstruirTexto(items) {
+  let texto = "", prev = null;
+  for (const it of items) {
+    if (typeof it.str !== "string") continue;
+    if (prev) {
+      const prevEndX = prev.transform[4] + (prev.width || 0);
+      const gapX = it.transform[4] - prevEndX;
+      const dy = Math.abs(it.transform[5] - prev.transform[5]);
+      if (prev.hasEOL || dy > 3) texto += "\n";
+      else if (gapX > (it.height || 8) * 0.25 || /\s$/.test(prev.str) || /^\s/.test(it.str)) texto += " ";
+    }
+    texto += it.str;
+    prev = it;
+  }
+  return texto.trim();
+}
+
 async function textoDePdf(file) {
   const pdfjs = await cargarPdfJs();
   const data = new Uint8Array(await file.arrayBuffer());
@@ -2568,7 +2588,7 @@ async function textoDePdf(file) {
   for (let p = 1; p <= pdf.numPages; p++) {
     const page = await pdf.getPage(p);
     const content = await page.getTextContent();
-    texto += content.items.map((it) => it.str).join(" ") + "\n";
+    texto += reconstruirTexto(content.items) + "\n";
   }
   return texto.trim();
 }
