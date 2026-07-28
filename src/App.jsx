@@ -2394,6 +2394,227 @@ function NuevoExpediente({ modo = "nuevo", usuario = "", inicial = null, expId =
 
 /* ---------- Detalle de expediente ---------- */
 
+/* ================================================================
+   DICTAMEN DE AUDITORÍA MÉDICA — "documento madre"
+   Se carga al inicio del expediente. Fija QUÉ y CUÁNTO autorizó
+   Auditoría. Es el "deber ser" contra el que después se cruzan el
+   presupuesto ganador, la nota de afectación y la resolución.
+   Paso 1: carga manual + lista flexible de prestaciones (se pueden
+   agregar/quitar). Los cruces y el cálculo llegan en pasos siguientes.
+   ================================================================ */
+
+// Prestaciones típicas del dictamen (el orden en que vienen en el papel).
+// La lista NO es fija: Jorge puede agregar o quitar filas.
+const PRESTACIONES_DICTAMEN = [
+  "Médico",
+  "Enfermería",
+  "Fonoaudiología",
+  "Kinesiología respiratoria",
+  "Kinesiología motora",
+  "Alimentación",
+];
+
+// Estado inicial de la ficha: si ya hay dictamen cargado lo usa; si no,
+// pre-siembra con datos que ya tenemos del expediente.
+function dictamenInicial(exp) {
+  if (exp.dictamen) {
+    return {
+      nroDictamen: exp.dictamen.nroDictamen || "",
+      fechaDictamen: exp.dictamen.fechaDictamen || "",
+      solicita: exp.dictamen.solicita || "",
+      esRenovacion: !!exp.dictamen.esRenovacion,
+      periodoAutorizado: exp.dictamen.periodoAutorizado || "",
+      firmante: exp.dictamen.firmante || "",
+      observaciones: exp.dictamen.observaciones || "",
+      prestaciones:
+        Array.isArray(exp.dictamen.prestaciones) && exp.dictamen.prestaciones.length
+          ? exp.dictamen.prestaciones.map((p) => ({ nombre: p.nombre || "", cantidad: p.cantidad || "" }))
+          : PRESTACIONES_DICTAMEN.map((n) => ({ nombre: n, cantidad: "" })),
+    };
+  }
+  const base = `${exp.modulo || ""} ${exp.periodoTexto || ""}`;
+  return {
+    nroDictamen: "",
+    fechaDictamen: "",
+    solicita: exp.modulo || "",
+    esRenovacion: /renov/i.test(base),
+    periodoAutorizado: exp.periodoTexto || "",
+    firmante: "",
+    observaciones: "",
+    prestaciones: PRESTACIONES_DICTAMEN.map((n) => ({ nombre: n, cantidad: "" })),
+  };
+}
+
+function FichaDictamen({ exp }) {
+  const [abierto, setAbierto] = useState(!exp.dictamen); // si no hay dictamen, arranca abierto
+  const [f, setF] = useState(() => dictamenInicial(exp));
+  const [guardando, setGuardando] = useState(false);
+
+  const set = (k) => (e) =>
+    setF((prev) => ({ ...prev, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
+
+  const setPrest = (i, campo, val) =>
+    setF((prev) => {
+      const arr = prev.prestaciones.map((p, k) => (k === i ? { ...p, [campo]: val } : p));
+      return { ...prev, prestaciones: arr };
+    });
+
+  const agregarPrest = () =>
+    setF((prev) => ({ ...prev, prestaciones: [...prev.prestaciones, { nombre: "", cantidad: "" }] }));
+
+  const quitarPrest = (i) =>
+    setF((prev) => ({ ...prev, prestaciones: prev.prestaciones.filter((_, k) => k !== i) }));
+
+  // Prestaciones con cantidad cargada (lo efectivamente autorizado).
+  const autorizadas = (exp.dictamen?.prestaciones || []).filter((p) => (p.cantidad || "").trim() !== "");
+  const alim = (exp.dictamen?.prestaciones || []).find(
+    (p) => /aliment/i.test(p.nombre || "") && (p.cantidad || "").trim() !== ""
+  );
+
+  const guardar = async () => {
+    setGuardando(true);
+    try {
+      const dictamen = {
+        nroDictamen: f.nroDictamen.trim(),
+        fechaDictamen: f.fechaDictamen.trim(),
+        solicita: f.solicita.trim(),
+        esRenovacion: !!f.esRenovacion,
+        periodoAutorizado: f.periodoAutorizado.trim(),
+        firmante: f.firmante.trim(),
+        observaciones: f.observaciones.trim(),
+        // solo guardo filas con algún dato, y normalizo
+        prestaciones: f.prestaciones
+          .map((p) => ({ nombre: (p.nombre || "").trim(), cantidad: (p.cantidad || "").trim() }))
+          .filter((p) => p.nombre !== "" || p.cantidad !== ""),
+        cargadoEl: new Date().toISOString(),
+      };
+      await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), { dictamen });
+      setAbierto(false);
+      alert("✅ Dictamen guardado. Queda como el 'deber ser' del expediente.");
+    } catch (e) {
+      alert("❌ Error al guardar el dictamen: " + e.message);
+    }
+    setGuardando(false);
+  };
+
+  const borde = exp.dictamen ? "5px solid #16a34a" : "5px solid #f59e0b";
+
+  return (
+    <div style={{ ...S.card, borderLeft: borde }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ fontWeight: 800, color: exp.dictamen ? "#166534" : "#92400e" }}>
+          {exp.dictamen ? "🩺 Dictamen de Auditoría Médica cargado" : "⚠️ Falta cargar el Dictamen de Auditoría Médica"}
+        </div>
+        <div style={{ flex: 1 }} />
+        <button style={S.btnSec} onClick={() => setAbierto((v) => !v)}>
+          {abierto ? "▲ Ocultar" : exp.dictamen ? "▼ Ver / editar" : "▼ Cargar dictamen"}
+        </button>
+      </div>
+
+      {/* Resumen cuando ya está cargado y el panel está cerrado */}
+      {exp.dictamen && !abierto && (
+        <div style={{ fontSize: 14, color: "#334155", marginTop: 8 }}>
+          {exp.dictamen.nroDictamen && (<><b>Dictamen N°:</b> {exp.dictamen.nroDictamen} · </>)}
+          {exp.dictamen.fechaDictamen && (<><b>Fecha:</b> {exp.dictamen.fechaDictamen} · </>)}
+          {exp.dictamen.esRenovacion && <span style={{ color: "#0e7490", fontWeight: 700 }}>Renovación</span>}
+          {exp.dictamen.solicita && (<div style={{ marginTop: 2 }}><b>Solicita:</b> {exp.dictamen.solicita}</div>)}
+          {exp.dictamen.periodoAutorizado && (<div><b>Período autorizado:</b> {exp.dictamen.periodoAutorizado}</div>)}
+          <div style={{ marginTop: 6 }}>
+            <b>Prestaciones autorizadas ({autorizadas.length}):</b>{" "}
+            {autorizadas.length
+              ? autorizadas.map((p) => `${p.nombre}: ${p.cantidad}`).join(" · ")
+              : "— (ninguna con cantidad cargada)"}
+          </div>
+          {alim && (
+            <div style={{ marginTop: 4, fontWeight: 700, color: "#b45309" }}>
+              🍽️ Alimentación autorizada: {alim.cantidad}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Formulario de carga / edición */}
+      {abierto && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 13, color: "#64748b", marginBottom: 6 }}>
+            Cargá lo que autorizó Auditoría Médica. Esto es el <b>documento madre</b>: contra estos datos se van a cruzar
+            después el presupuesto ganador, la nota y la resolución. El dato más importante son los <b>días de Alimentación</b>.
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div>
+              <label style={S.label}>N° de dictamen (opcional)</label>
+              <input style={S.input} value={f.nroDictamen} onChange={set("nroDictamen")} placeholder="Ej: 2143/623/G/2026" />
+            </div>
+            <div>
+              <label style={S.label}>Fecha del dictamen</label>
+              <input style={S.input} value={f.fechaDictamen} onChange={set("fechaDictamen")} placeholder="Ej: 20/07/2026" />
+            </div>
+          </div>
+
+          <label style={S.label}>Detalle solicitado (línea "Solicita …" del dictamen)</label>
+          <input style={S.input} value={f.solicita} onChange={set("solicita")} placeholder="Ej: Módulo de Internación Domiciliaria" />
+
+          <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 10, alignItems: "center", marginTop: 12 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 700, color: "#334155" }}>
+              <input type="checkbox" checked={f.esRenovacion} onChange={set("esRenovacion")} /> Es renovación
+            </label>
+            <div>
+              <label style={{ ...S.label, marginTop: 0 }}>Período autorizado</label>
+              <input style={S.input} value={f.periodoAutorizado} onChange={set("periodoAutorizado")} placeholder="Ej: Septiembre 2026 a Febrero 2027" />
+            </div>
+          </div>
+
+          <label style={{ ...S.label, marginTop: 16 }}>Prestaciones autorizadas — cantidad tal cual figura en el dictamen</label>
+          <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 6 }}>
+            Dejá en blanco la cantidad de las prestaciones que el dictamen NO autoriza. Podés agregar o quitar filas.
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {f.prestaciones.map((p, i) => (
+              <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1.2fr auto", gap: 6, alignItems: "center" }}>
+                <input
+                  style={{ ...S.input, marginTop: 0, fontWeight: 700 }}
+                  value={p.nombre}
+                  onChange={(e) => setPrest(i, "nombre", e.target.value)}
+                  placeholder="Prestación"
+                />
+                <input
+                  style={{ ...S.input, marginTop: 0 }}
+                  value={p.cantidad}
+                  onChange={(e) => setPrest(i, "cantidad", e.target.value)}
+                  placeholder="Cantidad (ej: 16hs L-D · 31 días · 3 ses/sem)"
+                />
+                <button
+                  style={{ ...S.btnRojo, padding: "8px 10px" }}
+                  title="Quitar esta prestación"
+                  onClick={() => quitarPrest(i)}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+          <button style={{ ...S.btnSec, marginTop: 8 }} onClick={agregarPrest}>➕ Agregar prestación</button>
+
+          <label style={{ ...S.label, marginTop: 16 }}>Firmante del dictamen (opcional)</label>
+          <input style={S.input} value={f.firmante} onChange={set("firmante")} placeholder="Ej: Farm. Gabriela Policelli — Jefe Dpto. Auditoría Médica" />
+
+          <label style={{ ...S.label, marginTop: 12 }}>Observaciones (opcional)</label>
+          <input style={S.input} value={f.observaciones} onChange={set("observaciones")} placeholder="Ej: Se rectifica dictamen de fecha 15/07/2026" />
+
+          <button
+            style={{ ...S.btn, marginTop: 16, width: "100%", fontSize: 16, opacity: guardando ? 0.6 : 1 }}
+            onClick={guardar}
+            disabled={guardando}
+          >
+            {guardando ? "Guardando…" : "💾 Guardar dictamen"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
   // Etapa que se está mirando. Arranca en la actual y se mueve sola cuando el expediente avanza.
   const [abierta, setAbierta] = useState(Math.min(exp.etapa, ETAPAS.length - 1));
@@ -2432,6 +2653,9 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
         <div style={{ fontSize: 14, color: "#475569" }}><b>Período:</b> {exp.periodoMeses} meses {exp.periodoTexto && `(${exp.periodoTexto})`}</div>
         <div style={{ fontSize: 13, marginTop: 4, fontWeight: 700, color: "#0e7490" }}>👤 Responsable: {exp.responsable || "sin asignar"}</div>
       </div>
+
+      {/* ====== DICTAMEN DE AUDITORÍA MÉDICA (documento madre — ancla de todo el expediente) ====== */}
+      <FichaDictamen exp={exp} />
 
       {/* semáforo de etapas: ahora cada chip abre su etapa */}
       <div style={S.card}>
