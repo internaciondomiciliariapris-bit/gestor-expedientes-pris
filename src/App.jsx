@@ -2321,7 +2321,11 @@ function NuevoExpediente({ modo = "nuevo", usuario = "", inicial = null, expId =
         esRenovacion: !!d.esRenovacion, periodoAutorizado: d.periodoAutorizado || "", firmante: d.firmante || "",
         observaciones: "", prestaciones: prestArr, cargadoEl: new Date().toISOString(),
       });
-      alert("✅ Leí el dictamen. Pre-llené los datos del paciente y el dictamen quedó cargado: el cruce ya arranca armado. Revisá y completá lo que falte antes de guardar.");
+      alert(
+        "✅ Leí el dictamen" +
+        (d.nroDictamen ? " (N° " + d.nroDictamen + ")" : " (⚠️ no pude leer el N° — cargalo a mano)") +
+        ". Pre-llené los datos del paciente y el dictamen quedó cargado: el cruce ya arranca armado. Revisá y completá lo que falte antes de guardar."
+      );
     } catch (e) {
       alert("No pude leer el archivo automáticamente (" + (e.message || e) + "). Cargá los datos a mano.");
     } finally {
