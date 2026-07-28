@@ -2445,10 +2445,172 @@ function dictamenInicial(exp) {
   };
 }
 
+/* ---------- Lectura automática del dictamen (pre-llenado) ----------
+   PDF con texto → se lee con pdf.js (casi perfecto).
+   Foto / escaneo → OCR con Tesseract (puede tener errores; se revisa).
+   Todo se carga perezosamente desde CDN solo cuando se usa el botón. */
+
+async function cargarPdfJs() {
+  const url = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.min.mjs";
+  const pdfjs = await import(/* @vite-ignore */ url);
+  pdfjs.GlobalWorkerOptions.workerSrc =
+    "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.worker.min.mjs";
+  return pdfjs;
+}
+
+async function textoDePdf(file) {
+  const pdfjs = await cargarPdfJs();
+  const data = new Uint8Array(await file.arrayBuffer());
+  const pdf = await pdfjs.getDocument({ data }).promise;
+  let texto = "";
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const content = await page.getTextContent();
+    texto += content.items.map((it) => it.str).join(" ") + "\n";
+  }
+  return texto.trim();
+}
+
+async function ocrImagen(imagen) {
+  const url = "https://cdn.jsdelivr.net/npm/tesseract.js@5/+esm";
+  const mod = await import(/* @vite-ignore */ url);
+  const recognize = mod.recognize || (mod.default && mod.default.recognize);
+  const res = await recognize(imagen, "spa");
+  return ((res && res.data && res.data.text) || "").trim();
+}
+
+async function ocrPdfEscaneado(file) {
+  const pdfjs = await cargarPdfJs();
+  const data = new Uint8Array(await file.arrayBuffer());
+  const pdf = await pdfjs.getDocument({ data }).promise;
+  let texto = "";
+  const paginas = Math.min(pdf.numPages, 2);
+  for (let p = 1; p <= paginas; p++) {
+    const page = await pdf.getPage(p);
+    const viewport = page.getViewport({ scale: 2 });
+    const canvas = document.createElement("canvas");
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    const ctx = canvas.getContext("2d");
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    texto += (await ocrImagen(canvas.toDataURL("image/png"))) + "\n";
+  }
+  return texto.trim();
+}
+
+// Quita acentos y baja a minúsculas (para ubicar etiquetas en texto/OCR).
+function _norm(s) {
+  return (s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+const _LABELS_DICT = [
+  "Médico", "Enfermería", "Fonoaudiología",
+  "Kinesiología respiratoria", "Kinesiología motora", "Alimentación",
+];
+
+// Interpreta el texto del dictamen y arma los campos de la ficha.
+function parsearDictamen(texto) {
+  // Algunos PDF mapean el espacio a un carácter del área privada (U+E000–U+F8FF);
+  // lo pasamos a espacio real para que trim() y la búsqueda de etiquetas funcionen.
+  const t = texto.replace(/[\uE000-\uF8FF]/g, " ").replace(/\r/g, "").replace(/[ \t]+/g, " ");
+  const tn = _norm(t);
+  const out = {
+    nroDictamen: "", fechaDictamen: "", solicita: "",
+    esRenovacion: false, periodoAutorizado: "", firmante: "", prestaciones: {},
+  };
+
+  // N° de expediente / dictamen
+  const mExp = t.match(/EXPEDIENTE\s*N[°ºo]?\s*:?\s*([0-9]{2,5}\s*\/\s*[0-9]{2,4}\s*\/\s*[A-Z]\s*\/\s*[0-9]{4})/i);
+  if (mExp) out.nroDictamen = mExp[1].replace(/\s+/g, "");
+
+  // Fecha de cabecera (única con año de 4 dígitos; la doc. adjunta usa 2 dígitos)
+  const mFecha = t.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
+  if (mFecha) out.fechaDictamen = mFecha[1];
+
+  // Línea "Solicita ..." hasta DOCUMENTACIÓN / DETALLE / salto
+  const mSol = t.match(/Solicita\b[\s\S]*?(?=DOCUMENTACI|DETALLE|\n|$)/i);
+  if (mSol) out.solicita = mSol[0].replace(/\s+/g, " ").trim();
+  out.esRenovacion = /renovaci/.test(_norm(out.solicita)) || /renovaci/.test(tn);
+
+  // Período: "Mes AÑO a Mes AÑO" o "Mes a Mes AÑO"
+  const meses = "enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre";
+  const mPer = t.match(new RegExp("(" + meses + ")\\s*\\d{0,4}\\s*(?:a|al|-|–|—|hasta)\\s*(?:" + meses + ")\\s*\\d{2,4}", "i"));
+  if (mPer) out.periodoAutorizado = mPer[0].replace(/\s+/g, " ").trim();
+
+  // Firmante: preferimos el de Auditoría (Farm./Dr./Dra.) sobre el CPN del PIS.
+  let mFirma = t.match(/(?:Farm\.|Dra\.|Dr\.)\s+[A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ.\s]{2,40}/);
+  if (!mFirma) mFirma = t.match(/C\.?P\.?N\.?\s+[A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ.\s]{2,40}/);
+  if (mFirma) out.firmante = mFirma[0].replace(/\s+/g, " ").trim();
+
+  // Prestaciones: SOLO dentro de la tabla (después de "CANTIDAD SOLICITADA"),
+  // para no confundir "Alimentación" de la línea "Solicita ...".
+  const idxTabla = tn.indexOf("cantidad solicitada");
+  const desde = idxTabla !== -1 ? idxTabla + "cantidad solicitada".length : 0;
+  const stops = _LABELS_DICT.map(_norm).concat(["dictamen de auditoria", "dictamen"]);
+  for (let i = 0; i < _LABELS_DICT.length; i++) {
+    const lab = _norm(_LABELS_DICT[i]);
+    const idx = tn.indexOf(lab, desde);
+    if (idx === -1) continue;
+    let fin = tn.length;
+    for (const s of stops) {
+      if (s === lab) continue;
+      const j = tn.indexOf(s, idx + lab.length);
+      if (j !== -1 && j < fin) fin = j;
+    }
+    let cantidad = t.slice(idx + lab.length, fin).replace(/^[\s:.\-–]+/, "").replace(/\s+/g, " ").trim();
+    if (cantidad.length > 70) cantidad = cantidad.slice(0, 70).trim();
+    out.prestaciones[_LABELS_DICT[i]] = cantidad;
+  }
+  return out;
+}
+
 function FichaDictamen({ exp }) {
   const [abierto, setAbierto] = useState(!exp.dictamen); // si no hay dictamen, arranca abierto
   const [f, setF] = useState(() => dictamenInicial(exp));
   const [guardando, setGuardando] = useState(false);
+  const [leyendo, setLeyendo] = useState(false);
+
+  // Sube el archivo del dictamen, lo lee (texto u OCR) y pre-llena la ficha.
+  const prefillDesdeArchivo = async (file) => {
+    setLeyendo(true);
+    try {
+      let texto = "";
+      const esPdf = /pdf/i.test(file.type) || /\.pdf$/i.test(file.name);
+      if (esPdf) {
+        texto = await textoDePdf(file);
+        // PDF sin capa de texto (escaneado) → rasterizar y OCR
+        if (_norm(texto).replace(/[^a-z]/g, "").length < 30) texto = await ocrPdfEscaneado(file);
+      } else {
+        texto = await ocrImagen(file);
+      }
+      if (!texto || texto.length < 10) {
+        alert("No pude leer texto del archivo. Cargá los datos a mano.");
+        return;
+      }
+      const d = parsearDictamen(texto);
+      setF((prev) => {
+        const pres = prev.prestaciones.map((p) => {
+          const key = Object.keys(d.prestaciones).find((k) => _norm(k) === _norm(p.nombre));
+          return key && d.prestaciones[key] ? { ...p, cantidad: d.prestaciones[key] } : p;
+        });
+        return {
+          ...prev,
+          nroDictamen: d.nroDictamen || prev.nroDictamen,
+          fechaDictamen: d.fechaDictamen || prev.fechaDictamen,
+          solicita: d.solicita || prev.solicita,
+          esRenovacion: d.esRenovacion || prev.esRenovacion,
+          periodoAutorizado: d.periodoAutorizado || prev.periodoAutorizado,
+          firmante: d.firmante || prev.firmante,
+          prestaciones: pres,
+        };
+      });
+      alert("✅ Leí el dictamen y pre-llené lo que pude. Revisá y corregí lo que falte antes de guardar (sobre todo los días de Alimentación).");
+    } catch (e) {
+      alert("No pude leer el archivo automáticamente (" + (e.message || e) + "). Cargá los datos a mano.");
+    } finally {
+      setLeyendo(false);
+    }
+  };
 
   const set = (k) => (e) =>
     setF((prev) => ({ ...prev, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
@@ -2539,6 +2701,36 @@ function FichaDictamen({ exp }) {
           <div style={{ fontSize: 13, color: "#64748b", marginBottom: 6 }}>
             Cargá lo que autorizó Auditoría Médica. Esto es el <b>documento madre</b>: contra estos datos se van a cruzar
             después el presupuesto ganador, la nota y la resolución. El dato más importante son los <b>días de Alimentación</b>.
+          </div>
+
+          {/* Subir el PDF/foto del dictamen y pre-llenar automáticamente */}
+          <div style={{ background: "#f0f9ff", border: "1.5px dashed #38bdf8", borderRadius: 10, padding: 12, marginBottom: 8 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: "#075985", marginBottom: 4 }}>
+              📎 Subí el dictamen y lo pre-lleno automáticamente
+            </div>
+            <div style={{ fontSize: 12, color: "#0369a1", marginBottom: 10 }}>
+              Si es un PDF de texto lo leo casi perfecto. Si es una foto o escaneo uso OCR y puede salir con algún error, así que después
+              revisá y corregí lo que falte. Lo que el dictamen no autoriza, dejalo en blanco.
+            </div>
+            <label
+              style={{
+                ...S.btn, display: "inline-block", cursor: leyendo ? "default" : "pointer",
+                opacity: leyendo ? 0.6 : 1,
+              }}
+            >
+              {leyendo ? "Leyendo… (puede tardar unos segundos)" : "📎 Elegir archivo del dictamen (PDF o foto)"}
+              <input
+                type="file"
+                accept=".pdf,image/*"
+                style={{ display: "none" }}
+                disabled={leyendo}
+                onChange={(e) => {
+                  const file = e.target.files && e.target.files[0];
+                  if (file) prefillDesdeArchivo(file);
+                  e.target.value = "";
+                }}
+              />
+            </label>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
