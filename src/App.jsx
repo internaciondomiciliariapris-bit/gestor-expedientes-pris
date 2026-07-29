@@ -58,7 +58,6 @@ const ETAPAS = [
   "Presupuestos",
   "Cuadro comparativo",
   "Nota afectación",
-  "Auditoría Médica",
   "Asesoría Letrada",
   "Resolución",
   "Tribunal de Cuentas",
@@ -337,6 +336,7 @@ function plantillaNota(d, logos) {
     '<p style="text-align:justify; text-indent:135pt; line-height:1.5; margin-top:14pt;">' +
     "Para los periodos de <b>" + esc(d.periodoTexto) + "</b>, por el importe total por " + esc(d.periodoMeses) +
     " meses de <b>" + esc(d.montoFormato) + "</b> (" + letras + ") a la " + impHtml + ".</p>" +
+    (d.aclaracion ? '<p style="text-align:justify; text-indent:135pt; line-height:1.5; margin-top:10pt; font-family:Arial, Helvetica, sans-serif; font-style:italic;">«' + esc(d.aclaracion) + '»</p>' : "") +
     '<p style="margin-left:145pt; margin-top:22pt;">Sin otro motivo saludo atentamente.</p>' +
     '<p style="margin-left:5pt; margin-top:34pt; line-height:1.5; font-weight:bold;">Firmado digitalmente:<br>' +
     "C.P.N Mariela Agustina Castillo<br>Gerente Administrativo<br>Dirección Gral. Prog. Integrado de Salud<br>SI.PRO.SA</p>" +
@@ -439,6 +439,11 @@ function firmaResolucionHtml(firmante) {
 
 function plantillaResolucion(d, logos) {
   const q = "margin:0; text-align:justify; text-indent:105pt; line-height:1.18;";
+  // Aclaración 30/31: va al final de los considerandos, entre comillas y con
+  // tipografía distinta (Arial itálica) para que se identifique del resto.
+  const aclara = d.aclaracionDias
+    ? '<p style="' + q + ' font-family:Arial, Helvetica, sans-serif; font-style:italic;">«' + esc(d.aclaracionDias) + '»</p>'
+    : "";
   const css =
     ".hoja { font-family:'Times New Roman', Times, serif; font-size:12pt; color:#000; } " +
     ".hoja .pagina { padding: 26pt 79pt 30pt 85pt; } .hoja p { margin:0; } .hoja td { font-size:12pt; }";
@@ -506,7 +511,7 @@ function plantillaResolucion(d, logos) {
       '<p style="' + q + '">Que obra informe jurídico favorable a la contratación. ---------------</p>' +
       '<p style="' + q + '">Que por lo expuesto, no existen objeciones legales que formular para que la Gerencia Administrativa Contable del Programa Integrado de Salud, en virtud de razones de urgencia invocadas, contrate con la firma <b>' +
       adj + "</b>, la adquisición del servicio de Internación Domiciliaria y Módulo de alimentación domiciliaria, bajo la figura de Contratación Directa de conformidad a lo normado por la Res. N°388/SPS/-05.</p>" +
-      porElloHtml(d.firmante) +
+      aclara + porElloHtml(d.firmante) +
       art("ADJUDICAR a la firma <b>" + adj + "</b>, la provisión de los siguientes servicios:") +
       '<table style="width:100%; border-collapse:collapse; margin-top:8pt;"><tr>' +
       '<td style="border:1pt solid #000; padding:2pt 4pt; width:52%;">SERVICIO</td>' +
@@ -580,7 +585,7 @@ function plantillaResolucion(d, logos) {
       "Contable del Programa Integrado de Salud, en virtud de razones de urgencia invocadas, contrate con la firma <b>" + firmas +
       "</b>., la adquisición del servicio de Internación Domiciliaria y Modulo de alimentación domiciliaria, bajo la figura de " +
       "Contratación Directa de conformidad a lo normado por la Res. N°388/SPS/-05.</p>" +
-      porElloHtml(d.firmante) +
+      aclara + porElloHtml(d.firmante) +
       art("ADJUDICAR a las firmas comerciales <b>" + firmas + "</b>, la provisión de los siguientes servicios:") +
       tabla(d.tituloA, d.detalleA, d.mensualA, totalA) +
       "</div>";
@@ -631,7 +636,7 @@ function plantillaResolucion(d, logos) {
     '<p style="' + q + '">Que por lo expuesto, no existen objeciones legales que formular para que la Gerencia Administrativa Contable del Programa Integrado de Salud, en virtud de razones de urgencia invocadas, contrate con la firma <b>' +
     adj + "</b>, la adquisición del servicio de " + mod +
     ", bajo la figura de Contratación Directa de conformidad a lo normado por la Res. N°388/SPS/-05.</p>" +
-    porElloHtml(d.firmante) +
+    aclara + porElloHtml(d.firmante) +
     art("ADJUDICAR a la firma <b>" + adj + "</b>, la provisión del siguiente servicio:") +
     '<table style="width:100%; border-collapse:collapse; margin-top:8pt;"><tr>' +
     '<td style="border:1pt solid #000; padding:2pt 4pt; width:52%;">SERVICIO</td>' +
@@ -973,16 +978,42 @@ function fechaLargaHoy() {
   return d.getDate() + " de " + meses[d.getMonth()] + " de " + d.getFullYear();
 }
 
-const datosNota = (exp, extra = {}) => ({
-  nroExpediente: exp.nroExpediente, paciente: exp.paciente, dni: exp.dni,
-  modulo: exp.modulo, periodoTexto: exp.periodoTexto || exp.periodoMeses + " meses", periodoMeses: exp.periodoMeses,
-  items: extra.items ?? exp.itemsPrestacion ?? [],
-  monto: extra.monto ?? exp.nota?.monto ?? (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6),
-  montoFormato: formatoPesos(extra.monto ?? exp.nota?.monto ?? (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6)),
-  directora: extra.directora ?? exp.nota?.directora ?? "Dra. Noellia Bottone",
-  imputacion: extra.imputacion ?? exp.nota?.imputacion ?? IMPUTACION_NOTA_DEFECTO,
-  fechaTexto: extra.fechaTexto ?? exp.nota?.fechaTexto ?? fechaLargaHoy(),
-});
+// Días en letras (rango realista de un mes) para la aclaración 30/31.
+function diasEnLetras(n) {
+  const m = { 28: "veintiocho", 29: "veintinueve", 30: "treinta", 31: "treinta y uno" };
+  return m[n] || String(n);
+}
+
+// Núcleo de la aclaración cuando la afectación de Alimentación se calcula sobre
+// una cantidad de días distinta de 30 (el presupuesto suele venir por 30).
+const aclaracionDiasCore = (exp) => {
+  const c = exp.calculoAfectacion;
+  if (!c || !(Number(c.totalAlim) > 0)) return "";
+  const dias = Number(c.diasAlim);
+  if (!dias || dias === 30) return "";
+  return "el presupuesto fue cotizado sobre la base de 30 (treinta) días; no obstante, la afectación presupuestaria correspondiente al Módulo de Alimentación Domiciliaria se calcula sobre los " +
+    dias + " (" + diasEnLetras(dias) + ") días efectivamente autorizados por el Departamento de Auditoría Médica, conforme al dictamen obrante en autos.";
+};
+
+const datosNota = (exp, extra = {}) => {
+  const calc = exp.calculoAfectacion;
+  const montoCalc = Number(calc?.totalAfectar) > 0
+    ? Number(calc.totalAfectar)
+    : (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6);
+  const monto = extra.monto ?? exp.nota?.monto ?? montoCalc;
+  const core = aclaracionDiasCore(exp);
+  return {
+    nroExpediente: exp.nroExpediente, paciente: exp.paciente, dni: exp.dni,
+    modulo: exp.modulo, periodoTexto: exp.periodoTexto || exp.periodoMeses + " meses", periodoMeses: exp.periodoMeses,
+    items: extra.items ?? exp.itemsPrestacion ?? [],
+    monto,
+    montoFormato: formatoPesos(monto),
+    directora: extra.directora ?? exp.nota?.directora ?? "Dra. Noellia Bottone",
+    imputacion: extra.imputacion ?? exp.nota?.imputacion ?? IMPUTACION_NOTA_DEFECTO,
+    aclaracion: extra.aclaracion ?? exp.nota?.aclaracion ?? (core ? "Se deja constancia que " + core : ""),
+    fechaTexto: extra.fechaTexto ?? exp.nota?.fechaTexto ?? fechaLargaHoy(),
+  };
+};
 
 const datosPaseAuditoria = (exp, extra = {}) => ({
   tipo: "auditoria",
@@ -1007,7 +1038,12 @@ const datosPaseTribunal = (exp) => ({
 
 const datosResolucion = (exp, extra = {}) => {
   const r = exp.resolucion || {};
-  const total = extra.total ?? r.total ?? (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6);
+  const calc = exp.calculoAfectacion;
+  const core = aclaracionDiasCore(exp);
+  const totalCalc = Number(calc?.totalAfectar) > 0
+    ? Number(calc.totalAfectar)
+    : (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6);
+  const total = extra.total ?? r.total ?? totalCalc;
   const itemsTxt = (exp.itemsPrestacion || []).map((it) => it.nombre + (it.cantTexto ? " " + it.cantTexto : "")).join("; ");
   const nombresTxt = (exp.itemsPrestacion || []).map((it) => it.nombre).join("; ");
   return {
@@ -1034,12 +1070,13 @@ const datosResolucion = (exp, extra = {}) => {
     tituloA: extra.tituloA ?? r.tituloA ?? "",
     detalleA: extra.detalleA ?? r.detalleA ?? "",
     firmaA: extra.firmaA ?? r.firmaA ?? (exp.cuadro?.adjudicado || ""),
-    mensualA: extra.mensualA ?? r.mensualA ?? "",
+    mensualA: extra.mensualA ?? r.mensualA ?? (Number(calc?.precioMensual) > 0 ? Number(calc.precioMensual) : ""),
     subB: extra.subB ?? r.subB ?? "322",
     tituloB: extra.tituloB ?? r.tituloB ?? "",
     detalleB: extra.detalleB ?? r.detalleB ?? "",
     firmaB: extra.firmaB ?? r.firmaB ?? "",
-    mensualB: extra.mensualB ?? r.mensualB ?? "",
+    mensualB: extra.mensualB ?? r.mensualB ?? (Number(calc?.mensualAlim) > 0 ? Number(calc.mensualAlim) : ""),
+    aclaracionDias: extra.aclaracionDias ?? r.aclaracionDias ?? (core ? "Que " + core : ""),
     fechaTexto: fechaLargaHoy(),
   };
 };
@@ -1288,15 +1325,17 @@ export default function App() {
     if (!logueado) return;
     const u1 = onSnapshot(collection(db, COL_EXPEDIENTES), (snap) => {
       const arr = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      // Migración a esquema v2: se insertó la etapa "Auditoría Médica" en el índice 4.
-      // Los expedientes viejos (sin sv) que ya pasaron la Nota de afectación (etapa >= 4 en el
-      // esquema viejo) se corren +1 para que no retrocedan de etapa. Es idempotente: una vez
-      // marcado sv:2 no se vuelve a tocar, así que no hay riesgo de doble migración.
+      // Migración de esquema:
+      //  - sv:2 tenía "Auditoría Médica" insertada en el índice 4. Ahora se quita
+      //    (el dictamen se carga al inicio del expediente), así que los expedientes
+      //    que ya pasaron esa etapa (etapa >= 5) se corren -1 para no adelantarse.
+      //  - Expedientes viejos sin sv usan el mismo esquema de 8 etapas actual → solo se marcan.
+      //  Es idempotente: una vez en sv:3 no se vuelve a tocar.
       arr.forEach((e) => {
-        if (e.sv !== 2) {
-          const nuevaEtapa = (e.etapa || 0) >= 4 ? (e.etapa || 0) + 1 : (e.etapa || 0);
-          updateDoc(doc(db, COL_EXPEDIENTES, e.id), { sv: 2, etapa: nuevaEtapa }).catch(() => {});
-          e.sv = 2;
+        if (e.sv !== 3) {
+          const nuevaEtapa = e.sv === 2 && (e.etapa || 0) >= 5 ? (e.etapa || 0) - 1 : (e.etapa || 0);
+          updateDoc(doc(db, COL_EXPEDIENTES, e.id), { sv: 3, etapa: nuevaEtapa }).catch(() => {});
+          e.sv = 3;
           e.etapa = nuevaEtapa;
         }
       });
@@ -2361,7 +2400,7 @@ function NuevoExpediente({ modo = "nuevo", usuario = "", inicial = null, expId =
         await updateDoc(doc(db, COL_EXPEDIENTES, expId), { ...f, edad });
         onCreado({ id: expId, ...f, edad });
       } else {
-        const data = { ...f, edad, etapa: 0, sv: 2, creado: new Date().toISOString(), ...(dictamenCargado ? { dictamen: dictamenCargado } : {}) };
+        const data = { ...f, edad, etapa: 0, sv: 3, creado: new Date().toISOString(), ...(dictamenCargado ? { dictamen: dictamenCargado } : {}) };
         const ref = await addDoc(collection(db, COL_EXPEDIENTES), data);
         onCreado({ id: ref.id, ...data });
       }
@@ -3389,32 +3428,10 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
         {exp.etapa < 3 && aviso("Todavía falta generar el cuadro comparativo.")}
       </>)}
 
-      {/* ---------- 4) Auditoría Médica ---------- */}
+      {/* ---------- 4) Asesoría Letrada ---------- */}
       {abierta === 4 && (<>
-        {exp.etapa === 4 && <PaseAuditoria exp={exp} />}
-        {exp.etapa >= 5 && (
-          exp.paseAuditoria ? (
-            <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
-              <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Pase a Auditoría Médica generado</div>
-              <div style={{ fontSize: 14, color: "#334155" }}>
-                <b>Fecha:</b> {formatearFecha(exp.paseAuditoria.fecha)} · <b>Dirigido a:</b> {exp.paseAuditoria.destinataria}
-              </div>
-              <ReabrirGenerador etiqueta="✏️ Modificar y regenerar (destinataria, asunto)" render={() => <PaseAuditoria exp={exp} />} />
-            </div>
-          ) : (
-            <>
-              {aviso("Este expediente ya avanzó más allá de esta etapa. Si necesitás el pase a Auditoría Médica, generalo acá abajo.")}
-              <PaseAuditoria exp={exp} />
-            </>
-          )
-        )}
-        {exp.etapa < 4 && aviso("Todavía falta la nota de afectación presupuestaria.")}
-      </>)}
-
-      {/* ---------- 5) Asesoría Letrada ---------- */}
-      {abierta === 5 && (<>
-        {exp.etapa === 5 && <PaseLetrada exp={exp} />}
-        {exp.etapa >= 6 && exp.paseLetrada && (
+        {exp.etapa === 4 && <PaseLetrada exp={exp} />}
+        {exp.etapa >= 5 && exp.paseLetrada && (
           <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
             <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Pase a Asesoría Letrada generado</div>
             <div style={{ fontSize: 14, color: "#334155" }}>
@@ -3423,13 +3440,13 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
             <BotonRevisar construirPlantilla={(logos) => plantillaPase(datosPaseLetrada(exp), logos)} />
           </div>
         )}
-        {exp.etapa < 5 && aviso("Todavía falta el pase a Auditoría Médica.")}
+        {exp.etapa < 4 && aviso("Todavía falta la nota de afectación presupuestaria.")}
       </>)}
 
-      {/* ---------- 6) Resolución ---------- */}
-      {abierta === 6 && (<>
-        {exp.etapa === 6 && <GenerarResolucion exp={exp} />}
-        {exp.etapa >= 7 && exp.resolucion && (
+      {/* ---------- 5) Resolución ---------- */}
+      {abierta === 5 && (<>
+        {exp.etapa === 5 && <GenerarResolucion exp={exp} />}
+        {exp.etapa >= 6 && exp.resolucion && (
           <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
             <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Resolución Interna Nº {exp.resolucion.nro} generada</div>
             <div style={{ fontSize: 14, color: "#334155" }}>
@@ -3439,13 +3456,13 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
             <ReabrirGenerador etiqueta="✏️ Modificar y regenerar (firmante, subpartidas, fojas, N°)" render={() => <GenerarResolucion exp={exp} />} />
           </div>
         )}
-        {exp.etapa < 6 && aviso("Todavía falta el pase a Asesoría Letrada.")}
+        {exp.etapa < 5 && aviso("Todavía falta el pase a Asesoría Letrada.")}
       </>)}
 
-      {/* ---------- 7) Tribunal de Cuentas ---------- */}
-      {abierta === 7 && (<>
-        {exp.etapa === 7 && <PaseTribunal exp={exp} />}
-        {exp.etapa >= 8 && exp.paseTribunal && (
+      {/* ---------- 6) Tribunal de Cuentas ---------- */}
+      {abierta === 6 && (<>
+        {exp.etapa === 6 && <PaseTribunal exp={exp} />}
+        {exp.etapa >= 7 && exp.paseTribunal && (
           <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
             <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Pase al Tribunal de Cuentas generado</div>
             <div style={{ fontSize: 14, color: "#334155" }}>
@@ -3454,13 +3471,13 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
             <BotonRevisar construirPlantilla={(logos) => plantillaPase(datosPaseTribunal(exp), logos)} />
           </div>
         )}
-        {exp.etapa < 7 && aviso("Todavía falta la Resolución Interna.")}
+        {exp.etapa < 6 && aviso("Todavía falta la Resolución Interna.")}
       </>)}
 
-      {/* ---------- 8) Orden de compra ---------- */}
-      {abierta === 8 && (<>
-        {exp.etapa === 8 && <OrdenCompraEnvio exp={exp} proveedores={proveedores} />}
-        {exp.etapa >= 9 && exp.oc && (
+      {/* ---------- 7) Orden de compra ---------- */}
+      {abierta === 7 && (<>
+        {exp.etapa === 7 && <OrdenCompraEnvio exp={exp} proveedores={proveedores} />}
+        {exp.etapa >= 8 && exp.oc && (
           <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
             <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Orden de Compra Nº {exp.oc.nro} enviada al adjudicado</div>
             <div style={{ fontSize: 14, color: "#334155" }}>
@@ -3474,16 +3491,16 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
             </div>
           </div>
         )}
-        {exp.etapa >= 9 && (
+        {exp.etapa >= 8 && (
           <div style={{ ...S.card, background: "#f0fdf4", border: "2px solid #16a34a", textAlign: "center" }}>
             <div style={{ fontSize: 22 }}>🎉</div>
             <div style={{ fontWeight: 800, color: "#166534", fontSize: 16 }}>Expediente completo</div>
             <div style={{ fontSize: 13, color: "#475569", marginTop: 4 }}>
-              Las 9 etapas del circuito están cerradas. Cuando se acerque el fin del período, usá <b>🔄 Renovar período</b> para arrancar el trámite nuevo con los datos ya cargados.
+              Las 8 etapas del circuito están cerradas. Cuando se acerque el fin del período, usá <b>🔄 Renovar período</b> para arrancar el trámite nuevo con los datos ya cargados.
             </div>
           </div>
         )}
-        {exp.etapa < 8 && aviso("Todavía falta el pase al Tribunal de Cuentas.")}
+        {exp.etapa < 7 && aviso("Todavía falta el pase al Tribunal de Cuentas.")}
       </>)}
 
       <BotonEliminar exp={exp} volver={volver} />
@@ -4924,7 +4941,7 @@ function PaseLetrada({ exp }) {
         onCerrar={() => setRevisando(false)}
         onListo={async () => {
           await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
-            etapa: Math.max(exp.etapa, 6),
+            etapa: Math.max(exp.etapa, 5),
             paseLetrada: { fecha: new Date().toISOString(), fechaTexto, anio },
           });
         }}
@@ -5085,7 +5102,7 @@ function GenerarResolucion({ exp }) {
         onCerrar={() => setRevisando(false)}
         onListo={async (data) => {
           await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
-            etapa: Math.max(exp.etapa, 7),
+            etapa: Math.max(exp.etapa, 6),
             resolucion: {
               fecha: new Date().toISOString(),
               nro: f.nroResolucion, tipoTramite: f.tipoTramite,
@@ -5359,7 +5376,7 @@ function PaseTribunal({ exp }) {
         onCerrar={() => setRevisando(false)}
         onListo={async () => {
           await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
-            etapa: Math.max(exp.etapa, 8),
+            etapa: Math.max(exp.etapa, 7),
             paseTribunal: { fecha: new Date().toISOString() },
           });
         }}
@@ -5520,7 +5537,7 @@ function OrdenCompraEnvio({ exp, proveedores }) {
         fecha: x.fechaEnvio || ahora,
       }));
       await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
-        ...(todasEnviadas ? { etapa: 9 } : {}),
+        ...(todasEnviadas ? { etapa: 8 } : {}),
         oc: {
           fecha: ahora,
           modo,
