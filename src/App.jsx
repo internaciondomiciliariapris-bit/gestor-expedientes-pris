@@ -3174,9 +3174,11 @@ function CruceDictamenPresupuesto({ exp }) {
    la nota de afectación y la resolución (Paso 4).
    ================================================================ */
 function CalculoAfectacion({ exp }) {
-  const alimAut = (exp.dictamen?.prestaciones || []).find(
-    (p) => /aliment/i.test(p.nombre || "") && (p.cantidad || "").trim() !== ""
-  );
+  const autorizadas = (exp.dictamen?.prestaciones || []).filter((p) => (p.cantidad || "").trim() !== "");
+  const alimAut = autorizadas.find((p) => /aliment/i.test(p.nombre || ""));
+  const hayAlim = !!alimAut;
+  const hayInternacion = autorizadas.some((p) => !/aliment/i.test(p.nombre || "")) || !hayAlim;
+
   const diasDefault = alimAut ? ((String(alimAut.cantidad).match(/\d+/) || [])[0] || "31") : "31";
   const mesesDefault = String(exp.periodoMeses || 6);
   const c = exp.calculoAfectacion || {};
@@ -3188,6 +3190,7 @@ function CalculoAfectacion({ exp }) {
     meses: c.meses != null ? String(c.meses) : mesesDefault,
   });
   const [guardando, setGuardando] = useState(false);
+  const [abierto, setAbierto] = useState(!(exp.calculoAfectacion && Number(exp.calculoAfectacion.totalAfectar) > 0));
   const set = (k) => (e) => setD((p) => ({ ...p, [k]: e.target.value }));
 
   if (!exp.dictamen) return null;
@@ -3196,9 +3199,9 @@ function CalculoAfectacion({ exp }) {
   const dias = Number(d.diasAlim) || 0;
   const precioMensual = Number(d.precioMensual) || 0;
   const meses = Number(d.meses) || 0;
-  const mensualAlim = precioDiario * dias;
+  const mensualAlim = hayAlim ? precioDiario * dias : 0;
   const totalAlim = mensualAlim * meses;
-  const totalInt = precioMensual * meses;
+  const totalInt = hayInternacion ? precioMensual * meses : 0;
   const totalAfectar = totalAlim + totalInt;
 
   const guardar = async () => {
@@ -3206,14 +3209,17 @@ function CalculoAfectacion({ exp }) {
     try {
       await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
         calculoAfectacion: {
-          precioDiario, diasAlim: dias, precioMensual, meses,
+          precioDiario: hayAlim ? precioDiario : 0,
+          diasAlim: dias, meses,
+          precioMensual: hayInternacion ? precioMensual : 0,
           mensualAlim, totalAlim, totalInt, totalAfectar,
           calculadoEl: new Date().toISOString(),
         },
       });
-      alert("✅ Cálculo de afectación guardado.");
+      setAbierto(false);
+      alert("\u2705 C\u00e1lculo de afectaci\u00f3n guardado.");
     } catch (e) {
-      alert("❌ Error al guardar el cálculo: " + e.message);
+      alert("\u274c Error al guardar el c\u00e1lculo: " + e.message);
     }
     setGuardando(false);
   };
@@ -3222,72 +3228,70 @@ function CalculoAfectacion({ exp }) {
 
   return (
     <div style={{ ...S.card, borderLeft: "5px solid #0e7490" }}>
-      <div style={{ fontWeight: 800, color: "#0e7490" }}>🧮 Cálculo de afectación (según lo autorizado)</div>
-      <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>
-        La afectación se calcula sobre lo que autorizó Auditoría. Cargá el precio del proveedor adjudicado; usá el bloque que corresponda al módulo.
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ fontWeight: 800, color: "#0e7490" }}>\U0001f9ee C\u00e1lculo de afectaci\u00f3n (seg\u00fan lo autorizado)</div>
+        <div style={{ flex: 1 }} />
+        <button style={S.btnSec} onClick={() => setAbierto((v) => !v)}>{abierto ? "\u25b2 Ocultar" : "\u25bc Ver / editar"}</button>
       </div>
 
-      {/* Módulo Alimentación (precio diario) */}
-      <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: 12, marginTop: 12 }}>
-        <div style={{ fontWeight: 700, color: "#334155", marginBottom: 8 }}>🍽️ Módulo Alimentación (precio diario)</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-          <div>
-            <label style={{ ...S.label, marginTop: 0 }}>Precio por día</label>
-            <input type="number" style={numStyle} value={d.precioDiario} onChange={set("precioDiario")} placeholder="0" />
-          </div>
-          <div>
-            <label style={{ ...S.label, marginTop: 0 }}>Días autorizados</label>
-            <input type="number" style={numStyle} value={d.diasAlim} onChange={set("diasAlim")} />
-          </div>
-          <div>
-            <label style={{ ...S.label, marginTop: 0 }}>Meses</label>
-            <input type="number" style={numStyle} value={d.meses} onChange={set("meses")} />
+      {!abierto && (
+        <div style={{ background: "#ecfeff", border: "1px solid #67e8f9", borderRadius: 10, padding: 12, marginTop: 10 }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: "#0e7490" }}>\u2705 TOTAL A AFECTAR: {formatoPesos(totalAfectar)}</div>
+          {totalAfectar > 0 && <div style={{ fontSize: 12, color: "#0e7490", marginTop: 2 }}>En letras: {numeroALetras(totalAfectar)}</div>}
+          <div style={{ fontSize: 12, color: "#475569", marginTop: 6 }}>
+            {hayAlim && <>Alimentaci\u00f3n: {formatoPesos(totalAlim)}{hayInternacion ? "  \u00b7  " : ""}</>}
+            {hayInternacion && <>Internaci\u00f3n: {formatoPesos(totalInt)}</>}
           </div>
         </div>
-        <div style={{ fontSize: 13, color: "#475569", marginTop: 8 }}>
-          Mensual: <b>{formatoPesos(mensualAlim)}</b> ({formatoPesos(precioDiario)} × {dias} días){"  ·  "}
-          Total {meses} {meses === 1 ? "mes" : "meses"}: <b>{formatoPesos(totalAlim)}</b>
+      )}
+
+      {abierto && (<>
+        <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>
+          La afectaci\u00f3n se calcula sobre lo que autoriz\u00f3 Auditor\u00eda. Carg\u00e1 el precio del proveedor adjudicado.
         </div>
-        {dias !== 0 && dias !== 30 && precioDiario > 0 && (
-          <div style={{ fontSize: 12, color: "#b45309", marginTop: 6 }}>
-            ⚠️ El presupuesto suele cotizarse sobre 30 días; acá la afectación se calcula sobre los {dias} días autorizados por Auditoría. La aclaración formal irá en la resolución.
+
+        {hayAlim && (
+          <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: 12, marginTop: 12 }}>
+            <div style={{ fontWeight: 700, color: "#334155", marginBottom: 8 }}>\U0001f37d\ufe0f M\u00f3dulo Alimentaci\u00f3n (precio diario)</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+              <div><label style={{ ...S.label, marginTop: 0 }}>Precio por d\u00eda</label><input type="number" style={numStyle} value={d.precioDiario} onChange={set("precioDiario")} placeholder="0" /></div>
+              <div><label style={{ ...S.label, marginTop: 0 }}>D\u00edas autorizados</label><input type="number" style={numStyle} value={d.diasAlim} onChange={set("diasAlim")} /></div>
+              <div><label style={{ ...S.label, marginTop: 0 }}>Meses</label><input type="number" style={numStyle} value={d.meses} onChange={set("meses")} /></div>
+            </div>
+            <div style={{ fontSize: 13, color: "#475569", marginTop: 8 }}>
+              Mensual: <b>{formatoPesos(mensualAlim)}</b> ({formatoPesos(precioDiario)} \u00d7 {dias} d\u00edas){"  \u00b7  "}
+              Total {meses} {meses === 1 ? "mes" : "meses"}: <b>{formatoPesos(totalAlim)}</b>
+            </div>
+            {dias !== 0 && dias !== 30 && precioDiario > 0 && (
+              <div style={{ fontSize: 12, color: "#b45309", marginTop: 6 }}>
+                \u26a0\ufe0f El presupuesto suele cotizarse sobre 30 d\u00edas; ac\u00e1 la afectaci\u00f3n se calcula sobre los {dias} d\u00edas autorizados por Auditor\u00eda. La aclaraci\u00f3n formal ir\u00e1 en la resoluci\u00f3n.
+              </div>
+            )}
           </div>
         )}
-      </div>
 
-      {/* Módulo mensual fijo (internación) */}
-      <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: 12, marginTop: 10 }}>
-        <div style={{ fontWeight: 700, color: "#334155", marginBottom: 8 }}>🏠 Módulo mensual fijo (internación)</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <div>
-            <label style={{ ...S.label, marginTop: 0 }}>Precio mensual</label>
-            <input type="number" style={numStyle} value={d.precioMensual} onChange={set("precioMensual")} placeholder="0" />
+        {hayInternacion && (
+          <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: 12, marginTop: 10 }}>
+            <div style={{ fontWeight: 700, color: "#334155", marginBottom: 8 }}>\U0001f3e0 M\u00f3dulo mensual fijo (internaci\u00f3n)</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div><label style={{ ...S.label, marginTop: 0 }}>Precio mensual</label><input type="number" style={numStyle} value={d.precioMensual} onChange={set("precioMensual")} placeholder="0" /></div>
+              <div><label style={{ ...S.label, marginTop: 0 }}>Meses</label><input type="number" style={numStyle} value={d.meses} onChange={set("meses")} /></div>
+            </div>
+            <div style={{ fontSize: 13, color: "#475569", marginTop: 8 }}>
+              Total {meses} {meses === 1 ? "mes" : "meses"}: <b>{formatoPesos(totalInt)}</b> ({formatoPesos(precioMensual)} \u00d7 {meses})
+            </div>
           </div>
-          <div>
-            <label style={{ ...S.label, marginTop: 0 }}>Meses</label>
-            <input type="number" style={numStyle} value={d.meses} onChange={set("meses")} />
-          </div>
-        </div>
-        <div style={{ fontSize: 13, color: "#475569", marginTop: 8 }}>
-          Total {meses} {meses === 1 ? "mes" : "meses"}: <b>{formatoPesos(totalInt)}</b> ({formatoPesos(precioMensual)} × {meses})
-        </div>
-      </div>
-
-      {/* Total a afectar */}
-      <div style={{ background: "#ecfeff", border: "1px solid #67e8f9", borderRadius: 10, padding: 12, marginTop: 12 }}>
-        <div style={{ fontSize: 15, fontWeight: 800, color: "#0e7490" }}>TOTAL A AFECTAR: {formatoPesos(totalAfectar)}</div>
-        {totalAfectar > 0 && (
-          <div style={{ fontSize: 12, color: "#0e7490", marginTop: 2 }}>En letras: {numeroALetras(totalAfectar)}</div>
         )}
-      </div>
 
-      <button
-        style={{ ...S.btn, marginTop: 14, width: "100%", opacity: guardando ? 0.6 : 1 }}
-        onClick={guardar}
-        disabled={guardando}
-      >
-        {guardando ? "Guardando…" : "💾 Guardar cálculo"}
-      </button>
+        <div style={{ background: "#ecfeff", border: "1px solid #67e8f9", borderRadius: 10, padding: 12, marginTop: 12 }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: "#0e7490" }}>TOTAL A AFECTAR: {formatoPesos(totalAfectar)}</div>
+          {totalAfectar > 0 && <div style={{ fontSize: 12, color: "#0e7490", marginTop: 2 }}>En letras: {numeroALetras(totalAfectar)}</div>}
+        </div>
+
+        <button style={{ ...S.btn, marginTop: 14, width: "100%", opacity: guardando ? 0.6 : 1 }} onClick={guardar} disabled={guardando}>
+          {guardando ? "Guardando\u2026" : "\U0001f4be Guardar c\u00e1lculo"}
+        </button>
+      </>)}
     </div>
   );
 }
