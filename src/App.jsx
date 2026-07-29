@@ -2736,7 +2736,7 @@ function parsearDictamen(texto) {
 }
 
 function FichaDictamen({ exp }) {
-  const [abierto, setAbierto] = useState(!exp.dictamen); // si no hay dictamen, arranca abierto
+  const [abierto, setAbierto] = useState(!exp.dictamen && !exp.dictamenValidadoManual); // arranca abierto solo si falta cargar y no está validado a mano
   const [f, setF] = useState(() => dictamenInicial(exp));
   const [guardando, setGuardando] = useState(false);
   const [leyendo, setLeyendo] = useState(false);
@@ -2830,15 +2830,41 @@ function FichaDictamen({ exp }) {
     setGuardando(false);
   };
 
-  const borde = exp.dictamen ? "5px solid #16a34a" : "5px solid #f59e0b";
+  const validadoManual = !!exp.dictamenValidadoManual && !exp.dictamen;
+
+  const marcarValidado = async () => {
+    if (!confirm("¿Marcar el dictamen como validado en este expediente? Usalo para expedientes anteriores que ya pasaron por Auditoría antes de este cambio.")) return;
+    try {
+      await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), { dictamenValidadoManual: true });
+    } catch (e) { alert("❌ Error: " + e.message); }
+  };
+  const quitarValidado = async () => {
+    try {
+      await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), { dictamenValidadoManual: false });
+    } catch (e) { alert("❌ Error: " + e.message); }
+  };
+
+  const borde = (exp.dictamen || validadoManual) ? "5px solid #16a34a" : "5px solid #f59e0b";
 
   return (
     <div style={{ ...S.card, borderLeft: borde }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <div style={{ fontWeight: 800, color: exp.dictamen ? "#166534" : "#92400e" }}>
-          {exp.dictamen ? "🩺 Dictamen de Auditoría Médica cargado" : "⚠️ Falta cargar el Dictamen de Auditoría Médica"}
+        <div style={{ fontWeight: 800, color: (exp.dictamen || validadoManual) ? "#166534" : "#92400e" }}>
+          {exp.dictamen
+            ? "🩺 Dictamen de Auditoría Médica cargado"
+            : validadoManual
+              ? "✅ Dictamen validado (expediente anterior)"
+              : "⚠️ Falta cargar el Dictamen de Auditoría Médica"}
         </div>
         <div style={{ flex: 1 }} />
+        {!exp.dictamen && !validadoManual && (
+          <button style={S.btnSec} onClick={marcarValidado} title="Para expedientes que ya pasaron por Auditoría antes de este cambio">
+            ✓ Marcar como validado
+          </button>
+        )}
+        {validadoManual && (
+          <button style={S.btnSec} onClick={quitarValidado}>✕ Quitar validación</button>
+        )}
         <button style={S.btnSec} onClick={() => setAbierto((v) => !v)}>
           {abierto ? "▲ Ocultar" : exp.dictamen ? "▼ Ver / editar" : "▼ Cargar dictamen"}
         </button>
@@ -3008,7 +3034,20 @@ function matchPrestacion(a, b) {
 
 // Normaliza una cantidad para comparar (saca espacios/acentos/puntuación menor)
 function _normCant(s) {
-  return _norm(s).replace(/\s+/g, "").replace(/[.\-–]/g, "");
+  let t = _norm(s);                              // minúsculas, sin acentos
+  t = t.replace(/[.\-–,;/]/g, " ").replace(/\s+/g, " ").trim();
+  // equivalencias de rango de días (Auditoría abrevia a veces)
+  t = t.replace(/\bl\s+a\s+d\b/g, "lunes a domingo");
+  t = t.replace(/\blun\s+a\s+dom\b/g, "lunes a domingo");
+  t = t.replace(/\bde\s+lunes\s+a\s+domingo\b/g, "lunes a domingo");
+  // unidades y conectores
+  t = t.replace(/hs\b/g, "horas").replace(/\bhrs\b/g, "horas").replace(/\bh\b/g, "horas");
+  t = t.replace(/\b(x|por)\b/g, " ");            // "x" / "por" son conectores
+  t = t.replace(/\bdiaria(s)?\b/g, "dia").replace(/\bdiario(s)?\b/g, "dia").replace(/\bdias\b/g, "dia");
+  t = t.replace(/\bsesiones\b/g, "sesion");
+  t = t.replace(/\bsemanales\b/g, "semana").replace(/\bsemanal\b/g, "semana").replace(/\bsemanas\b/g, "semana");
+  t = t.replace(/\bde\b/g, " ");                 // relleno
+  return t.replace(/\s+/g, "");                  // comparar sin espacios
 }
 
 function cruzarDictamen(autorizadas, items) {
