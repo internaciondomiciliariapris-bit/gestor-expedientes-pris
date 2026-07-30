@@ -984,10 +984,81 @@ function diasEnLetras(n) {
   return m[n] || String(n);
 }
 
+// ¿El texto refiere al módulo de Alimentación? (tolerante a acentos/mayúsculas)
+function _esAlim(s) {
+  return _norm(s || "").includes("aliment");
+}
+// Primer número entero que aparece en un texto ("31 días" → 31; "Enteral" → null).
+function _enteroDe(s) {
+  const m = String(s || "").match(/\d+/);
+  return m ? parseInt(m[0], 10) : null;
+}
+
+/* ---------- Derivación automática del cálculo de afectación ----------
+   Arma el objeto que la nota y la resolución necesitan (mismo shape que el
+   viejo Paso 3), a partir del DICTAMEN (días de Alimentación) y de lo ADJUDICADO
+   en el cuadro (precio diario de Alimentación + mensual de Internación). No pide
+   panel: se calcula solo. Si hay un cálculo guardado a mano, ese SIEMPRE gana.
+   Convención: Alimentación se paga por día → mensual = precio diario × días del
+   dictamen (tope 31); Internación = resto del total adjudicado, mensual fijo. */
+function derivarCalculoAfectacion(exp) {
+  if (!exp) return null;
+  const items = exp.itemsPrestacion || [];
+  if (!items.length) return null;
+
+  // 1) Ubicar el ítem de Alimentación (por nombre o por módulo).
+  const iAlim = items.findIndex((it) => _esAlim(it?.nombre) || _esAlim(it?.modulo));
+  if (iAlim < 0) return null; // sin Alimentación → no hay cálculo por días (cae a mensual × meses)
+  const itAlim = items[iAlim];
+  const modAlim = (itAlim.modulo && String(itAlim.modulo).trim()) || MODULO_SIN_NOMBRE;
+  const meses = Number(exp.periodoMeses || 6) || 6;
+
+  // 2) Días autorizados: de la fila Alimentación del dictamen (tope 31). Si no hay
+  //    número, del cantTexto del ítem. Si tampoco, no podemos afirmar los días.
+  const filaDict = (exp.dictamen?.prestaciones || []).find((p) => _esAlim(p?.nombre));
+  let dias = _enteroDe(filaDict?.cantidad);
+  if (dias == null) dias = _enteroDe(itAlim?.cantTexto);
+  if (dias != null) dias = Math.min(dias, 31);
+
+  // 3) Proveedor adjudicado del módulo de Alimentación → su precio por ítem.
+  const adjs = exp.cuadro?.adjudicaciones || [];
+  const adjAlim = adjs.find((a) => (a.modulo || MODULO_SIN_NOMBRE) === modAlim);
+  const provAlim = (adjAlim && adjAlim.proveedor) || exp.cuadro?.adjudicado || "";
+  const filaPrecio = ((exp.presupuestos || {})[provAlim]?.items || [])[iAlim] || {};
+  const precioDiario = Number(filaPrecio.unitario) || 0;
+  const alimCotizadoMensual = Number(filaPrecio.mensual) || 0;
+
+  // 4) Mensual de Alimentación recalculado sobre los días del dictamen.
+  let mensualAlim;
+  if (precioDiario > 0 && dias != null) mensualAlim = precioDiario * dias;
+  else if (alimCotizadoMensual > 0) mensualAlim = alimCotizadoMensual;
+  else return null; // sin datos de precio de Alimentación no derivamos nada
+
+  // 5) Internación = total adjudicado − lo cotizado de Alimentación (mensual fijo).
+  const totalMensualAdj = Number(exp.cuadro?.mensual) > 0
+    ? Number(exp.cuadro.mensual)
+    : adjs.reduce((s, a) => s + (Number(a.mensual) || 0), 0);
+  const precioMensual = Math.max(0, totalMensualAdj - alimCotizadoMensual);
+
+  const totalAlim = mensualAlim * meses;
+  const totalInt = precioMensual * meses;
+  return {
+    diasAlim: dias || 0,
+    precioDiario,
+    mensualAlim,
+    totalAlim,
+    precioMensual,
+    totalInt,
+    totalAfectar: totalAlim + totalInt,
+    meses,
+    _derivado: true,
+  };
+}
+
 // Núcleo de la aclaración cuando la afectación de Alimentación se calcula sobre
 // una cantidad de días distinta de 30 (el presupuesto suele venir por 30).
 const aclaracionDiasCore = (exp) => {
-  const c = exp.calculoAfectacion;
+  const c = exp.calculoAfectacion || derivarCalculoAfectacion(exp);
   if (!c || !(Number(c.totalAlim) > 0)) return "";
   const dias = Number(c.diasAlim);
   if (!dias || dias === 30) return "";
@@ -996,7 +1067,7 @@ const aclaracionDiasCore = (exp) => {
 };
 
 const datosNota = (exp, extra = {}) => {
-  const calc = exp.calculoAfectacion;
+  const calc = exp.calculoAfectacion || derivarCalculoAfectacion(exp);
   const montoCalc = Number(calc?.totalAfectar) > 0
     ? Number(calc.totalAfectar)
     : (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6);
@@ -1038,7 +1109,7 @@ const datosPaseTribunal = (exp) => ({
 
 const datosResolucion = (exp, extra = {}) => {
   const r = exp.resolucion || {};
-  const calc = exp.calculoAfectacion;
+  const calc = exp.calculoAfectacion || derivarCalculoAfectacion(exp);
   const core = aclaracionDiasCore(exp);
   const totalCalc = Number(calc?.totalAfectar) > 0
     ? Number(calc.totalAfectar)
@@ -1081,35 +1152,109 @@ const datosResolucion = (exp, extra = {}) => {
   };
 };
 
-// Extrae prestaciones de un texto: toma solo las líneas tipo "Nombre: cantidad"
-// (nombre corto), descartando encabezados y frases largas. Hs/Ses. queda vacío
-// para carga manual (varía según el mes y lo autorizado por Auditoría Médica).
+// Extrae prestaciones de un texto: reconoce varios formatos de línea. Hs/Ses.
+// queda vacío para carga manual (varía según el mes y lo autorizado por Auditoría).
+// Nombres conocidos de prestaciones típicas del dictamen, para rescatar líneas
+// que vengan como puro nombre, sin cantidad ("Enfermería", "Kinesiología motora").
+const _NOMBRES_PRESTACION = [
+  "medic", "enfermer", "fonoaud", "kinesi", "aliment", "nutric",
+  "oxigen", "internac", "psicol", "terapia", "fisioterap", "cuidador",
+];
+function _esNombrePrestacion(s) {
+  const n = _norm(s);
+  return _NOMBRES_PRESTACION.some((k) => n.includes(k));
+}
 function extraerItemsDeTexto(texto) {
   const lineas = String(texto || "").split("\n")
     .map((l) => l.replace(/^[-•*\s]+/, "").replace(/\*/g, "").trim())
     .filter(Boolean);
   const items = [];
+  const vistos = new Set();
+  const push = (nombre, cantTexto) => {
+    const nom = (nombre || "").trim();
+    if (!nom) return;
+    const clave = _norm(nom);
+    if (vistos.has(clave)) return; // no dupliques la misma prestación
+    vistos.add(clave);
+    items.push({ nombre: nom, cantTexto: (cantTexto || "").trim(), cantNum: "" });
+  };
   lineas.forEach((l) => {
-    // Formato 1: "Nombre: cantidad" (con dos puntos)
+    // Formato 1: "Nombre: cantidad" (con dos puntos). Límite de nombre generoso.
     const i = l.indexOf(":");
-    if (i > 0 && i <= 45) {
+    if (i > 0 && i <= 60) {
       const nombre = l.slice(0, i).trim();
       const resto = l.slice(i + 1).trim().replace(/\.\s*$/, "");
-      items.push({ nombre, cantTexto: resto, cantNum: "" });
+      push(nombre, resto);
       return;
     }
-    // Formato 2: "Nombre 2 hs semanales" (sin dos puntos: corta donde empieza el primer número)
+    // Formato 2: "Nombre 2 hs semanales" (sin dos puntos: corta en el primer número)
     const m = l.match(/\d/);
-    if (m && m.index >= 3 && m.index <= 70) {
+    if (m && m.index >= 3 && m.index <= 80) {
       const nombre = l.slice(0, m.index).replace(/[+\-–(\s]+$/, "").trim();
       const resto = l.slice(m.index).trim().replace(/\.\s*$/, "");
       if (nombre && /[a-záéíóúñ]/i.test(nombre)) {
-        items.push({ nombre, cantTexto: resto, cantNum: "" });
+        push(nombre, resto);
+        return;
       }
     }
-    // Las líneas largas o sin cantidad (encabezados, frases) se descartan solas
+    // Formato 3: línea corta que es SOLO el nombre de una prestación conocida,
+    // sin cantidad ni dos puntos (p. ej. el PDF no capturó las hs). Entra igual
+    // con cantidad vacía para que la completes a mano; ya no se pierde.
+    if (l.length <= 45 && _esNombrePrestacion(l) && !/\d/.test(l)) {
+      push(l, "");
+    }
+    // Las líneas largas sin nombre reconocible (encabezados, frases) se descartan.
   });
   return items;
+}
+
+/* ---------- Lectura de PRECIOS desde el PDF del presupuesto del proveedor ----------
+   Reutiliza el mismo pipeline de PDF/OCR que el dictamen. Recorre el texto línea
+   por línea, ubica la prestación de cada ítem y toma los importes en pesos que la
+   acompañan. Convención (la misma que pide el mail de cotización): el PRIMER importe
+   de la línea es el precio UNITARIO y el SEGUNDO el MENSUAL/total del ítem.
+   Es una AYUDA: todo lo precargado queda editable. */
+
+// "26.000" · "$ 3.552.000,00" · "7400" → número. Descarta cantidades chicas
+// (sesiones, horas, días) y números absurdos (CUIT, teléfono o DNI mal leídos).
+function _pesoANumero(tok) {
+  let s = String(tok || "").replace(/\$/g, "").replace(/\s/g, "");
+  if (!s) return null;
+  if (s.includes(",")) s = s.replace(/\./g, "").replace(",", ".");
+  else s = s.replace(/\./g, "");
+  const n = parseFloat(s);
+  if (!isFinite(n) || n <= 0 || n > 100000000) return null;
+  return n;
+}
+
+// Importes en pesos de una línea, en orden de lectura. Acepta: con separador de
+// miles (26.000), con signo $ ($7400) o entero de 4+ dígitos (7400). Ignora los
+// números de 1–3 dígitos sueltos (16 hs, 3 sesiones, etc.).
+function _importesDeLinea(linea) {
+  const re = /\$?\s*\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\$\s*\d+(?:,\d{1,2})?|\b\d{4,}(?:,\d{1,2})?\b/g;
+  const out = [];
+  let m;
+  while ((m = re.exec(String(linea || ""))) !== null) {
+    const v = _pesoANumero(m[0]);
+    if (v != null) out.push(v);
+  }
+  return out;
+}
+
+// Texto del PDF + lista de ítems → [{ unitario, mensual, encontrado }] alineado a items.
+// encontrado = false si no ubicó la prestación o no halló ningún importe en su línea.
+function extraerPreciosDePdf(texto, items) {
+  const lineas = String(texto || "").split("\n").map((l) => l.trim()).filter(Boolean);
+  return (items || []).map((it) => {
+    const nom = (it && it.nombre ? it.nombre : "").trim();
+    if (!nom) return { unitario: "", mensual: "", encontrado: false };
+    const linea = lineas.find((l) => matchPrestacion(l, nom));
+    if (!linea) return { unitario: "", mensual: "", encontrado: false };
+    const imp = _importesDeLinea(linea);
+    if (imp.length === 0) return { unitario: "", mensual: "", encontrado: false };
+    if (imp.length === 1) return { unitario: "", mensual: String(imp[0]), encontrado: true };
+    return { unitario: String(imp[0]), mensual: String(imp[1]), encontrado: true };
+  });
 }
 
 /* ---------- MÓDULOS DEL CUADRO COMPARATIVO ----------
@@ -3978,9 +4123,19 @@ function RegistroPresupuestos({ exp }) {
   // Saca las prestaciones de lo que ya cargaste para el mail de cotización:
   // solo toma las líneas tipo "Nombre: cantidad" (descarta encabezados y frases largas)
   // y deduce el número de hs/sesiones del texto de la cantidad.
-  // Propone las prestaciones desde el detalle de servicios cargado para el mail
+  // Propone las prestaciones desde el detalle de servicios cargado para el mail,
+  // y COMPLETA con las prestaciones autorizadas del dictamen que no hayan quedado
+  // en ese detalle (así no se cae ninguna autorizada aunque el detalle salga
+  // incompleto del parseo del PDF). El detalle manda en la redacción; el dictamen
+  // solo agrega lo que falte.
   const proponerItems = () => {
     const propuestos = extraerItemsDeTexto(exp.detalleServicios);
+    const autorizadas = (exp.dictamen?.prestaciones || [])
+      .filter((p) => (p.nombre || "").trim() !== "" && (p.cantidad || "").trim() !== "");
+    autorizadas.forEach((p) => {
+      const yaEsta = propuestos.some((it) => matchPrestacion(it.nombre, p.nombre));
+      if (!yaEsta) propuestos.push({ nombre: p.nombre.trim(), cantTexto: p.cantidad.trim(), cantNum: "" });
+    });
     if (propuestos.length === 0) propuestos.push({ nombre: exp.modulo || "", cantTexto: "", cantNum: "" });
     return propuestos;
   };
@@ -4044,6 +4199,8 @@ function RegistroPresupuestos({ exp }) {
   const [ocupado, setOcupado] = useState(false);
   const [abiertos, setAbiertos] = useState({});
   const [autoInfo, setAutoInfo] = useState("");
+  const [leyendoPdf, setLeyendoPdf] = useState({}); // { [proveedor]: true } mientras lee el PDF
+  const [infoPdf, setInfoPdf] = useState({});       // { [proveedor]: "mensaje del resultado" }
   const primerRender = useRef(true);
   const timerAuto = useRef(null);
 
@@ -4056,6 +4213,56 @@ function RegistroPresupuestos({ exp }) {
     for (let k = 0; k < items.length; k++) arr[k] = d.items?.[k] || { unitario: "", mensual: "" };
     arr[i] = { ...arr[i], [campo]: valor };
     setDatos({ ...datos, [nombre]: { ...d, items: arr } });
+  };
+
+  // 📄→💲 Lee el PDF recién elegido y precarga los casilleros (unitario/mensual)
+  // por ítem. NO sube nada al Drive todavía (eso sigue pasando al tocar "Guardar");
+  // acá solo llenamos los precios, y todo queda editable.
+  const leerPreciosDelPdf = async (nombre, file) => {
+    if (!file) return;
+    setLeyendoPdf((s) => ({ ...s, [nombre]: true }));
+    setInfoPdf((s) => ({ ...s, [nombre]: "" }));
+    try {
+      let texto = "";
+      const esPdf = /pdf/i.test(file.type) || /\.pdf$/i.test(file.name);
+      if (esPdf) {
+        texto = await textoDePdf(file);
+        // PDF escaneado (sin capa de texto) → rasterizar y OCR
+        if (_norm(texto).replace(/[^a-z]/g, "").length < 30) texto = await ocrPdfEscaneado(file);
+      } else {
+        texto = await ocrImagen(file);
+      }
+      const precios = extraerPreciosDePdf(texto, items);
+      const enc = precios.filter((p) => p.encontrado).length;
+      if (enc === 0) {
+        setInfoPdf((s) => ({ ...s, [nombre]: "⚠️ Leí el PDF pero no pude identificar precios por ítem. Cargalos a mano — el PDF igual se sube al guardar." }));
+      } else {
+        setDatos((prev) => {
+          const d = prev[nombre] || {};
+          const arr = [];
+          for (let k = 0; k < items.length; k++) {
+            const base = d.items?.[k] || { unitario: "", mensual: "" };
+            const p = precios[k];
+            arr[k] = p && p.encontrado
+              ? {
+                  unitario: p.unitario !== "" ? p.unitario : base.unitario,
+                  mensual: p.mensual !== "" ? p.mensual : base.mensual,
+                }
+              : base;
+          }
+          return { ...prev, [nombre]: { ...d, estado: d.estado || "cotizo", items: arr } };
+        });
+        const faltan = precios.map((p, i) => (!p.encontrado ? (items[i]?.nombre || "ítem " + (i + 1)) : null)).filter(Boolean);
+        setInfoPdf((s) => ({
+          ...s,
+          [nombre]: `✅ Precargué ${enc} de ${items.length} ítem(s) desde el PDF. Revisá y corregí lo que haga falta.` +
+            (faltan.length ? ` Quedaron sin precio: ${faltan.join(", ")}.` : ""),
+        }));
+      }
+    } catch (e) {
+      setInfoPdf((s) => ({ ...s, [nombre]: "❌ No pude leer el PDF automáticamente (" + (e.message || e) + "). Cargá los precios a mano — el archivo igual se sube al guardar." }));
+    }
+    setLeyendoPdf((s) => ({ ...s, [nombre]: false }));
   };
 
   const setProvModulo = (nombre, mod, campo, valor) => {
@@ -4726,8 +4933,23 @@ function RegistroPresupuestos({ exp }) {
                   </div>
                 )}
                 <label style={{ ...S.label }}>{d.estado === "desestimo" ? "PDF de la respuesta (mail con la negativa)" : "PDF del presupuesto"}{d.pdfNombre ? ` — guardado: ${d.pdfNombre}` : ""}</label>
+                {d.estado === "cotizo" && (
+                  <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
+                    Al elegir el PDF, leo los importes y <b>precargo los casilleros de precios</b> (unitario y mensual). Todo queda editable por si hay que corregir algo.
+                  </div>
+                )}
                 <input type="file" accept="application/pdf" style={{ marginTop: 4 }}
-                  onChange={(e) => setArchivos({ ...archivos, [nombre]: e.target.files[0] })} />
+                  onChange={(e) => {
+                    const file = e.target.files[0];
+                    setArchivos({ ...archivos, [nombre]: file });
+                    if (file && d.estado === "cotizo") leerPreciosDelPdf(nombre, file);
+                  }} />
+                {leyendoPdf[nombre] && (
+                  <div style={{ fontSize: 13, color: "#0891b2", marginTop: 4, fontWeight: 600 }}>⏳ Leyendo el PDF y precargando precios…</div>
+                )}
+                {!leyendoPdf[nombre] && infoPdf[nombre] && (
+                  <div style={{ fontSize: 13, color: "#334155", marginTop: 4 }}>{infoPdf[nombre]}</div>
+                )}
               </div>
             )}
 
