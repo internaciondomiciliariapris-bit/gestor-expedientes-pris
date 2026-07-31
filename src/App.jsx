@@ -1245,15 +1245,24 @@ function _pesoANumero(tok) {
 }
 
 // Importes de una línea, en orden de lectura. Saca antes las fechas (27/7/2025)
-// para que no se cuelen como números.
+// para que no se cuelen como números. El regex reconoce el número CON separador
+// de miles primero (1.934.400,00 / 1,934,400.00) y corta ahí, de modo que si el
+// total viene pegado a otro número (ej. "1,934,400.008530"), separa bien el 8530.
+// Devuelve { val, fmt }: fmt=true si el token traía separador de miles/decimal
+// (los precios reales lo traen; códigos y cantidades sueltas no).
 function _importesDeLinea(linea) {
-  const sinFecha = String(linea || "").replace(/\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}/g, " ");
-  const re = /\d[\d.,]*\d|\d/g;
+  const sinFecha = String(linea || "")
+    .replace(/\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}/g, " ")
+    // Despega un importe con decimal de 2 dígitos que quedó pegado a otro número
+    // (ej. total pegado al código: "1,934,400.008530" → "1,934,400.00 8530").
+    .replace(/([.,]\d{2})(\d{3,})/g, "$1 $2");
+  const re = /\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|\d+[.,]\d{1,2}|\d+/g;
   const out = [];
   let m;
   while ((m = re.exec(sinFecha)) !== null) {
-    const v = _pesoANumero(m[0]);
-    if (v != null) out.push(v);
+    const tok = m[0];
+    const v = _pesoANumero(tok);
+    if (v != null) out.push({ val: v, fmt: /[.,]/.test(tok) });
   }
   return out;
 }
@@ -1271,13 +1280,14 @@ function _subtipoDe(s) { const n = _norm(s); return _SUBTIPOS.find((t) => n.incl
 //     así descarta descripciones tipo "3 sesiones por semana";
 //  2) empareja por disciplina + subtipo (motora ≠ respiratoria), tolerando que el
 //     renglón diga "Kinesiología" a secas;
-//  3) el MAYOR importe del renglón es el mensual/total y el 2.º mayor el unitario
+//  3) prioriza los importes CON separador de miles (los precios reales): así ignora
+//     códigos y cantidades sueltas. El mayor es el mensual/total y el 2.º el unitario
 //     (funciona esté la cantidad al principio, en el medio o al final).
 function extraerPreciosDePdf(texto, items) {
   const lineas = String(texto || "").split("\n").map((l) => l.trim()).filter(Boolean);
   const lineasPrecio = lineas.filter((l) => {
     const i = _importesDeLinea(l);
-    return i.length > 0 && Math.max(...i) >= 1000;
+    return i.length > 0 && Math.max(...i.map((x) => x.val)) >= 1000;
   });
   return (items || []).map((it) => {
     const nom = (it && it.nombre ? it.nombre : "").trim();
@@ -1293,13 +1303,16 @@ function extraerPreciosDePdf(texto, items) {
     const linea = cand.find((l) => _importesDeLinea(l).length >= 2) || cand[0];
     if (!linea) return { unitario: "", mensual: "", encontrado: false };
     const imp = _importesDeLinea(linea);
-    const distintos = [...new Set(imp)].sort((a, b) => b - a);
-    const mensual = distintos[0];
-    const unitario = distintos.length >= 2 ? distintos[1] : null;
+    const form = [...new Set(imp.filter((a) => a.fmt).map((a) => a.val))].sort((a, b) => b - a);
+    const todos = [...new Set(imp.map((a) => a.val))].sort((a, b) => b - a);
+    let mensual = null, unitario = null;
+    if (form.length >= 2) { mensual = form[0]; unitario = form[1]; }
+    else if (form.length === 1) { mensual = form[0]; unitario = todos.find((v) => v < mensual) ?? null; }
+    else { mensual = todos[0] ?? null; unitario = todos.length >= 2 ? todos[1] : null; }
     return {
       unitario: unitario != null ? String(unitario) : "",
       mensual: mensual != null ? String(mensual) : "",
-      encontrado: true,
+      encontrado: mensual != null,
     };
   });
 }
