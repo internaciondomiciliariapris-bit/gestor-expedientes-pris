@@ -1120,42 +1120,54 @@ function diasBaseDeTextoDictamen(texto) {
 }
 
 // Lee el dictamen definitivo (texto ya extraído del PDF) sin depender del formato
-// de la tabla: recorre líneas, ubica cada prestación por disciplina, toma los dos
-// importes CON separador de miles (unitario + total) y deriva cant = total/unitario.
+// de la tabla. Las celdas que envuelven ("1 visita x / semana") parten la fila en
+// varios renglones y, según el motor de PDF, los valores caen en un renglón sin el
+// nombre. Por eso agrupamos por FILA: cada disciplina abre una fila y se traga los
+// renglones siguientes hasta la próxima disciplina o un terminador; recién ahí
+// tomamos los dos importes con separador de miles (unitario + total) y derivamos
+// la cantidad autorizada = total / unitario.
 function parsearDictamenDefinitivo(texto) {
   const t = String(texto || "").replace(/[\uE000-\uF8FF]/g, " ").replace(/\r/g, "");
   const lineas = t.split("\n").map((l) => l.trim()).filter(Boolean);
+  // Arrancar en la tabla: después del encabezado (…Valor unitario / Cant autorizada…),
+  // para no confundir el "internación domiciliaria" del renglón "Solicita…".
+  let desde = lineas.findIndex((l) => {
+    const n = _norm(l);
+    return (n.includes("valor") && (n.includes("unitario") || n.includes("total"))) ||
+           (n.includes("cant") && n.includes("autorizada"));
+  });
+  desde = desde >= 0 ? desde + 1 : 0;
+  const esTerminador = (l) => /empresa adjudicada|control posterior|dictamen de auditor|observaci|^pase$/.test(_norm(l));
+  const bloques = [];
+  let actual = null;
+  for (let i = desde; i < lineas.length; i++) {
+    const l = lineas[i];
+    if (esTerminador(l)) { if (actual) { bloques.push(actual); actual = null; } break; }
+    const disc = _disciplinaDe(l);
+    if (disc) {
+      if (actual) bloques.push(actual);
+      actual = { disc, sub: _subtipoDe(l) || "", texto: l };
+    } else if (actual) {
+      actual.texto += " " + l;
+      if (!actual.sub) actual.sub = _subtipoDe(l) || "";
+    }
+  }
+  if (actual) bloques.push(actual);
   const encontradas = [];
   const vistos = new Set();
-  for (let idx = 0; idx < lineas.length; idx++) {
-    const l = lineas[idx];
-    const disc = _disciplinaDe(l);
-    if (!disc) continue;                       // no es fila de prestación
-    let imp = _importesDeLinea(l).filter((x) => x.fmt);
-    let usados = l;
-    // Completar SOLO si la fila ya trae 1 importe propio (sus valores se partieron en
-    // dos líneas). Nunca desde una fila vacía (prestación no autorizada) ni tomando la
-    // línea siguiente si ésta es otra prestación o la de "empresa adjudicada"/total.
-    if (imp.length === 1 && lineas[idx + 1]) {
-      const sig = lineas[idx + 1];
-      const sigEsOtraFila = _disciplinaDe(sig) || /adjudicad|empresa|total/i.test(_norm(sig));
-      if (!sigEsOtraFila) {
-        const extra = _importesDeLinea(sig).filter((x) => x.fmt);
-        if (extra.length) { imp = imp.concat(extra); usados = l + " " + sig; }
-      }
-    }
-    if (!imp.length) continue;                 // prestación sin valores → no autorizada / vacía
-    const vals = [...new Set(imp.map((x) => x.val))].sort((a, b) => b - a);
+  for (const b of bloques) {
+    const imp = _importesDeLinea(b.texto).filter((x) => x.fmt);
+    if (!imp.length) continue;                 // prestación sin valores → no autorizada
+    const vals = [...new Set(imp.map((x) => x.val))].sort((a, b2) => b2 - a);
     const total = vals[0];
     const unitario = vals.length >= 2 ? vals[1] : 0;
-    const sub = _subtipoDe(usados) || "";
-    const clave = disc + "|" + sub;
+    const clave = b.disc + "|" + b.sub;
     if (vistos.has(clave)) continue;
     vistos.add(clave);
     const cantAut = unitario > 0 ? Math.round(total / unitario) : 0;
     encontradas.push({
-      nombre: (l.replace(/\d.*$/, "").replace(/[$\s]+$/, "").trim()) || disc,
-      disc, sub, unitario, total, cantAut,
+      nombre: (b.texto.replace(/\d.*$/, "").replace(/[$\s]+$/, "").trim()) || b.disc,
+      disc: b.disc, sub: b.sub, unitario, total, cantAut,
     });
   }
   return {
