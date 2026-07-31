@@ -1106,16 +1106,21 @@ function textoAclaracionObj(a, comoNota) {
     ", se ajustan a lo efectivamente autorizado por el Departamento de Auditoría Médica conforme al dictamen obrante en autos, difiriendo de lo oportunamente cotizado por la firma adjudicada.";
 }
 
-// Días base que fija Auditoría en el dictamen ("período de treinta y un (31) días").
+// Días base que fija Auditoría en el dictamen. Cubre las variantes reales:
+// "(31) días", "treinta y un (31) días", "período de 31 días", y el caso de López
+// con dos períodos ("31 días para Bomba y 15 días para Set") → prioriza 31.
 function diasBaseDeTextoDictamen(texto) {
   const t = _norm(texto).replace(/[.\-–,;]/g, " ").replace(/\s+/g, " ");
-  let m = t.match(/\((\d{2})\)\s*dias/);
-  if (m) return parseInt(m[1], 10);
-  m = t.match(/base de calculo[^0-9]{0,50}(\d{2})\s*dias/);
+  let m = t.match(/\((\d{2})\)\s*dias/);                       // "(31) dias"
   if (m) return parseInt(m[1], 10);
   const map = { "veintiocho": 28, "veintinueve": 29, "treinta y uno": 31, "treinta y un": 31, "treinta": 30 };
-  m = t.match(/periodo de (treinta y uno|treinta y un|treinta|veintinueve|veintiocho)/);
-  if (m) return map[m[1]];
+  m = t.match(/(treinta y uno|treinta y un|treinta|veintinueve|veintiocho)\s*(?:\(\d{2}\)\s*)?dias/);
+  if (m) return map[m[1]];                                     // en letras
+  const nums = [...t.matchAll(/per[ií]odo de (\d{2}) d[ií]as/g)].map((x) => parseInt(x[1], 10));
+  if (nums.includes(31)) return 31;                            // varios períodos → base general 31
+  if (nums.length) return nums[0];                             // "periodo de NN dias"
+  m = t.match(/\b(2[89]|3[01])\s*dias\b/);                     // último recurso: "NN dias" (28-31)
+  if (m) return parseInt(m[1], 10);
   return null;
 }
 
@@ -1231,6 +1236,68 @@ function construirValoresAutorizados(exp, dictDef) {
     mensualTotal,
     totalAfectar: mensualTotal * meses,
     aclaraciones,
+  };
+}
+
+/* ---------- ESTIMACIÓN A 31 DÍAS (adelanto provisorio, NO vinculante) ----------
+   Adelanto automático mientras no llega el dictamen: reescala a 31 días SOLO las
+   prestaciones que se pagan por hora/día (enfermería 24 hs, alimentación diaria…),
+   dejando intactas las semanales (visitas/sesiones por semana, que Auditoría define
+   a criterio). NO predice recortes: si Auditoría autoriza de menos, el dictamen manda.
+   Para quitar la función: borrar estas dos funciones, el componente
+   AfectacionEstimada31 y sus dos usos en las etapas. No toca nada más. */
+function estimarAfectacion31(exp) {
+  if (!exp || !exp.cuadro) return null;
+  const items = exp.itemsPrestacion || [];
+  if (!items.length) return null;
+  const meses = Number(exp.periodoMeses || 6) || 6;
+  const adjs = exp.cuadro.adjudicaciones || [];
+  const provDelModulo = (mod) => {
+    const a = adjs.find((x) => (x.modulo || MODULO_SIN_NOMBRE) === (mod || MODULO_SIN_NOMBRE));
+    return (a && a.proveedor) || exp.cuadro.adjudicado || "";
+  };
+  // Se reescala a 31 lo que es por hora/día; lo semanal (sesiones/visitas por semana) no.
+  const esPorDia = (txt) => {
+    const n = _norm(txt);
+    if (/semana|sesion|visita/.test(n)) return false;
+    return /\bhs\b|hora|diari|\bdia\b|\bdias\b|l a d|lunes a domingo/.test(n);
+  };
+  const lineas = items.map((it, i) => {
+    const mod = it.modulo ? String(it.modulo).trim() : "";
+    const g = (exp.presupuestos || {})[provDelModulo(mod)] || {};
+    const inf = (g.modulos || {})[mod] || {};
+    let m30 = 0;
+    if (inf.modo !== "modulo") m30 = Number(g.items?.[i]?.mensual ?? (items.length === 1 ? g.mensual : 0)) || 0;
+    const porDia = esPorDia(it.cantTexto);
+    const m31 = (porDia && m30 > 0) ? Math.round(m30 * 31 / 30) : m30;
+    return { nombre: it.nombre, cantTexto: it.cantTexto || "", bucket: bucketDeNombre(it.nombre), porDia, m30, m31 };
+  });
+  const base = Number(exp.cuadro.mensual) || lineas.reduce((s, l) => s + l.m30, 0);
+  const adjB = adjMensualPorBucket(exp);
+  const extraB = { "Internación Domiciliaria": 0, "Alimentación Domiciliaria": 0 };
+  let extra = 0;
+  lineas.forEach((l) => { if (l.porDia && l.m30 > 0) { const d = l.m31 - l.m30; extraB[l.bucket] += d; extra += d; } });
+  const mensual31 = base + extra;
+  const mensualPorModulo = {
+    "Internación Domiciliaria": (adjB["Internación Domiciliaria"] || 0) + extraB["Internación Domiciliaria"],
+    "Alimentación Domiciliaria": (adjB["Alimentación Domiciliaria"] || 0) + extraB["Alimentación Domiciliaria"],
+  };
+  return { meses, base, extra, mensual31, total31: mensual31 * meses, lineas, mensualPorModulo, hayCambio: extra > 0 };
+}
+
+// Objeto canónico a partir del estimado. fuente:"estimado" y SIN aclaraciones:
+// es provisorio, todavía no hay dictamen que citar en el considerando.
+function valoresDesdeEstimacion(exp, est) {
+  return {
+    fuente: "estimado",
+    fecha: new Date().toISOString(),
+    diasBase: 31,
+    meses: est.meses,
+    lineas: est.lineas.filter((l) => l.m31 > 0).map((l) => ({ nombre: l.nombre, bucket: l.bucket, unitario: 0, cantAut: 0, mensual: l.m31 })),
+    mensualPorModulo: est.mensualPorModulo,
+    mensualTotal: est.mensual31,
+    totalAfectar: est.total31,
+    aclaraciones: [],
   };
 }
 
@@ -3671,9 +3738,15 @@ function CargarDictamenDefinitivo({ exp }) {
         <div style={{ fontWeight: 800, color: "#075e75" }}>🩺 Dictamen definitivo (valores autorizados)</div>
         <div style={{ flex: 1 }} />
         {va0 && (
-          <span style={{ fontSize: 12, fontWeight: 700, color: "#166534", background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 8, padding: "3px 8px" }}>
-            ✅ Aplicado — {formatoPesos(va0.totalAfectar)} ({meses} meses)
-          </span>
+          va0.fuente === "estimado" ? (
+            <span style={{ fontSize: 12, fontWeight: 700, color: "#b45309", background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, padding: "3px 8px" }}>
+              ⏳ Estimado provisorio — {formatoPesos(va0.totalAfectar)} · falta confirmar con dictamen
+            </span>
+          ) : (
+            <span style={{ fontSize: 12, fontWeight: 700, color: "#166534", background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 8, padding: "3px 8px" }}>
+              ✅ Dictamen aplicado — {formatoPesos(va0.totalAfectar)} ({meses} meses)
+            </span>
+          )
         )}
       </div>
 
@@ -3755,6 +3828,67 @@ function CargarDictamenDefinitivo({ exp }) {
             </button>
             <button style={{ ...S.btnSec, margin: 0 }} disabled={aplicando} onClick={() => setProp(null)}>Cancelar</button>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------- Tarjeta de ADELANTO: afectación estimada a 31 días (provisoria) ----------
+   Aparece sola apenas hay cuadro y todavía no hay valores del dictamen. Muestra el
+   número a 31 días y, si querés, lo dejás como afectación provisoria (sin frase de
+   dictamen). Cuando vuelve el dictamen definitivo, ese lo confirma o corrige. */
+function AfectacionEstimada31({ exp }) {
+  const [aplicando, setAplicando] = useState(false);
+  const est = estimarAfectacion31(exp);
+  if (!est) return null;
+  const meses = est.meses;
+
+  const aplicar = async () => {
+    setAplicando(true);
+    try {
+      const va = valoresDesdeEstimacion(exp, est);
+      const patch = { valoresAutorizados: va };
+      // Provisorio: número sí, frase NO (todavía no hay dictamen que citar).
+      if (exp.nota) { patch["nota.monto"] = va.totalAfectar; patch["nota.montoLetras"] = numeroALetras(va.totalAfectar); patch["nota.aclaracion"] = ""; }
+      if (exp.resolucion) { patch["resolucion.total"] = va.totalAfectar; patch["resolucion.montoLetras"] = numeroALetras(va.totalAfectar); patch["resolucion.aclaracionDias"] = ""; }
+      await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), patch);
+      alert(
+        "🧮 Estimado provisorio aplicado: " + formatoPesos(va.totalAfectar) + " (por " + meses + " meses).\n\n" +
+        "La nota y la resolución toman este número, SIN aclaración (todavía no hay dictamen).\n" +
+        "Cuando vuelva el dictamen definitivo, subilo en la tarjeta de abajo: confirma o corrige, y recién ahí sale la frase."
+      );
+    } catch (e) { alert("❌ " + (e.message || e)); }
+    finally { setAplicando(false); }
+  };
+
+  return (
+    <div style={{ ...S.card, borderLeft: "5px solid #f59e0b", marginBottom: 12, background: "#fffdf5" }}>
+      <div style={{ fontWeight: 800, color: "#b45309" }}>🧮 Afectación estimada a 31 días (provisoria)</div>
+      <div style={{ fontSize: 13, color: "#7c5b13", marginTop: 6 }}>
+        Adelanto automático mientras no llega el dictamen: reescala a 31 días las prestaciones por <b>hora/día</b> y deja
+        las <b>semanales</b> como están. <b>No reemplaza al dictamen</b> ni predice recortes — cuando vuelva de Auditoría, ese manda.
+      </div>
+
+      {est.hayCambio ? (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginTop: 10, fontSize: 13, color: "#334155" }}>
+            <div><span style={{ color: "#64748b" }}>Adjudicado (30 días)</span><br /><b>{formatoPesos(est.base)}</b>/mes</div>
+            <div><span style={{ color: "#64748b" }}>Estimado (31 días)</span><br /><b style={{ color: "#b45309" }}>{formatoPesos(est.mensual31)}</b>/mes</div>
+            <div><span style={{ color: "#64748b" }}>Total {meses} meses</span><br /><b>{formatoPesos(est.total31)}</b></div>
+          </div>
+          <div style={{ fontSize: 12.5, color: "#475569", marginTop: 8 }}>
+            Reescalado por día:{" "}
+            {est.lineas.filter((l) => l.porDia && l.m31 !== l.m30).map((l) => l.nombre + " (" + formatoPesos(l.m30) + " → " + formatoPesos(l.m31) + ")").join("; ") || "—"}
+          </div>
+          <button style={{ ...S.btnSec, marginTop: 12 }} disabled={aplicando} onClick={aplicar}>
+            {aplicando ? "Aplicando…" : "Usar como afectación provisoria (31 días)"}
+          </button>
+        </>
+      ) : (
+        <div style={{ fontSize: 13, color: "#64748b", marginTop: 8 }}>
+          A 31 días no cambia respecto de lo adjudicado (no hay prestaciones por día para reescalar, o falta el desglose de
+          precios por ítem). Se mantiene el número del cuadro; esperá el dictamen para confirmar.
         </div>
       )}
     </div>
@@ -3920,6 +4054,7 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
 
       {/* ---------- 3) Nota de afectación ---------- */}
       {abierta === 3 && (<>
+        {exp.cuadro && !exp.valoresAutorizados && <AfectacionEstimada31 exp={exp} />}
         {exp.cuadro && <CargarDictamenDefinitivo exp={exp} />}
         {exp.etapa === 3 && <GenerarNota exp={exp} />}
         {exp.etapa >= 4 && exp.nota && (
@@ -3973,6 +4108,7 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
 
       {/* ---------- 6) Resolución ---------- */}
       {abierta === 6 && (<>
+        {exp.cuadro && !exp.valoresAutorizados && <AfectacionEstimada31 exp={exp} />}
         {exp.cuadro && <CargarDictamenDefinitivo exp={exp} />}
         {exp.etapa === 6 && <GenerarResolucion exp={exp} />}
         {exp.etapa >= 7 && exp.resolucion && (
