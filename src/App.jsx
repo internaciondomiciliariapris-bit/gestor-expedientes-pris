@@ -58,8 +58,8 @@ const ETAPAS = [
   "Presupuestos",
   "Cuadro comparativo",
   "Nota afectación",
-  "Asesoría Letrada",
   "Pase a Auditoría Médica",
+  "Asesoría Letrada",
   "Resolución",
   "Tribunal de Cuentas",
   "Orden de compra",
@@ -1218,43 +1218,89 @@ function extraerItemsDeTexto(texto) {
 
 // "26.000" · "$ 3.552.000,00" · "7400" → número. Descarta cantidades chicas
 // (sesiones, horas, días) y números absurdos (CUIT, teléfono o DNI mal leídos).
+// Convierte un texto de importe a número, tolerando formato AR (1.785.600,00) y
+// US (1,934,400.00), con o sin decimales, y separadores de miles con punto o coma.
+// Regla: el ÚLTIMO separador con 1–2 dígitos detrás es el decimal; si tiene 3
+// dígitos detrás, todos los separadores son de miles.
 function _pesoANumero(tok) {
-  let s = String(tok || "").replace(/\$/g, "").replace(/\s/g, "");
+  let s = String(tok || "").replace(/[^\d.,]/g, "");
   if (!s) return null;
-  if (s.includes(",")) s = s.replace(/\./g, "").replace(",", ".");
-  else s = s.replace(/\./g, "");
+  const lastDot = s.lastIndexOf("."), lastComma = s.lastIndexOf(",");
+  if (lastDot >= 0 && lastComma >= 0) {
+    const dec = lastDot > lastComma ? "." : ",";
+    const other = dec === "." ? "," : ".";
+    const trailing = s.length - (dec === "." ? lastDot : lastComma) - 1;
+    if (trailing <= 2) s = s.split(other).join("").replace(dec, ".");
+    else s = s.replace(/[.,]/g, "");
+  } else if (lastComma >= 0) {
+    const t = s.length - lastComma - 1;
+    s = t === 3 ? s.replace(/,/g, "") : s.replace(",", ".");
+  } else if (lastDot >= 0) {
+    const t = s.length - lastDot - 1;
+    if (t === 3) s = s.replace(/\./g, "");
+  }
   const n = parseFloat(s);
   if (!isFinite(n) || n <= 0 || n > 100000000) return null;
   return n;
 }
 
-// Importes en pesos de una línea, en orden de lectura. Acepta: con separador de
-// miles (26.000), con signo $ ($7400) o entero de 4+ dígitos (7400). Ignora los
-// números de 1–3 dígitos sueltos (16 hs, 3 sesiones, etc.).
+// Importes de una línea, en orden de lectura. Saca antes las fechas (27/7/2025)
+// para que no se cuelen como números.
 function _importesDeLinea(linea) {
-  const re = /\$?\s*\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\$\s*\d+(?:,\d{1,2})?|\b\d{4,}(?:,\d{1,2})?\b/g;
+  const sinFecha = String(linea || "").replace(/\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}/g, " ");
+  const re = /\d[\d.,]*\d|\d/g;
   const out = [];
   let m;
-  while ((m = re.exec(String(linea || ""))) !== null) {
+  while ((m = re.exec(sinFecha)) !== null) {
     const v = _pesoANumero(m[0]);
     if (v != null) out.push(v);
   }
   return out;
 }
 
+// Disciplina base (enfermería, kinesiología, etc.) y subtipo (motora/respiratoria)
+// para emparejar el renglón del presupuesto con el ítem aunque cambie la redacción.
+const _DISCIPLINAS = ["enfermer", "kinesi", "fonoaud", "medic", "aliment", "nutric", "psicol", "fisioterap", "terapia", "cuidador", "oxigen"];
+const _SUBTIPOS = ["motor", "respirator"];
+function _disciplinaDe(s) { const n = _norm(s); return _DISCIPLINAS.find((d) => n.includes(d)) || null; }
+function _subtipoDe(s) { const n = _norm(s); return _SUBTIPOS.find((t) => n.includes(t)) || null; }
+
 // Texto del PDF + lista de ítems → [{ unitario, mensual, encontrado }] alineado a items.
-// encontrado = false si no ubicó la prestación o no halló ningún importe en su línea.
+// Estrategia robusta (probada contra varios formatos de proveedor):
+//  1) se queda solo con los renglones que parecen de PRECIO (tienen un importe grande),
+//     así descarta descripciones tipo "3 sesiones por semana";
+//  2) empareja por disciplina + subtipo (motora ≠ respiratoria), tolerando que el
+//     renglón diga "Kinesiología" a secas;
+//  3) el MAYOR importe del renglón es el mensual/total y el 2.º mayor el unitario
+//     (funciona esté la cantidad al principio, en el medio o al final).
 function extraerPreciosDePdf(texto, items) {
   const lineas = String(texto || "").split("\n").map((l) => l.trim()).filter(Boolean);
+  const lineasPrecio = lineas.filter((l) => {
+    const i = _importesDeLinea(l);
+    return i.length > 0 && Math.max(...i) >= 1000;
+  });
   return (items || []).map((it) => {
     const nom = (it && it.nombre ? it.nombre : "").trim();
     if (!nom) return { unitario: "", mensual: "", encontrado: false };
-    const linea = lineas.find((l) => matchPrestacion(l, nom));
+    const disc = _disciplinaDe(nom), sub = _subtipoDe(nom);
+    const cand = lineasPrecio.filter((l) => {
+      if (disc) { if (!_norm(l).includes(disc)) return false; }
+      else if (!matchPrestacion(l, nom)) return false;
+      const sl = _subtipoDe(l);
+      if (sub && sl && sl !== sub) return false;
+      return true;
+    });
+    const linea = cand.find((l) => _importesDeLinea(l).length >= 2) || cand[0];
     if (!linea) return { unitario: "", mensual: "", encontrado: false };
     const imp = _importesDeLinea(linea);
-    if (imp.length === 0) return { unitario: "", mensual: "", encontrado: false };
-    if (imp.length === 1) return { unitario: "", mensual: String(imp[0]), encontrado: true };
-    return { unitario: String(imp[0]), mensual: String(imp[1]), encontrado: true };
+    const distintos = [...new Set(imp)].sort((a, b) => b - a);
+    const mensual = distintos[0];
+    const unitario = distintos.length >= 2 ? distintos[1] : null;
+    return {
+      unitario: unitario != null ? String(unitario) : "",
+      mensual: mensual != null ? String(mensual) : "",
+      encontrado: true,
+    };
   });
 }
 
@@ -3496,25 +3542,10 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
         {exp.etapa < 3 && aviso("Todavía falta generar el cuadro comparativo.")}
       </>)}
 
-      {/* ---------- 4) Asesoría Letrada ---------- */}
+      {/* ---------- 4) Pase a Auditoría Médica ---------- */}
       {abierta === 4 && (<>
-        {exp.etapa === 4 && <PaseLetrada exp={exp} />}
-        {exp.etapa >= 5 && exp.paseLetrada && (
-          <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
-            <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Pase a Asesoría Letrada generado</div>
-            <div style={{ fontSize: 14, color: "#334155" }}>
-              <b>Fecha:</b> {formatearFecha(exp.paseLetrada.fecha)}
-            </div>
-            <BotonRevisar construirPlantilla={(logos) => plantillaPase(datosPaseLetrada(exp), logos)} />
-          </div>
-        )}
-        {exp.etapa < 4 && aviso("Todavía falta la nota de afectación presupuestaria.")}
-      </>)}
-
-      {/* ---------- 5) Pase a Auditoría Médica ---------- */}
-      {abierta === 5 && (<>
-        {exp.etapa === 5 && <PaseAuditoria exp={exp} />}
-        {exp.etapa >= 6 && (
+        {exp.etapa === 4 && <PaseAuditoria exp={exp} />}
+        {exp.etapa >= 5 && (
           exp.paseAuditoria ? (
             <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
               <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Pase a Auditoría Médica generado</div>
@@ -3530,7 +3561,22 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
             </>
           )
         )}
-        {exp.etapa < 5 && aviso("Todavía falta el pase a Asesoría Letrada.")}
+        {exp.etapa < 4 && aviso("Todavía falta la nota de afectación presupuestaria.")}
+      </>)}
+
+      {/* ---------- 5) Asesoría Letrada ---------- */}
+      {abierta === 5 && (<>
+        {exp.etapa === 5 && <PaseLetrada exp={exp} />}
+        {exp.etapa >= 6 && exp.paseLetrada && (
+          <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
+            <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>✅ Pase a Asesoría Letrada generado</div>
+            <div style={{ fontSize: 14, color: "#334155" }}>
+              <b>Fecha:</b> {formatearFecha(exp.paseLetrada.fecha)}
+            </div>
+            <BotonRevisar construirPlantilla={(logos) => plantillaPase(datosPaseLetrada(exp), logos)} />
+          </div>
+        )}
+        {exp.etapa < 5 && aviso("Todavía falta el pase a Auditoría Médica.")}
       </>)}
 
       {/* ---------- 6) Resolución ---------- */}
@@ -3949,7 +3995,7 @@ function PaseAuditoria({ exp }) {
         onCerrar={() => setRevisando(false)}
         onListo={async () => {
           await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
-            etapa: Math.max(exp.etapa, 6),
+            etapa: Math.max(exp.etapa, 5),
             paseAuditoria: { fecha: new Date().toISOString(), destinataria, asunto },
           });
         }}
@@ -3961,7 +4007,7 @@ function PaseAuditoria({ exp }) {
     <div style={{ ...S.card, borderLeft: "5px solid #f59e0b" }}>
       <h3 style={{ color: "#075e75", marginBottom: 4 }}>🩺 Pase a Auditoría Médica</h3>
       <div style={{ fontSize: 13, color: "#64748b" }}>
-        Nota dirigida al Departamento de Auditoría Médica solicitando intervención de competencia (para el dictamen). La revisás en pantalla y generás el PDF. Ya sale prellenada con los datos del paciente. Después seguís con la Resolución Interna.
+        Nota dirigida al Departamento de Auditoría Médica solicitando intervención de competencia (para el dictamen). La revisás en pantalla y generás el PDF. Ya sale prellenada con los datos del paciente. Después seguís con Asesoría Letrada.
       </div>
 
       <label style={S.label}>Jefa del Departamento (destinataria)</label>
@@ -5108,7 +5154,7 @@ function PaseLetrada({ exp }) {
         onCerrar={() => setRevisando(false)}
         onListo={async () => {
           await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
-            etapa: Math.max(exp.etapa, 5),
+            etapa: Math.max(exp.etapa, 6),
             paseLetrada: { fecha: new Date().toISOString(), fechaTexto, anio },
           });
         }}
