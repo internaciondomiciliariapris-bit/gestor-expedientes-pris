@@ -337,7 +337,8 @@ function plantillaNota(d, logos) {
     '<p style="text-align:justify; text-indent:135pt; line-height:1.5; margin-top:14pt;">' +
     "Para los periodos de <b>" + esc(d.periodoTexto) + "</b>, por el importe total por " + esc(d.periodoMeses) +
     " meses de <b>" + esc(d.montoFormato) + "</b> (" + letras + ") a la " + impHtml + ".</p>" +
-    (d.aclaracion ? '<p style="text-align:justify; text-indent:135pt; line-height:1.5; margin-top:10pt; font-family:Arial, Helvetica, sans-serif; font-style:italic;">«' + esc(d.aclaracion) + '»</p>' : "") +
+    ((Array.isArray(d.aclaracion) ? d.aclaracion : (d.aclaracion ? [d.aclaracion] : []))
+      .map((_a) => '<p style="text-align:justify; text-indent:135pt; line-height:1.5; margin-top:10pt; font-family:Arial, Helvetica, sans-serif; font-style:italic;">«' + esc(_a) + '»</p>').join("")) +
     '<p style="margin-left:145pt; margin-top:22pt;">Sin otro motivo saludo atentamente.</p>' +
     '<p style="margin-left:5pt; margin-top:34pt; line-height:1.5; font-weight:bold;">Firmado digitalmente:<br>' +
     "C.P.N Mariela Agustina Castillo<br>Gerente Administrativo<br>Dirección Gral. Prog. Integrado de Salud<br>SI.PRO.SA</p>" +
@@ -442,9 +443,9 @@ function plantillaResolucion(d, logos) {
   const q = "margin:0; text-align:justify; text-indent:105pt; line-height:1.18;";
   // Aclaración 30/31: va al final de los considerandos, entre comillas y con
   // tipografía distinta (Arial itálica) para que se identifique del resto.
-  const aclara = d.aclaracionDias
-    ? '<p style="' + q + ' font-family:Arial, Helvetica, sans-serif; font-style:italic;">«' + esc(d.aclaracionDias) + '»</p>'
-    : "";
+  const aclara = (Array.isArray(d.aclaracionDias) ? d.aclaracionDias : (d.aclaracionDias ? [d.aclaracionDias] : []))
+    .map((_a) => '<p style="' + q + ' font-family:Arial, Helvetica, sans-serif; font-style:italic;">«' + esc(_a) + '»</p>')
+    .join("");
   const css =
     ".hoja { font-family:'Times New Roman', Times, serif; font-size:12pt; color:#000; } " +
     ".hoja .pagina { padding: 26pt 79pt 30pt 85pt; } .hoja p { margin:0; } .hoja td { font-size:12pt; }";
@@ -1067,13 +1068,172 @@ const aclaracionDiasCore = (exp) => {
     dias + " (" + diasEnLetras(dias) + ") días efectivamente autorizados por el Departamento de Auditoría Médica, conforme al dictamen obrante en autos.";
 };
 
+/* ================================================================
+   DICTAMEN DEFINITIVO (el que vuelve del SIGEDIG con la tabla de
+   Cant. autorizada / Valor unitario / Valor total) → OBJETO CANÓNICO
+   de valores autorizados. Del canónico derivan cuadro, nota y resolución:
+   un solo número, no dos copias. Lectura LIBRE (no depende del formato de
+   la tabla): por cada prestación reconocida toma los dos importes con
+   formato de miles (unitario y total) y deriva la cantidad autorizada
+   como total / unitario. Todo queda editable antes de aplicar.
+   ================================================================ */
+
+// Bucket (módulo canónico) al que pertenece una prestación, según su nombre.
+// Solo dos posibles, como los nombra la resolución: Internación o Alimentación.
+function bucketDeNombre(nombre) {
+  return _esAlim(nombre) ? "Alimentación Domiciliaria" : "Internación Domiciliaria";
+}
+
+// Fragmento «al Módulo de X» / «a los Módulos de X y Y» para la aclaración.
+function moduloFraseLista(mods) {
+  const bases = (mods || []).map((m) => String(m).replace(/\s*domiciliaria\s*/i, "").trim()).filter(Boolean);
+  if (bases.length >= 2) return "a los Módulos de " + bases.slice(0, -1).join(", ") + " y " + bases[bases.length - 1] + " Domiciliaria";
+  return "al Módulo de " + (bases[0] || "") + " Domiciliaria";
+}
+
+// Texto de la aclaración según el escenario. comoNota=true → «Se deja constancia
+// que…»; comoNota=false (resolución) → «Que…». El módulo es dinámico.
+function textoAclaracionObj(a, comoNota) {
+  const pref = comoNota ? "Se deja constancia que " : "Que ";
+  const modTxt = moduloFraseLista(a.modulos);
+  if (a.tipo === "dias") {
+    const n = Number(a.dias) || 31;
+    return pref + "el presupuesto fue cotizado sobre la base de 30 (treinta) días; no obstante, la afectación presupuestaria correspondiente " +
+      modTxt + " se calcula sobre los " + n + " (" + diasEnLetras(n) +
+      ") días efectivamente autorizados por el Departamento de Auditoría Médica, conforme al dictamen obrante en autos.";
+  }
+  return pref + "las prestaciones y cantidades consignadas en la presente, correspondientes " + modTxt +
+    ", se ajustan a lo efectivamente autorizado por el Departamento de Auditoría Médica conforme al dictamen obrante en autos, difiriendo de lo oportunamente cotizado por la firma adjudicada.";
+}
+
+// Días base que fija Auditoría en el dictamen ("período de treinta y un (31) días").
+function diasBaseDeTextoDictamen(texto) {
+  const t = _norm(texto).replace(/[.\-–,;]/g, " ").replace(/\s+/g, " ");
+  let m = t.match(/\((\d{2})\)\s*dias/);
+  if (m) return parseInt(m[1], 10);
+  m = t.match(/base de calculo[^0-9]{0,50}(\d{2})\s*dias/);
+  if (m) return parseInt(m[1], 10);
+  const map = { "veintiocho": 28, "veintinueve": 29, "treinta y uno": 31, "treinta y un": 31, "treinta": 30 };
+  m = t.match(/periodo de (treinta y uno|treinta y un|treinta|veintinueve|veintiocho)/);
+  if (m) return map[m[1]];
+  return null;
+}
+
+// Lee el dictamen definitivo (texto ya extraído del PDF) sin depender del formato
+// de la tabla: recorre líneas, ubica cada prestación por disciplina, toma los dos
+// importes CON separador de miles (unitario + total) y deriva cant = total/unitario.
+function parsearDictamenDefinitivo(texto) {
+  const t = String(texto || "").replace(/[\uE000-\uF8FF]/g, " ").replace(/\r/g, "");
+  const lineas = t.split("\n").map((l) => l.trim()).filter(Boolean);
+  const encontradas = [];
+  const vistos = new Set();
+  for (let idx = 0; idx < lineas.length; idx++) {
+    const l = lineas[idx];
+    const disc = _disciplinaDe(l);
+    if (!disc) continue;                       // no es fila de prestación
+    let imp = _importesDeLinea(l).filter((x) => x.fmt);
+    let usados = l;
+    // Completar SOLO si la fila ya trae 1 importe propio (sus valores se partieron en
+    // dos líneas). Nunca desde una fila vacía (prestación no autorizada) ni tomando la
+    // línea siguiente si ésta es otra prestación o la de "empresa adjudicada"/total.
+    if (imp.length === 1 && lineas[idx + 1]) {
+      const sig = lineas[idx + 1];
+      const sigEsOtraFila = _disciplinaDe(sig) || /adjudicad|empresa|total/i.test(_norm(sig));
+      if (!sigEsOtraFila) {
+        const extra = _importesDeLinea(sig).filter((x) => x.fmt);
+        if (extra.length) { imp = imp.concat(extra); usados = l + " " + sig; }
+      }
+    }
+    if (!imp.length) continue;                 // prestación sin valores → no autorizada / vacía
+    const vals = [...new Set(imp.map((x) => x.val))].sort((a, b) => b - a);
+    const total = vals[0];
+    const unitario = vals.length >= 2 ? vals[1] : 0;
+    const sub = _subtipoDe(usados) || "";
+    const clave = disc + "|" + sub;
+    if (vistos.has(clave)) continue;
+    vistos.add(clave);
+    const cantAut = unitario > 0 ? Math.round(total / unitario) : 0;
+    encontradas.push({
+      nombre: (l.replace(/\d.*$/, "").replace(/[$\s]+$/, "").trim()) || disc,
+      disc, sub, unitario, total, cantAut,
+    });
+  }
+  return {
+    diasBase: diasBaseDeTextoDictamen(t),
+    lineas: encontradas,
+    mensualTotal: encontradas.reduce((s, x) => s + (x.total || 0), 0),
+  };
+}
+
+// Mensual ADJUDICADO por bucket (para detectar si Auditoría afectó de más o de menos).
+function adjMensualPorBucket(exp) {
+  const res = { "Internación Domiciliaria": 0, "Alimentación Domiciliaria": 0 };
+  const adjs = exp.cuadro?.adjudicaciones || [];
+  if (adjs.length) {
+    adjs.forEach((a) => { res[bucketDeNombre(a.modulo)] += Number(a.mensual) || 0; });
+  } else {
+    const hayAlim = (exp.itemsPrestacion || []).some((it) => _esAlim(it.nombre) || _esAlim(it.modulo));
+    const hayOtro = (exp.itemsPrestacion || []).some((it) => !(_esAlim(it.nombre) || _esAlim(it.modulo)));
+    if (hayAlim && !hayOtro) res["Alimentación Domiciliaria"] = Number(exp.cuadro?.mensual) || 0;
+    else res["Internación Domiciliaria"] = Number(exp.cuadro?.mensual) || 0;
+  }
+  return res;
+}
+
+// Arma el objeto canónico de valores autorizados a partir del dictamen definitivo
+// ya parseado. Incluye el desglose por módulo, el total y las aclaraciones (días
+// y/o recorte) con el nombre del módulo que corresponda.
+function construirValoresAutorizados(exp, dictDef) {
+  const meses = Number(exp.periodoMeses || 6) || 6;
+  const lineas = (dictDef.lineas || []).map((l) => ({
+    nombre: l.nombre,
+    bucket: bucketDeNombre(l.nombre),
+    unitario: Number(l.unitario) || 0,
+    cantAut: Number(l.cantAut) || 0,
+    mensual: Number(l.total) || (Number(l.unitario) || 0) * (Number(l.cantAut) || 0),
+  }));
+  const mensualPorModulo = { "Internación Domiciliaria": 0, "Alimentación Domiciliaria": 0 };
+  lineas.forEach((l) => { mensualPorModulo[l.bucket] += l.mensual; });
+  const mensualTotal = lineas.reduce((s, l) => s + l.mensual, 0);
+
+  const adj = adjMensualPorBucket(exp);
+  const diasBase = dictDef.diasBase;
+  const modsDias = [], modsRecorte = [];
+  ["Internación Domiciliaria", "Alimentación Domiciliaria"].forEach((b) => {
+    const dv = mensualPorModulo[b] || 0, av = adj[b] || 0;
+    if (!dv || av <= 0) return;               // sin dato → no afirmamos divergencia
+    if (dv - av > 1 && diasBase && diasBase !== 30) modsDias.push(b);
+    else if (av - dv > 1) modsRecorte.push(b);
+  });
+  const aclaraciones = [];
+  if (modsDias.length) aclaraciones.push({ tipo: "dias", modulos: modsDias, dias: diasBase });
+  if (modsRecorte.length) aclaraciones.push({ tipo: "recorte", modulos: modsRecorte });
+
+  return {
+    fuente: "dictamen",
+    fecha: new Date().toISOString(),
+    diasBase: diasBase || 0,
+    meses,
+    lineas,
+    mensualPorModulo,
+    mensualTotal,
+    totalAfectar: mensualTotal * meses,
+    aclaraciones,
+  };
+}
+
 const datosNota = (exp, extra = {}) => {
+  const va = exp.valoresAutorizados;
   const calc = exp.calculoAfectacion || derivarCalculoAfectacion(exp);
   const montoCalc = Number(calc?.totalAfectar) > 0
     ? Number(calc.totalAfectar)
     : (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6);
-  const monto = extra.monto ?? exp.nota?.monto ?? montoCalc;
+  // El dictamen definitivo (valoresAutorizados) es la fuente de verdad; gana sobre lo guardado.
+  const monto = extra.monto ?? (Number(va?.totalAfectar) > 0 ? Number(va.totalAfectar) : (exp.nota?.monto ?? montoCalc));
   const core = aclaracionDiasCore(exp);
+  const aclaracionVA = (va && Array.isArray(va.aclaraciones) && va.aclaraciones.length)
+    ? va.aclaraciones.map((a) => textoAclaracionObj(a, true))
+    : null;
   return {
     nroExpediente: exp.nroExpediente, paciente: exp.paciente, dni: exp.dni,
     modulo: exp.modulo, periodoTexto: exp.periodoTexto || exp.periodoMeses + " meses", periodoMeses: exp.periodoMeses,
@@ -1082,7 +1242,7 @@ const datosNota = (exp, extra = {}) => {
     montoFormato: formatoPesos(monto),
     directora: extra.directora ?? exp.nota?.directora ?? "Dra. Noellia Bottone",
     imputacion: extra.imputacion ?? exp.nota?.imputacion ?? IMPUTACION_NOTA_DEFECTO,
-    aclaracion: extra.aclaracion ?? exp.nota?.aclaracion ?? (core ? "Se deja constancia que " + core : ""),
+    aclaracion: extra.aclaracion ?? aclaracionVA ?? exp.nota?.aclaracion ?? (core ? "Se deja constancia que " + core : ""),
     fechaTexto: extra.fechaTexto ?? exp.nota?.fechaTexto ?? fechaLargaHoy(),
   };
 };
@@ -1110,18 +1270,24 @@ const datosPaseTribunal = (exp) => ({
 
 const datosResolucion = (exp, extra = {}) => {
   const r = exp.resolucion || {};
+  const va = exp.valoresAutorizados;
   const calc = exp.calculoAfectacion || derivarCalculoAfectacion(exp);
   const core = aclaracionDiasCore(exp);
   const totalCalc = Number(calc?.totalAfectar) > 0
     ? Number(calc.totalAfectar)
     : (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6);
-  const total = extra.total ?? r.total ?? totalCalc;
+  // El dictamen definitivo (valoresAutorizados) es la fuente de verdad; gana sobre lo guardado.
+  const total = extra.total ?? (Number(va?.totalAfectar) > 0 ? Number(va.totalAfectar) : (r.total ?? totalCalc));
+  const mensualRes = Number(va?.mensualTotal) > 0 ? Number(va.mensualTotal) : (exp.cuadro?.mensual || 0);
+  const aclaracionResVA = (va && Array.isArray(va.aclaraciones) && va.aclaraciones.length)
+    ? va.aclaraciones.map((a) => textoAclaracionObj(a, false))
+    : null;
   const itemsTxt = (exp.itemsPrestacion || []).map((it) => it.nombre + (it.cantTexto ? " " + it.cantTexto : "")).join("; ");
   const nombresTxt = (exp.itemsPrestacion || []).map((it) => it.nombre).join("; ");
   return {
     nroExpediente: exp.nroExpediente, paciente: exp.paciente,
     modulo: exp.modulo, periodoTexto: exp.periodoTexto || "", periodoMeses: exp.periodoMeses,
-    adjudicado: exp.cuadro?.adjudicado || "", mensual: exp.cuadro?.mensual || 0, total,
+    adjudicado: exp.cuadro?.adjudicado || "", mensual: mensualRes, total,
     nroResolucion: extra.nroResolucion ?? r.nro ?? "",
     tipoTramite: extra.tipoTramite ?? r.tipoTramite ?? "inicio",
     firmante: extra.firmante ?? r.firmante ?? "directora",
@@ -1148,7 +1314,7 @@ const datosResolucion = (exp, extra = {}) => {
     detalleB: extra.detalleB ?? r.detalleB ?? "",
     firmaB: extra.firmaB ?? r.firmaB ?? "",
     mensualB: extra.mensualB ?? r.mensualB ?? (Number(calc?.mensualAlim) > 0 ? Number(calc.mensualAlim) : ""),
-    aclaracionDias: extra.aclaracionDias ?? r.aclaracionDias ?? (core ? "Que " + core : ""),
+    aclaracionDias: extra.aclaracionDias ?? aclaracionResVA ?? r.aclaracionDias ?? (core ? "Que " + core : ""),
     fechaTexto: fechaLargaHoy(),
   };
 };
@@ -3383,6 +3549,206 @@ function CruceDictamenPresupuesto({ exp }) {
   );
 }
 
+/* ---------- DICTAMEN DEFINITIVO → valores autorizados (override que recalcula) ----------
+   Se sube el PDF que vuelve del SIGEDIG (tabla Cant. autorizada / Valor unitario /
+   Valor total). El sistema lo lee libre, muestra sistema (adjudicado) vs dictamen,
+   y al aplicar deja un único objeto canónico del que derivan la nota y la resolución.
+   Nunca pisa nada en silencio: primero muestra, confirma, y recién ahí recalcula. */
+function CargarDictamenDefinitivo({ exp }) {
+  const [leyendo, setLeyendo] = useState(false);
+  const [prop, setProp] = useState(null);          // { va, dictDef, texto }
+  const [mensualEdit, setMensualEdit] = useState("");
+  const [aplicando, setAplicando] = useState(false);
+  const meses = Number(exp.periodoMeses || 6) || 6;
+  const va0 = exp.valoresAutorizados;
+  const adj = adjMensualPorBucket(exp);
+
+  const leer = async (file) => {
+    if (!file) return;
+    setLeyendo(true);
+    try {
+      let texto = "";
+      const esPdf = /pdf/i.test(file.type) || /\.pdf$/i.test(file.name);
+      if (esPdf) {
+        texto = await textoDePdf(file);
+        if (_norm(texto).replace(/[^a-z]/g, "").length < 30) texto = await ocrPdfEscaneado(file);
+      } else {
+        texto = await ocrImagen(file);
+      }
+      if (!texto || texto.length < 10) { alert("No pude leer texto del archivo. Probá con el PDF original (no una foto borrosa)."); return; }
+      const dictDef = parsearDictamenDefinitivo(texto);
+      console.log("[DICTAMEN DEFINITIVO] " + texto.length + " caracteres:\n" + texto);
+      if (!dictDef.lineas.length) {
+        alert(
+          "⚠️ Leí el archivo pero no reconocí filas de prestación con valores.\n\n" +
+          "Caracteres leídos: " + texto.length + "\n\nPrimeros 240:\n" + (texto.slice(0, 240) || "(vacío)") +
+          "\n\nSacá captura de este aviso si querés que ajuste la lectura."
+        );
+        return;
+      }
+      const vaProp = construirValoresAutorizados(exp, dictDef);
+      setProp({ va: vaProp, dictDef });
+      setMensualEdit(String(vaProp.mensualTotal || ""));
+    } catch (e) {
+      alert("No pude leer el archivo (" + (e.message || e) + ").");
+    } finally { setLeyendo(false); }
+  };
+
+  const aplicar = async () => {
+    if (!prop) return;
+    setAplicando(true);
+    try {
+      let va = prop.va;
+      const mEdit = Number(mensualEdit);
+      if (mEdit > 0 && Math.abs(mEdit - va.mensualTotal) > 0.5) {
+        va = { ...va, mensualTotal: mEdit, totalAfectar: mEdit * meses };
+      }
+      const patch = { valoresAutorizados: va };
+      // Mantengo en sincronía los totales YA guardados (si existen) para que ninguna
+      // vista quede mostrando el número viejo. Uso dot-paths: no piso el resto del objeto.
+      if (exp.nota) {
+        patch["nota.monto"] = va.totalAfectar;
+        patch["nota.montoLetras"] = numeroALetras(va.totalAfectar);
+        patch["nota.aclaracion"] = va.aclaraciones.map((a) => textoAclaracionObj(a, true));
+      }
+      if (exp.resolucion) {
+        patch["resolucion.total"] = va.totalAfectar;
+        patch["resolucion.montoLetras"] = numeroALetras(va.totalAfectar);
+        patch["resolucion.aclaracionDias"] = va.aclaraciones.map((a) => textoAclaracionObj(a, false));
+      }
+      await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), patch);
+      setProp(null);
+      alert(
+        "✅ Dictamen definitivo aplicado.\n\nLa nota y la resolución toman ahora " + formatoPesos(va.totalAfectar) +
+        " (por " + meses + " meses).\n\nRegenerá los documentos: ya salen con este valor y la aclaración que corresponda."
+      );
+    } catch (e) {
+      alert("❌ No se pudo aplicar: " + (e.message || e));
+    } finally { setAplicando(false); }
+  };
+
+  const quitar = async () => {
+    if (!confirm("¿Quitar los valores del dictamen definitivo?\n\nLa nota y la resolución vuelven a calcularse con lo adjudicado en el cuadro comparativo.")) return;
+    try {
+      await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), { valoresAutorizados: null });
+      alert("Listo. Se quitó el override del dictamen definitivo.");
+    } catch (e) { alert("❌ " + (e.message || e)); }
+  };
+
+  const buckets = ["Internación Domiciliaria", "Alimentación Domiciliaria"];
+  const filaBucket = (b, dictVal) => {
+    const av = adj[b] || 0, dv = dictVal || 0;
+    if (!av && !dv) return null;
+    const dif = dv - av;
+    const color = Math.abs(dif) <= 1 ? "#166534" : (dif > 0 ? "#b45309" : "#b91c1c");
+    return (
+      <div key={b} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1.1fr", gap: 8, fontSize: 13, padding: "6px 0", borderBottom: "1px solid #f1f5f9" }}>
+        <div style={{ fontWeight: 700, color: "#334155" }}>{b}</div>
+        <div>{formatoPesos(av)}</div>
+        <div style={{ fontWeight: 700 }}>{formatoPesos(dv)}</div>
+        <div style={{ fontWeight: 700, color }}>
+          {Math.abs(dif) <= 1 ? "✔ coincide" : (dif > 0 ? "▲ " + formatoPesos(dif) : "▼ " + formatoPesos(Math.abs(dif)))}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ ...S.card, borderLeft: "5px solid #0891b2", marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ fontWeight: 800, color: "#075e75" }}>🩺 Dictamen definitivo (valores autorizados)</div>
+        <div style={{ flex: 1 }} />
+        {va0 && (
+          <span style={{ fontSize: 12, fontWeight: 700, color: "#166534", background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 8, padding: "3px 8px" }}>
+            ✅ Aplicado — {formatoPesos(va0.totalAfectar)} ({meses} meses)
+          </span>
+        )}
+      </div>
+
+      <div style={{ fontSize: 13, color: "#64748b", marginTop: 6 }}>
+        Cuando vuelve el dictamen del SIGEDIG con la tabla de valores autorizados, subilo acá. Se lee solo, te muestro
+        <b> sistema vs. dictamen</b>, y al aplicar la <b>nota</b> y la <b>resolución</b> se recalculan de un único número.
+        Si Auditoría difiere del presupuesto (31 días o recorte), la aclaración sale sola en el considerando.
+      </div>
+
+      {va0 && !prop && (
+        <div style={{ marginTop: 10, fontSize: 13, color: "#334155", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: "10px 12px" }}>
+          <div><b>Mensual:</b> {formatoPesos(va0.mensualTotal)} · <b>Total {meses} meses:</b> {formatoPesos(va0.totalAfectar)}{va0.diasBase ? <> · <b>Base:</b> {va0.diasBase} días</> : null}</div>
+          {(va0.aclaraciones || []).length > 0 && (
+            <div style={{ marginTop: 6 }}>
+              {va0.aclaraciones.map((a, k) => (
+                <div key={k} style={{ fontStyle: "italic", color: "#475569", marginTop: 2 }}>« {textoAclaracionObj(a, false)} »</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
+        <label style={{ ...S.btnSec, cursor: "pointer", margin: 0 }} title="Subí el PDF del dictamen definitivo">
+          {leyendo ? "Leyendo…" : (va0 ? "📎 Volver a cargar dictamen definitivo" : "📎 Cargar dictamen definitivo y recalcular")}
+          <input type="file" accept="application/pdf,image/*" style={{ display: "none" }}
+            onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ""; if (f) leer(f); }} />
+        </label>
+        {va0 && !prop && (
+          <button style={{ ...S.btnSec, margin: 0, color: "#b91c1c", borderColor: "#fca5a5" }} onClick={quitar}>🗑️ Quitar override</button>
+        )}
+      </div>
+
+      {prop && (
+        <div style={{ marginTop: 12, border: "1.5px solid #bae6fd", borderRadius: 12, padding: "12px 14px", background: "#f0f9ff" }}>
+          <div style={{ fontWeight: 800, color: "#075e75", marginBottom: 8 }}>Comparación mensual por módulo</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1.1fr", gap: 8, fontSize: 12, fontWeight: 800, color: "#334155", paddingBottom: 4, borderBottom: "2px solid #e2e8f0" }}>
+            <div>Módulo</div><div>Sistema (adjudicado)</div><div>Dictamen</div><div>Diferencia</div>
+          </div>
+          {buckets.map((b) => filaBucket(b, prop.va.mensualPorModulo[b]))}
+
+          <div style={{ marginTop: 10, fontSize: 13, color: "#334155" }}>
+            <b>Prestaciones leídas del dictamen:</b>
+            <div style={{ marginTop: 4 }}>
+              {prop.va.lineas.map((l, k) => (
+                <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "2px 0", borderBottom: "1px dashed #e2e8f0" }}>
+                  <span>{l.nombre}{l.cantAut ? " — " + l.cantAut + " × " + formatoPesos(l.unitario) : ""}</span>
+                  <b>{formatoPesos(l.mensual)}</b>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", gap: 10, alignItems: "center", marginTop: 12 }}>
+            <div>
+              <label style={S.label}>Mensual autorizado (editable)</label>
+              <input style={S.input} type="number" value={mensualEdit} onChange={(e) => setMensualEdit(e.target.value)} />
+            </div>
+            <div style={{ fontSize: 14, color: "#334155" }}>
+              <div><b>Total {meses} meses:</b> {formatoPesos((Number(mensualEdit) || 0) * meses)}</div>
+              {prop.va.diasBase ? <div style={{ color: "#64748b", fontSize: 13 }}>Base de cálculo del dictamen: <b>{prop.va.diasBase} días</b></div> : null}
+            </div>
+          </div>
+
+          {prop.va.aclaraciones.length > 0 ? (
+            <div style={{ marginTop: 10, background: "#fff", border: "1px solid #fcd34d", borderRadius: 10, padding: "8px 12px" }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#b45309", marginBottom: 4 }}>Aclaración que irá al considerando / nota:</div>
+              {prop.va.aclaraciones.map((a, k) => (
+                <div key={k} style={{ fontStyle: "italic", color: "#475569", marginTop: 2 }}>« {textoAclaracionObj(a, false)} »</div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ marginTop: 10, fontSize: 13, color: "#166534" }}>✔ El dictamen coincide con lo adjudicado: no hace falta aclaración.</div>
+          )}
+
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
+            <button style={{ ...S.btn, margin: 0 }} disabled={aplicando} onClick={aplicar}>
+              {aplicando ? "Aplicando…" : "✅ Aplicar y recalcular nota + resolución"}
+            </button>
+            <button style={{ ...S.btnSec, margin: 0 }} disabled={aplicando} onClick={() => setProp(null)}>Cancelar</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
   // Etapa que se está mirando. Arranca en la actual y se mueve sola cuando el expediente avanza.
   const [abierta, setAbierta] = useState(Math.min(exp.etapa, ETAPAS.length - 1));
@@ -3542,6 +3908,7 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
 
       {/* ---------- 3) Nota de afectación ---------- */}
       {abierta === 3 && (<>
+        {exp.cuadro && <CargarDictamenDefinitivo exp={exp} />}
         {exp.etapa === 3 && <GenerarNota exp={exp} />}
         {exp.etapa >= 4 && exp.nota && (
           <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
@@ -3594,6 +3961,7 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
 
       {/* ---------- 6) Resolución ---------- */}
       {abierta === 6 && (<>
+        {exp.cuadro && <CargarDictamenDefinitivo exp={exp} />}
         {exp.etapa === 6 && <GenerarResolucion exp={exp} />}
         {exp.etapa >= 7 && exp.resolucion && (
           <div style={{ ...S.card, borderLeft: "5px solid #16a34a" }}>
@@ -5070,7 +5438,11 @@ function GenerarNota({ exp }) {
   const total = (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6);
   // Si el cuadro adjudicó más de un módulo, el gasto toca las dos subpartidas
   const subDefecto = (exp.cuadro?.adjudicaciones || []).length > 1 ? "ambas" : "322";
-  const [monto, setMonto] = useState(exp.nota?.monto ?? total);
+  const [monto, setMonto] = useState(
+    Number(exp.valoresAutorizados?.totalAfectar) > 0
+      ? Number(exp.valoresAutorizados.totalAfectar)
+      : (exp.nota?.monto ?? total)
+  );
   const [directora, setDirectora] = useState(exp.nota?.directora || "Dra. Noellia Bottone");
   const [fechaTexto, setFechaTexto] = useState(exp.nota?.fechaTexto || fechaLargaHoy());
   const [subpartida, setSubpartida] = useState(exp.nota?.subpartida || subDefecto);
@@ -5201,7 +5573,9 @@ function PaseLetrada({ exp }) {
 }
 
 function GenerarResolucion({ exp }) {
-  const total = (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6);
+  const total = Number(exp.valoresAutorizados?.totalAfectar) > 0
+    ? Number(exp.valoresAutorizados.totalAfectar)
+    : (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6);
   const r = exp.resolucion || {};
   const nombresItems = (exp.itemsPrestacion || []).map((it) => it.nombre).join("; ");
 
@@ -5277,12 +5651,16 @@ function GenerarResolucion({ exp }) {
     firmaA: r.firmaA || firmaInt,
     tituloA: r.tituloA || "",
     detalleA: r.detalleA || detalleDeItems(itemsInternacion.length ? itemsInternacion : itemsAdjudicados),
-    mensualA: r.mensualA || (sumar(itemsInternacion.length ? itemsInternacion : itemsAdjudicados) || ""),
+    mensualA: r.mensualA || (Number(exp.valoresAutorizados?.mensualPorModulo?.["Internación Domiciliaria"]) > 0
+      ? Number(exp.valoresAutorizados.mensualPorModulo["Internación Domiciliaria"])
+      : (sumar(itemsInternacion.length ? itemsInternacion : itemsAdjudicados) || "")),
     subB: r.subB || "322",
     firmaB: r.firmaB || firmaAli,
     tituloB: r.tituloB || "",
     detalleB: r.detalleB || detalleDeItems(itemsAlimentacion),
-    mensualB: r.mensualB || (sumar(itemsAlimentacion) || ""),
+    mensualB: r.mensualB || (Number(exp.valoresAutorizados?.mensualPorModulo?.["Alimentación Domiciliaria"]) > 0
+      ? Number(exp.valoresAutorizados.mensualPorModulo["Alimentación Domiciliaria"])
+      : (sumar(itemsAlimentacion) || "")),
     // modelo mismo proveedor: un solo bloque con todos los ítems
     detalleUnico: r.detalleUnico || detalleDeItems(itemsAdjudicados),
     montoSub342: r.montoSub342 || (sumar(itemsInternacion.length ? itemsInternacion : itemsAdjudicados) || ""),
