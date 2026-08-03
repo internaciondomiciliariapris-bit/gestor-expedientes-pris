@@ -1616,6 +1616,19 @@ function asuntoAuditoria(exp) {
   return (esRenov ? "Renovación " : "") + cuerpo;
 }
 
+// Frase del servicio adjudicado para el recuadro gris del cuadro (un texto por módulo).
+// internación → "MÓDULO DE INTERNACIÓN DOMICILIARIA"; alimentación → "ALIMENTACIÓN".
+// Antepone "RENOVACIÓN " si el expediente es una renovación (igual que asuntoAuditoria).
+function fraseServicioAdjudicacion(mod, exp) {
+  const esRenov = /renov/i.test((exp && exp.modulo) || "") || /renov/i.test((exp && exp.periodoTexto) || "");
+  const m = String(mod || "").toLowerCase();
+  let cuerpo;
+  if (/aliment/.test(m)) cuerpo = "ALIMENTACIÓN";
+  else if (/internaci/.test(m)) cuerpo = "MÓDULO DE INTERNACIÓN DOMICILIARIA";
+  else cuerpo = "MÓDULO DE " + tituloModulo(mod).toUpperCase();
+  return (esRenov ? "RENOVACIÓN " : "") + cuerpo;
+}
+
 function itemsDelModulo(items, mod) {
   const salida = [];
   (items || []).forEach((it, i) => {
@@ -4326,7 +4339,9 @@ function RevisarCuadro({ exp }) {
     setTextos({
       adjudicaciones: previos.length ? previos : adjsGuardadas.filter((a) => a.proveedor).map((a) =>
         "CONFORME A LO DETALLADO EN EL CUADRO COMPARATIVO , SE ADJUDICA SERVICIO DE " +
-        ((modulosDeItems(payload.items).length > 1 ? a.modulo : (exp.modulo || a.modulo)) || "").toUpperCase() +
+        (modulosDeItems(payload.items).length > 1
+          ? fraseServicioAdjudicacion(a.modulo, exp)
+          : ((exp.modulo || a.modulo) || "").toUpperCase()) +
         " A LA FIRMA : " + (a.proveedor || "").toUpperCase()),
       constancia: payload.textoConstancia || "",
     });
@@ -4889,6 +4904,45 @@ function RegistroPresupuestos({ exp }) {
   const variosModulos = modulos.length > 1;
   const nombreModulo = (m) => m || "Sin módulo";
 
+  // ---- Adjudicación partida (Internación / Alimentación por separado) ----
+  const MOD_INTERNACION = "INTERNACION DOMICILIARIA";
+  const MOD_ALIMENTACION = "ALIMENTACION ENTERAL";
+  const esItemAlimentacion = (it) => /aliment|nutric/i.test((it && it.nombre) || "");
+
+  const activarSplit = () => {
+    const idxAlim = items.findIndex(esItemAlimentacion);
+    if (idxAlim < 0 && !confirm(
+      "No encontré una prestación de Alimentación por el nombre.\n\nPuedo asignar todo a Internación y vos ponés a mano el módulo de la fila de alimentación. ¿Seguir igual?"
+    )) return;
+    // 1) Asignar módulo a cada ítem: alimentación → ALIMENTACIÓN, el resto → INTERNACIÓN.
+    setItems(items.map((it) => ({ ...it, modulo: esItemAlimentacion(it) ? MOD_ALIMENTACION : MOD_INTERNACION })));
+    // 2) A quien cotizó pero NO cargó alimentación (fila vacía o en 0), marcarle
+    //    "no cotiza" ese módulo, para que no compita en $0 y no lo gane por error.
+    if (idxAlim >= 0) {
+      setDatos((prev) => {
+        const nd = { ...prev };
+        consultados.forEach((n) => {
+          const d = prev[n];
+          if (!d || d.estado !== "cotizo") return;
+          const fila = d.items && d.items[idxAlim];
+          const m = fila ? Number(fila.mensual) : NaN;
+          const sinAlim = !fila || fila.mensual === "" || fila.mensual == null || m === 0 || isNaN(m);
+          if (sinAlim) {
+            const mods = { ...(d.modulos || {}) };
+            mods[MOD_ALIMENTACION] = { ...(mods[MOD_ALIMENTACION] || {}), noCotiza: true };
+            nd[n] = { ...d, modulos: mods };
+          }
+        });
+        return nd;
+      });
+    }
+  };
+
+  const desactivarSplit = () => {
+    if (!confirm("Vas a volver a una sola firma para todo el expediente.\n\nSe quitan los módulos de las prestaciones (los precios cargados se mantienen). ¿Seguir?")) return;
+    setItems(items.map((it) => ({ ...it, modulo: "" })));
+  };
+
   // Subtotal en pantalla de un proveedor para un módulo (con lo tipeado, no lo guardado)
   const subtotalEnPantalla = (nombre, mod) => {
     const d = datos[nombre] || {};
@@ -5067,7 +5121,7 @@ function RegistroPresupuestos({ exp }) {
 
   const textoAdjudicacionDe = (a) =>
     "CONFORME A LO DETALLADO EN EL CUADRO COMPARATIVO , SE ADJUDICA SERVICIO DE " +
-    ((variosModulos ? a.modulo : (exp.modulo || a.modulo)) || "").toUpperCase() +
+    (variosModulos ? fraseServicioAdjudicacion(a.modulo, exp) : ((exp.modulo || a.modulo) || "").toUpperCase()) +
     " A LA FIRMA : " + (a.proveedor || "").toUpperCase();
 
   const abrirPrevia = () => {
@@ -5111,13 +5165,17 @@ function RegistroPresupuestos({ exp }) {
     const adjs = calcularAdjudicaciones(lista, items, {});
     const cotizaron = lista.filter((p) => p.estado === "cotizo").map((p) => p.nombre.toUpperCase());
     const negativas = lista.filter((p) => p.estado === "desestimo").map((p) => p.nombre.toUpperCase() + " (NEGATIVA)");
+    const criterioPartido = variosModulos
+      ? " Asimismo, se deja constancia que la presente adjudicacion se efectuo comparando cada modulo por separado (Internacion Domiciliaria y Alimentacion), adjudicandose cada uno a la firma que presento el menor costo mensual total en dicho modulo, con prescindencia del precio de las prestaciones individuales.-"
+      : "";
     setPrevia({
       lista, adjs, forzados: {},
       textosAdjudicacion: adjs.filter((a) => a.proveedor).map(textoAdjudicacionDe),
       textoConstancia:
         "Se deja constancia que, habiendose solicitado cotizacion a " + lista.length +
         " proveedores del rubro, unicamente las firmas comerciales: " + cotizaron.concat(negativas).join("/") +
-        " ; presentaron presupuestos dentro del plazo establecido. Los restantes proveedores convocados no remitieron cotizacion ni emitieron respuesta alguna al requerimiento efectuado a la fecha de adjudicacion.-",
+        " ; presentaron presupuestos dentro del plazo establecido. Los restantes proveedores convocados no remitieron cotizacion ni emitieron respuesta alguna al requerimiento efectuado a la fecha de adjudicacion.-" +
+        criterioPartido,
     });
   };
 
@@ -5372,6 +5430,33 @@ function RegistroPresupuestos({ exp }) {
           </button>
         </div>
 
+        {/* ---- Interruptor de adjudicación partida ---- */}
+        <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 8, border: "1px solid " + (variosModulos ? "#0891b2" : "#e2e8f0"), background: variosModulos ? "#ecfeff" : "#fff" }}>
+          <div style={{ fontWeight: 800, color: "#334155", marginBottom: 4 }}>
+            ⚖️ ¿Se adjudica partido? (Internación y Alimentación por separado)
+          </div>
+          <div style={{ fontSize: 13, color: "#64748b", marginBottom: 8 }}>
+            Activalo cuando una firma pueda ganar la <b>internación</b> y otra la <b>alimentación</b>, o cuando alguien no cotiza la alimentación. El cuadro va a comparar <b>cada módulo por su cuenta</b> (manzana con manzana) y va a salir un texto de adjudicación por módulo. Si lo dejás apagado, se adjudica todo a una sola firma por el total más bajo.
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button
+              onClick={activarSplit}
+              style={{ ...S.btnSec, fontWeight: 700, borderColor: variosModulos ? "#0891b2" : "#cbd5e1", background: variosModulos ? "#0891b2" : "#fff", color: variosModulos ? "#fff" : "#334155" }}>
+              🍽️ Sí — separar Internación y Alimentación
+            </button>
+            <button
+              onClick={desactivarSplit}
+              style={{ ...S.btnSec, fontWeight: 700, borderColor: !variosModulos ? "#0891b2" : "#cbd5e1", background: !variosModulos ? "#0891b2" : "#fff", color: !variosModulos ? "#fff" : "#334155" }}>
+              ↩️ No — una sola firma para todo
+            </button>
+          </div>
+          {variosModulos && (
+            <div style={{ fontSize: 12, color: "#075e75", marginTop: 8, fontWeight: 600 }}>
+              ✔ Partido activo. En cada proveedor vas a ver dos bloques (🧩 Internación y 🧩 Alimentación), cada uno con su casillero "No cotiza este módulo". A quien no cargó alimentación ya se lo marqué solo.
+            </div>
+          )}
+        </div>
+
         {editandoItems && (
           <div style={{ marginTop: 12, borderTop: "1px solid #e2e8f0", paddingTop: 12 }}>
             {items.map((it, i) => (
@@ -5402,8 +5487,8 @@ function RegistroPresupuestos({ exp }) {
                 .map((m) => <option key={m} value={m} />)}
             </datalist>
             <div style={{ fontSize: 12, color: "#64748b", marginBottom: 8 }}>
-              Poné un <b>módulo</b> solo si el expediente se puede adjudicar partido (por ejemplo internación a una firma y alimentación a otra).
-              Si dejás la columna vacía en todos los ítems, el cuadro sale como siempre, con una sola firma adjudicada.
+              Normalmente <b>no hace falta tocar esta columna a mano</b>: usá el interruptor <b>"¿Se adjudica partido?"</b> de arriba y se completa sola (Internación / Alimentación). Dejala acá solo para casos especiales.
+              Con la columna vacía en todos los ítems, el cuadro sale con una sola firma adjudicada.
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
               <button style={S.btnSec} onClick={agregarItem}>➕ Agregar ítem</button>
@@ -5485,7 +5570,7 @@ function RegistroPresupuestos({ exp }) {
                           <div style={{ fontWeight: 800, color: "#334155", fontSize: 13 }}>🧩 {nombreModulo(mod)}</div>
                         )}
                         <div style={{ display: "flex", gap: 0, border: "1px solid #cbd5e1", borderRadius: 8, overflow: "hidden", opacity: noCotiza ? 0.4 : 1 }}>
-                          {[["item", "Por ítem"], ["modulo", "Por módulo"]].map(([v, t]) => (
+                          {[["item", "Detalle por ítem"], ["modulo", "Un solo monto"]].map(([v, t]) => (
                             <button key={v} disabled={noCotiza}
                               onClick={() => setProvModulo(nombre, mod, "modo", v)}
                               style={{
