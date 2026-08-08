@@ -1766,8 +1766,22 @@ const S = {
 
 /* ================================================================ */
 
+// Vencimiento de sesión al cambiar el día calendario.
+// La sesión sólo es válida el mismo día en que se inició; al abrir la app
+// otro día (o al volver a la pestaña otro día) se limpia y vuelve al inicio.
+function sesionVigente() {
+  if (localStorage.getItem("gexp_login") !== "ok") return false;
+  if (localStorage.getItem("gexp_login_fecha") !== new Date().toDateString()) {
+    localStorage.removeItem("gexp_login");
+    localStorage.removeItem("gexp_login_fecha");
+    localStorage.removeItem("gexp_usuario");
+    return false;
+  }
+  return true;
+}
+
 export default function App() {
-  const [logueado, setLogueado] = useState(localStorage.getItem("gexp_login") === "ok");
+  const [logueado, setLogueado] = useState(sesionVigente());
   const [usuario, setUsuario] = useState(localStorage.getItem("gexp_usuario") || "");
   const [vista, setVista] = useState("tablero"); // tablero | nuevo | detalle | proveedores
   const [expedientes, setExpedientes] = useState([]);
@@ -1782,6 +1796,26 @@ export default function App() {
 
   useEffect(() => {
     signInAnonymously(auth).catch((e) => console.error("Auth:", e));
+  }, []);
+
+  // Si el navegador quedó abierto de un día para el otro, al volver a la
+  // pestaña se verifica el día y, si cambió, se cierra la sesión.
+  useEffect(() => {
+    const chequear = () => {
+      if (document.visibilityState !== "visible") return;
+      if (
+        localStorage.getItem("gexp_login") === "ok" &&
+        localStorage.getItem("gexp_login_fecha") !== new Date().toDateString()
+      ) {
+        localStorage.removeItem("gexp_login");
+        localStorage.removeItem("gexp_login_fecha");
+        localStorage.removeItem("gexp_usuario");
+        setUsuario("");
+        setLogueado(false);
+      }
+    };
+    document.addEventListener("visibilitychange", chequear);
+    return () => document.removeEventListener("visibilitychange", chequear);
   }, []);
 
   useEffect(() => {
@@ -1831,7 +1865,7 @@ export default function App() {
     [expedientes, expedienteSel]
   );
 
-  if (!logueado) return <Login onOk={() => { localStorage.setItem("gexp_login", "ok"); setLogueado(true); }} />;
+  if (!logueado) return <Login onOk={() => { localStorage.setItem("gexp_login", "ok"); localStorage.setItem("gexp_login_fecha", new Date().toDateString()); setLogueado(true); }} />;
   if (busqueda) return <BusquedaRapida expedientes={expedientes} onVolver={() => setBusqueda(false)} />;
   if (!usuario) return (
     <SeleccionUsuario
