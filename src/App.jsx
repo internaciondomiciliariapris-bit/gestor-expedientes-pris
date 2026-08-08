@@ -1770,10 +1770,10 @@ const S = {
 // La sesión sólo es válida el mismo día en que se inició; al abrir la app
 // otro día (o al volver a la pestaña otro día) se limpia y vuelve al inicio.
 function sesionVigente() {
-  if (localStorage.getItem("gexp_login") !== "ok") return false;
-  if (localStorage.getItem("gexp_login_fecha") !== new Date().toDateString()) {
-    localStorage.removeItem("gexp_login");
-    localStorage.removeItem("gexp_login_fecha");
+  if (sessionStorage.getItem("gexp_login") !== "ok") return false;
+  if (sessionStorage.getItem("gexp_login_fecha") !== new Date().toDateString()) {
+    sessionStorage.removeItem("gexp_login");
+    sessionStorage.removeItem("gexp_login_fecha");
     localStorage.removeItem("gexp_usuario");
     return false;
   }
@@ -1804,11 +1804,11 @@ export default function App() {
     const chequear = () => {
       if (document.visibilityState !== "visible") return;
       if (
-        localStorage.getItem("gexp_login") === "ok" &&
-        localStorage.getItem("gexp_login_fecha") !== new Date().toDateString()
+        sessionStorage.getItem("gexp_login") === "ok" &&
+        sessionStorage.getItem("gexp_login_fecha") !== new Date().toDateString()
       ) {
-        localStorage.removeItem("gexp_login");
-        localStorage.removeItem("gexp_login_fecha");
+        sessionStorage.removeItem("gexp_login");
+        sessionStorage.removeItem("gexp_login_fecha");
         localStorage.removeItem("gexp_usuario");
         setUsuario("");
         setLogueado(false);
@@ -1865,12 +1865,12 @@ export default function App() {
     [expedientes, expedienteSel]
   );
 
-  if (!logueado) return <Login onOk={() => { localStorage.setItem("gexp_login", "ok"); localStorage.setItem("gexp_login_fecha", new Date().toDateString()); setLogueado(true); }} />;
+  if (!logueado) return <Login onOk={() => { sessionStorage.setItem("gexp_login", "ok"); sessionStorage.setItem("gexp_login_fecha", new Date().toDateString()); setLogueado(true); }} />;
   if (busqueda) return <BusquedaRapida expedientes={expedientes} onVolver={() => setBusqueda(false)} />;
   if (!usuario) return (
     <SeleccionUsuario
       onElegir={elegirUsuario}
-      onVolver={() => { localStorage.removeItem("gexp_login"); setLogueado(false); }}
+      onVolver={() => { sessionStorage.removeItem("gexp_login"); sessionStorage.removeItem("gexp_login_fecha"); setLogueado(false); }}
       onBuscar={() => setBusqueda(true)}
     />
   );
@@ -1898,7 +1898,7 @@ export default function App() {
             onClick={() => { localStorage.removeItem("gexp_usuario"); setUsuario(""); }}
             style={{ fontWeight: 800, color: "#075e75", cursor: "pointer", fontSize: 14, padding: "8px 12px", background: "#e0f2fe", borderRadius: 8 }}
           >👤 {usuario} · Cambiar</span>
-          <button style={S.btnRojo} onClick={() => { localStorage.removeItem("gexp_login"); localStorage.removeItem("gexp_usuario"); setUsuario(""); setLogueado(false); }}>Salir</button>
+          <button style={S.btnRojo} onClick={() => { sessionStorage.removeItem("gexp_login"); sessionStorage.removeItem("gexp_login_fecha"); localStorage.removeItem("gexp_usuario"); setUsuario(""); setLogueado(false); }}>Salir</button>
         </div>
 
         {/* botón Volver según la pantalla */}
