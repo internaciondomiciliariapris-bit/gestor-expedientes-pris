@@ -939,6 +939,18 @@ function descargarBytes(bytes, nombre) {
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
+// Convierte los bytes de un PDF (Uint8Array de pdf-lib) a base64, por bloques
+// para no reventar la pila con archivos grandes. Se usa para adjuntar el
+// cuadro comparativo en el mail al proveedor.
+function bytesABase64(bytes) {
+  let binario = "";
+  const bloque = 0x8000;
+  for (let i = 0; i < bytes.length; i += bloque) {
+    binario += String.fromCharCode.apply(null, bytes.subarray(i, i + bloque));
+  }
+  return btoa(binario);
+}
+
 /* ---------- Datos por defecto de cada documento (para generar y para revisar de nuevo) ---------- */
 
 // Saca el "Solicita / Solicita Renovación de" inicial del módulo al citarlo en los documentos
@@ -4072,7 +4084,7 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
               </div>
             )}
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-              <RevisarCuadro exp={exp} />
+              <RevisarCuadro exp={exp} proveedores={proveedores} />
               <button
                 style={{ ...S.btnSec, marginTop: 10, color: "#b91c1c", borderColor: "#fca5a5" }}
                 onClick={async () => {
@@ -4355,10 +4367,15 @@ function BotonRevisar({ construirPlantilla, etiqueta }) {
 
 /* Revisión del cuadro ya generado: misma pantalla de revisión que en la generación inicial,
    con los textos editables, antes de volver a descargar el PDF/Excel */
-function RevisarCuadro({ exp }) {
+function RevisarCuadro({ exp, proveedores = [] }) {
   const [abierto, setAbierto] = useState(false);
   const [ocupado, setOcupado] = useState(false);
   const [textos, setTextos] = useState(null);
+
+  // Envío del cuadro comparativo al proveedor por email
+  const [mailAbierto, setMailAbierto] = useState(false);
+  const [enviandoMail, setEnviandoMail] = useState(false);
+  const [mail, setMail] = useState({ destino: "", asunto: "", cuerpo: "" });
 
   const payload = payloadCuadro(exp);
 
@@ -4420,11 +4437,139 @@ function RevisarCuadro({ exp }) {
     setOcupado(false);
   };
 
+  /* ---- Envío del cuadro comparativo al proveedor por email ---- */
+  const firmaResponsable = (USUARIOS.find((u) => u.id === exp.responsable)?.firma) || FIRMANTES[0];
+
+  const nombresAdjudicados = () => {
+    const ns = adjsGuardadas.map((a) => a.proveedor).filter(Boolean);
+    const uniq = [...new Set(ns)];
+    return uniq.length ? uniq : (payload.adjudicado.nombre ? [payload.adjudicado.nombre] : []);
+  };
+
+  const emailsDeProveedores = (nombres) =>
+    nombres
+      .map((n) => (proveedores.find((p) => p.nombre === n)?.emails) || "")
+      .filter(Boolean)
+      .join(", ");
+
+  const abrirEnvioMail = () => {
+    const nombres = nombresAdjudicados();
+    const destino = emailsDeProveedores(nombres);
+    const listaProv = nombres.join(" / ") || "el proveedor adjudicado";
+    const modTxt = exp.modulo ? (", módulo " + limpiarModulo(exp.modulo)) : "";
+    const periodoTxt = exp.periodoTexto ? (", período " + exp.periodoTexto) : "";
+    setMail({
+      destino,
+      asunto: "Cuadro Comparativo — Expte. " + exp.nroExpediente + " — " + exp.paciente,
+      cuerpo:
+        "Estimados " + listaProv + ":\n\n" +
+        "Adjuntamos el Cuadro Comparativo correspondiente al expediente " + exp.nroExpediente +
+        ", paciente " + exp.paciente + modTxt + periodoTxt + ".\n\n" +
+        "Ante cualquier consulta quedamos a disposición.\n\n" +
+        "Saludos cordiales,\n" +
+        firmaResponsable + "\n" +
+        "Internación Domiciliaria — PRIS",
+    });
+    setMailAbierto(true);
+  };
+
+  const enviarMail = async () => {
+    const destinatarios = (mail.destino || "").split(",").map((e) => e.trim()).filter(Boolean);
+    if (destinatarios.length === 0) { alert("Poné al menos un correo de destino."); return; }
+    if (!mail.asunto.trim()) { alert("El asunto no puede quedar vacío."); return; }
+    if (!confirm("Se enviará el cuadro comparativo (PDF) a:\n\n" + destinatarios.map((e) => "• " + e).join("\n") + "\n\n¿Confirmás el envío?")) return;
+
+    setEnviandoMail(true);
+    try {
+      if (!window.PDFLib) throw new Error("Falta pdf-lib: subí pdf-lib.min.js a la carpeta public y agregá la línea al index.html");
+      const logosB = await obtenerLogosBytes();
+      const textosAdj = (textos && textos.adjudicaciones)
+        ? textos.adjudicaciones
+        : (payload.textosAdjudicacion && payload.textosAdjudicacion.length
+            ? payload.textosAdjudicacion
+            : (payload.textoAdjudicacion ? [payload.textoAdjudicacion] : []));
+      const bytes = await crearPdfCuadro(window.PDFLib, {
+        nroExpediente: exp.nroExpediente, paciente: exp.paciente, modulo: exp.modulo,
+        periodoTexto: exp.periodoTexto, periodoMeses: exp.periodoMeses,
+        fechaCorta: fechaCortaHoy(), fmt: formatoPesos,
+        items: payload.items, proveedores: payload.proveedores,
+        adjudicado: payload.adjudicado,
+        adjudicaciones: adjsGuardadas,
+        textosAdjudicacion: textosAdj,
+        textoAdjudicacion: (textosAdj || []).join("  "),
+        textoConstancia: (textos && textos.constancia) || payload.textoConstancia || "",
+      }, logosB.pris, logosB.gob);
+
+      const nombrePdf = "CUADRO COMPARATIVO " + exp.nroExpediente.replace(/\//g, "-") + " " + exp.paciente.toUpperCase() + ".pdf";
+      const adjuntos = [{ nombre: nombrePdf, mimeType: "application/pdf", base64: bytesABase64(bytes) }];
+
+      const res = await fetch(APPS_SCRIPT_URL, {
+        method: "POST",
+        body: JSON.stringify({
+          accion: "enviarCotizacion",
+          clave: APPS_SCRIPT_CLAVE,
+          nroExpediente: exp.nroExpediente,
+          paciente: exp.paciente,
+          firmante: firmaResponsable,
+          asunto: mail.asunto,
+          cuerpo: mail.cuerpo,
+          destinatarios,
+          adjuntos,
+        }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "Error desconocido en Apps Script");
+
+      alert("✅ Cuadro comparativo enviado por email a " + destinatarios.length + " destinatario(s).");
+      setMailAbierto(false);
+    } catch (e) {
+      alert("❌ Error al enviar: " + e.message + "\n\nRevisá la conexión y el correo de destino.");
+    }
+    setEnviandoMail(false);
+  };
+
+  // Panel de composición del mail (tiene prioridad si está abierto)
+  if (mailAbierto) {
+    return (
+      <div style={{ marginTop: 10, background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 8, padding: 14 }}>
+        <div style={{ fontWeight: 800, color: "#166534", marginBottom: 4 }}>📧 Enviar cuadro comparativo al proveedor</div>
+        <div style={{ fontSize: 13, color: "#475569", marginBottom: 6 }}>
+          Sale desde <b>internaciondomiciliariapris@gmail.com</b> con el PDF del cuadro adjunto. Revisá el destino y el texto antes de enviar.
+        </div>
+
+        <label style={S.label}>Para (correo del proveedor — separá con comas si son varios)</label>
+        <input style={S.input} value={mail.destino} onChange={(e) => setMail({ ...mail, destino: e.target.value })} placeholder="proveedor@correo.com" />
+
+        <label style={S.label}>Asunto</label>
+        <input style={S.input} value={mail.asunto} onChange={(e) => setMail({ ...mail, asunto: e.target.value })} />
+
+        <label style={S.label}>Cuerpo del mensaje</label>
+        <textarea style={{ ...S.input, minHeight: 200, fontFamily: "inherit", fontSize: 14 }} value={mail.cuerpo} onChange={(e) => setMail({ ...mail, cuerpo: e.target.value })} />
+
+        <div style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>
+          📎 Se adjunta el cuadro comparativo completo, tal cual se descarga (PDF).
+        </div>
+
+        <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+          <button style={{ ...S.btn, flex: 2, minWidth: 180, background: "#16a34a", opacity: enviandoMail ? 0.6 : 1 }} disabled={enviandoMail} onClick={enviarMail}>
+            {enviandoMail ? "⏳ Generando PDF y enviando..." : "📨 ENVIAR AL PROVEEDOR"}
+          </button>
+          <button style={{ ...S.btnSec, opacity: enviandoMail ? 0.6 : 1 }} disabled={enviandoMail} onClick={() => setMailAbierto(false)}>✖ Cancelar</button>
+        </div>
+      </div>
+    );
+  }
+
   if (!abierto) {
     return (
-      <button style={{ ...S.btnSec, marginTop: 10 }} onClick={abrir}>
-        👁️ Revisar / descargar de nuevo (PDF o Excel)
-      </button>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <button style={{ ...S.btnSec, marginTop: 10 }} onClick={abrir}>
+          👁️ Revisar / descargar de nuevo (PDF o Excel)
+        </button>
+        <button style={{ ...S.btnSec, marginTop: 10 }} onClick={abrirEnvioMail}>
+          📧 Enviar al proveedor por email
+        </button>
+      </div>
     );
   }
 
