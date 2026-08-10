@@ -2783,6 +2783,9 @@ function Tablero({ expedientes, usuario, abrir }) {
                   Expte. {e.nroExpediente} · DNI {e.dni}
                 </div>
                 <div style={{ fontSize: 13, color: "#475569", marginTop: 2 }}>{e.modulo}</div>
+                <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
+                  🗓️ {e.periodoTexto ? e.periodoTexto : (e.periodoMeses ? e.periodoMeses + " meses" : "Período no cargado")}
+                </div>
                 <div style={{ fontSize: 12, marginTop: 4, fontWeight: 700, color: e.responsable ? "#0e7490" : "#94a3b8" }}>
                   👤 {e.responsable || "Sin responsable asignado"}
                 </div>
@@ -2791,6 +2794,11 @@ function Tablero({ expedientes, usuario, abrir }) {
                 <span style={S.chip(true, e.etapa > 0)}>
                   {e.etapa === 0 ? "⏳ Sin cotizar" : ETAPAS[e.etapa - 1] + " ✓"}
                 </span>
+                {e.etapa >= 9 && e.cuadro?.adjudicado && (
+                  <div style={{ fontSize: 12, marginTop: 6, fontWeight: 800, color: "#166534" }}>
+                    🏆 {e.cuadro.adjudicado}
+                  </div>
+                )}
                 {dias !== null && e.etapa === 1 && (
                   <div style={{ fontSize: 12, marginTop: 6, fontWeight: 700, color: vencido ? "#dc2626" : "#f59e0b" }}>
                     {vencido ? `⚠️ Plazo vencido (${dias} días hábiles)` : `Día hábil ${dias} de 5`}
