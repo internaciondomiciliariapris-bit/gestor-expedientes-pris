@@ -2783,7 +2783,7 @@ function Tablero({ expedientes, usuario, abrir }) {
                   Expte. {e.nroExpediente} · DNI {e.dni}
                 </div>
                 <div style={{ fontSize: 13, color: "#475569", marginTop: 2 }}>{e.modulo}</div>
-                <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
+                <div style={{ fontSize: 14, fontWeight: 800, color: "#334155", marginTop: 4, textAlign: "center" }}>
                   🗓️ {e.periodoTexto ? e.periodoTexto : (e.periodoMeses ? e.periodoMeses + " meses" : "Período no cargado")}
                 </div>
                 <div style={{ fontSize: 12, marginTop: 4, fontWeight: 700, color: e.responsable ? "#0e7490" : "#94a3b8" }}>
