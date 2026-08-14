@@ -1209,6 +1209,23 @@ function adjMensualPorBucket(exp) {
   return res;
 }
 
+/* ---------- FUENTE ÚNICA DE VERDAD del mensual (dictamen > estimado > cuadro) ----------
+   Regla del circuito: si Auditoría Médica ya autorizó valores (valoresAutorizados,
+   sea "dictamen" o "estimado"), ESE es el número que manda en la nota y la resolución.
+   Sólo cuando todavía no hay dictamen se cae a lo adjudicado en el cuadro (30 días).
+   Cualquier vista que necesite "el mensual" debe pasar por acá y NO leer exp.cuadro.mensual
+   directo — así no vuelve a aparecer el desfase de mostrar 30 días con el total a 31. */
+function mensualEfectivoTotal(exp) {
+  const va = exp?.valoresAutorizados;
+  if (Number(va?.mensualTotal) > 0) return Number(va.mensualTotal);
+  return Number(exp?.cuadro?.mensual) || 0;
+}
+function mensualEfectivoBucket(exp, bucket) {
+  const vv = Number(exp?.valoresAutorizados?.mensualPorModulo?.[bucket]) || 0;
+  if (vv > 0) return vv;
+  return Number(adjMensualPorBucket(exp)?.[bucket]) || 0;
+}
+
 // Arma el objeto canónico de valores autorizados a partir del dictamen definitivo
 // ya parseado. Incluye el desglose por módulo, el total y las aclaraciones (días
 // y/o recorte) con el nombre del módulo que corresponda.
@@ -1399,12 +1416,12 @@ const datosResolucion = (exp, extra = {}) => {
     tituloA: extra.tituloA ?? r.tituloA ?? "",
     detalleA: extra.detalleA ?? r.detalleA ?? "",
     firmaA: extra.firmaA ?? r.firmaA ?? (exp.cuadro?.adjudicado || ""),
-    mensualA: extra.mensualA ?? r.mensualA ?? (Number(calc?.precioMensual) > 0 ? Number(calc.precioMensual) : ""),
+    mensualA: extra.mensualA ?? r.mensualA ?? (mensualEfectivoBucket(exp, "Internación Domiciliaria") || (Number(calc?.precioMensual) > 0 ? Number(calc.precioMensual) : "")),
     subB: extra.subB ?? r.subB ?? "322",
     tituloB: extra.tituloB ?? r.tituloB ?? "",
     detalleB: extra.detalleB ?? r.detalleB ?? "",
     firmaB: extra.firmaB ?? r.firmaB ?? "",
-    mensualB: extra.mensualB ?? r.mensualB ?? (Number(calc?.mensualAlim) > 0 ? Number(calc.mensualAlim) : ""),
+    mensualB: extra.mensualB ?? r.mensualB ?? (mensualEfectivoBucket(exp, "Alimentación Domiciliaria") || (Number(calc?.mensualAlim) > 0 ? Number(calc.mensualAlim) : "")),
     aclaracionDias: extra.aclaracionDias ?? aclaracionResVA ?? r.aclaracionDias ?? (core ? "Que " + core : ""),
     fechaTexto: fechaLargaHoy(),
   };
@@ -3767,6 +3784,16 @@ function CargarDictamenDefinitivo({ exp }) {
         patch["resolucion.total"] = va.totalAfectar;
         patch["resolucion.montoLetras"] = numeroALetras(va.totalAfectar);
         patch["resolucion.aclaracionDias"] = va.aclaraciones.map((a) => textoAclaracionObj(a, false));
+        // También refresco los mensuales por módulo YA guardados: el modelo de dos tablas
+        // (322 y 342) y el de mismo proveedor derivan sus totales de estos números. Si no se
+        // refrescan, el PDF sale con lo viejo del cuadro (30 días) aunque el total ya sea el del
+        // dictamen. Con esto, reabrir la resolución después de aplicar el dictamen ya trae bien
+        // internación/alimentación, sin diferencia de recorte silenciosa.
+        const vInt = Number(va.mensualPorModulo?.["Internación Domiciliaria"]) || 0;
+        const vAli = Number(va.mensualPorModulo?.["Alimentación Domiciliaria"]) || 0;
+        if (vInt > 0) { patch["resolucion.mensualA"] = vInt; patch["resolucion.montoSub342"] = vInt; }
+        if (vAli > 0) patch["resolucion.mensualB"] = vAli;
+        patch["resolucion.mensualUnico"] = va.mensualTotal;
       }
       await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), patch);
       setProp(null);
@@ -3924,7 +3951,14 @@ function AfectacionEstimada31({ exp }) {
       const patch = { valoresAutorizados: va };
       // Provisorio: número sí, frase NO (todavía no hay dictamen que citar).
       if (exp.nota) { patch["nota.monto"] = va.totalAfectar; patch["nota.montoLetras"] = numeroALetras(va.totalAfectar); patch["nota.aclaracion"] = ""; }
-      if (exp.resolucion) { patch["resolucion.total"] = va.totalAfectar; patch["resolucion.montoLetras"] = numeroALetras(va.totalAfectar); patch["resolucion.aclaracionDias"] = ""; }
+      if (exp.resolucion) {
+        patch["resolucion.total"] = va.totalAfectar; patch["resolucion.montoLetras"] = numeroALetras(va.totalAfectar); patch["resolucion.aclaracionDias"] = "";
+        const vInt = Number(va.mensualPorModulo?.["Internación Domiciliaria"]) || 0;
+        const vAli = Number(va.mensualPorModulo?.["Alimentación Domiciliaria"]) || 0;
+        if (vInt > 0) { patch["resolucion.mensualA"] = vInt; patch["resolucion.montoSub342"] = vInt; }
+        if (vAli > 0) patch["resolucion.mensualB"] = vAli;
+        patch["resolucion.mensualUnico"] = va.mensualTotal;
+      }
       await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), patch);
       alert(
         "🧮 Estimado provisorio aplicado: " + formatoPesos(va.totalAfectar) + " (por " + meses + " meses).\n\n" +
@@ -6005,6 +6039,16 @@ function GenerarResolucion({ exp }) {
   const r = exp.resolucion || {};
   const nombresItems = (exp.itemsPrestacion || []).map((it) => it.nombre).join("; ");
 
+  // Mensual efectivo para el encabezado: si hay dictamen/estimado manda ese; si no, el cuadro.
+  // Evita el desfase de mostrar el mensual a 30 días junto al total a 31 del dictamen.
+  const mensualCab = mensualEfectivoTotal(exp);
+  // Mensual autorizado por módulo (0 si todavía NO hay dictamen/estimado aplicado). Cuando existe,
+  // gana sobre cualquier valor viejo guardado en la resolución, así el modelo de dos tablas / mismo
+  // proveedor sale siempre con lo que ordenó Auditoría, no con lo adjudicado en el cuadro.
+  const dictInt = Number(exp.valoresAutorizados?.mensualPorModulo?.["Internación Domiciliaria"]) || 0;
+  const dictAli = Number(exp.valoresAutorizados?.mensualPorModulo?.["Alimentación Domiciliaria"]) || 0;
+  const hayDictTotal = Number(exp.valoresAutorizados?.mensualTotal) > 0;
+
   // Lo que el cuadro comparativo adjudicó: prestaciones y precios del ganador,
   // para armar la resolución sin volver a escribir nada.
   const esAlimentacion = (n) => /aliment|bomba|nutri|enteral|m[oó]dulo alim/i.test(n || "");
@@ -6077,19 +6121,16 @@ function GenerarResolucion({ exp }) {
     firmaA: r.firmaA || firmaInt,
     tituloA: r.tituloA || "",
     detalleA: r.detalleA || detalleDeItems(itemsInternacion.length ? itemsInternacion : itemsAdjudicados),
-    mensualA: r.mensualA || (Number(exp.valoresAutorizados?.mensualPorModulo?.["Internación Domiciliaria"]) > 0
-      ? Number(exp.valoresAutorizados.mensualPorModulo["Internación Domiciliaria"])
-      : (sumar(itemsInternacion.length ? itemsInternacion : itemsAdjudicados) || "")),
+    mensualA: dictInt > 0 ? dictInt : (r.mensualA || (sumar(itemsInternacion.length ? itemsInternacion : itemsAdjudicados) || "")),
     subB: r.subB || "322",
     firmaB: r.firmaB || firmaAli,
     tituloB: r.tituloB || "",
     detalleB: r.detalleB || detalleDeItems(itemsAlimentacion),
-    mensualB: r.mensualB || (Number(exp.valoresAutorizados?.mensualPorModulo?.["Alimentación Domiciliaria"]) > 0
-      ? Number(exp.valoresAutorizados.mensualPorModulo["Alimentación Domiciliaria"])
-      : (sumar(itemsAlimentacion) || "")),
+    mensualB: dictAli > 0 ? dictAli : (r.mensualB || (sumar(itemsAlimentacion) || "")),
     // modelo mismo proveedor: un solo bloque con todos los ítems
     detalleUnico: r.detalleUnico || detalleDeItems(itemsAdjudicados),
-    montoSub342: r.montoSub342 || (sumar(itemsInternacion.length ? itemsInternacion : itemsAdjudicados) || ""),
+    montoSub342: dictInt > 0 ? dictInt : (r.montoSub342 || (sumar(itemsInternacion.length ? itemsInternacion : itemsAdjudicados) || "")),
+    mensualUnico: hayDictTotal ? mensualCab : (r.mensualUnico || mensualCab),
   });
   const [revisando, setRevisando] = useState(false);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
@@ -6122,11 +6163,11 @@ function GenerarResolucion({ exp }) {
           detalleA: esDobleMismo ? f.detalleUnico : (f.detalleA || nombresItems || limpiarModulo(exp.modulo)),
           subB: f.subB, firmaB: esDobleMismo ? f.firmaA : f.firmaB,
           mensualB: esDobleMismo
-            ? Math.max(0, Number(f.mensualUnico ?? exp.cuadro?.mensual ?? 0) - Number(f.montoSub342 || 0))
+            ? Math.max(0, Number(f.mensualUnico ?? mensualCab ?? 0) - Number(f.montoSub342 || 0))
             : f.mensualB,
           tituloB: f.tituloB || ("SERVICIO: MODULO ALIMENTACION DOMICILIARIA: " + (f.firmaB || "").toUpperCase()),
           detalleB: f.detalleB || "Servicio de Alimentación domiciliaria C/Bomba de Infusión",
-          mensualUnico: esDobleMismo ? Number(f.mensualUnico ?? exp.cuadro?.mensual ?? 0) : null,
+          mensualUnico: esDobleMismo ? Number(f.mensualUnico ?? mensualCab ?? 0) : null,
           detalleUnico: f.detalleUnico,
         }), logos)}
         onCerrar={() => setRevisando(false)}
@@ -6143,7 +6184,7 @@ function GenerarResolucion({ exp }) {
               fojas: { solicitud: f.fsSolicitud, presupuesto: f.fsPresupuesto, cuadro: f.fsCuadro, dictamen: f.fsDictamen },
               imputacion: f.imputacion, anio: f.anio,
               subA: f.subA, firmaA: f.firmaA, tituloA: f.tituloA, detalleA: f.detalleA, mensualA: f.mensualA,
-              detalleUnico: f.detalleUnico, mensualUnico: f.mensualUnico ?? exp.cuadro?.mensual ?? "", montoSub342: f.montoSub342,
+              detalleUnico: f.detalleUnico, mensualUnico: f.mensualUnico ?? mensualCab ?? "", montoSub342: f.montoSub342,
               subB: f.subB, firmaB: f.firmaB, tituloB: f.tituloB, detalleB: f.detalleB, mensualB: f.mensualB,
             },
           });
@@ -6160,7 +6201,7 @@ function GenerarResolucion({ exp }) {
     }
     if (esDobleMismo) {
       if (!f.firmaA) { alert("Cargá la firma comercial adjudicada."); return; }
-      const mensualTot = Number(f.mensualUnico ?? exp.cuadro?.mensual ?? 0);
+      const mensualTot = Number(f.mensualUnico ?? mensualCab ?? 0);
       if (!mensualTot) { alert("Cargá el precio mensual total adjudicado."); return; }
       const m342 = Number(f.montoSub342 || 0);
       if (m342 <= 0 || m342 > mensualTot) {
@@ -6182,7 +6223,8 @@ function GenerarResolucion({ exp }) {
       </div>
 
       <div style={{ background: "#e0f2fe", borderRadius: 8, padding: 10, marginTop: 12, fontSize: 14, color: "#075e75", fontWeight: 700 }}>
-        Adjudicado en el cuadro: {exp.cuadro?.adjudicado} · {formatoPesos(exp.cuadro?.mensual)}/mes · Total {exp.periodoMeses} meses: {formatoPesos(total)}
+        Adjudicado en el cuadro: {exp.cuadro?.adjudicado} · {formatoPesos(mensualCab)}/mes · Total {exp.periodoMeses} meses: {formatoPesos(total)}
+        {hayDictTotal && <span style={{ display: "block", fontWeight: 600, fontSize: 12.5, color: "#0369a1", marginTop: 2 }}>Mensual según dictamen de Auditoría Médica (valores autorizados).</span>}
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 130px", gap: 10 }}>
@@ -6279,7 +6321,7 @@ function GenerarResolucion({ exp }) {
             </div>
             <div>
               <label style={{ ...S.label, fontWeight: 600 }}>Precio mensual total ($)</label>
-              <input style={S.input} type="number" value={f.mensualUnico ?? exp.cuadro?.mensual ?? ""}
+              <input style={S.input} type="number" value={f.mensualUnico ?? mensualCab ?? ""}
                 onChange={(e) => setF({ ...f, mensualUnico: e.target.value })} />
             </div>
           </div>
@@ -6295,7 +6337,7 @@ function GenerarResolucion({ exp }) {
               Cargá cuánto del mensual corresponde a internación. El resto se imputa solo a alimentación.
             </div>
             {(() => {
-              const mensualTot = Number(f.mensualUnico ?? exp.cuadro?.mensual ?? 0);
+              const mensualTot = Number(f.mensualUnico ?? mensualCab ?? 0);
               const m342 = Number(f.montoSub342 || 0);
               const m322 = mensualTot - m342;
               const meses = Number(exp.periodoMeses || 6);
