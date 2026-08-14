@@ -1803,6 +1803,12 @@ export default function App() {
 
   const elegirUsuario = (id) => {
     localStorage.setItem("gexp_usuario", id);
+    // Al entrar un usuario SIEMPRE se arranca limpio en el Tablero. Así se evita
+    // que quede "pegada" la vista/expediente que dejó abierto el usuario anterior
+    // al usar "Cambiar" (era un bug puramente visual del estado de React).
+    setExpedienteSel(null);
+    setVista("tablero");
+    setBusqueda(false);
     setUsuario(id);
   };
 
@@ -1877,7 +1883,7 @@ export default function App() {
     [expedientes, expedienteSel]
   );
 
-  if (!logueado) return <Login onOk={() => { sessionStorage.setItem("gexp_login", "ok"); sessionStorage.setItem("gexp_login_fecha", new Date().toDateString()); setLogueado(true); }} />;
+  if (!logueado) return <Login onOk={() => { sessionStorage.setItem("gexp_login", "ok"); sessionStorage.setItem("gexp_login_fecha", new Date().toDateString()); localStorage.removeItem("gexp_usuario"); setUsuario(""); setExpedienteSel(null); setVista("tablero"); setBusqueda(false); setLogueado(true); }} />;
   if (busqueda) return <BusquedaRapida expedientes={expedientes} onVolver={() => setBusqueda(false)} />;
   if (!usuario) return (
     <SeleccionUsuario
