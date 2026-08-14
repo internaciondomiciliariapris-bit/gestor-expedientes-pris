@@ -6032,6 +6032,34 @@ function PaseLetrada({ exp }) {
   );
 }
 
+/* ---------- BORRADOR AUTOGUARDADO por expediente (no se pierde al salir) ----------
+   Guarda lo que se está tipeando en un generador (fojas, N°, firmante, etc.) en
+   Firestore bajo exp.borradores[clave], con debounce. Al volver al paciente, el
+   formulario arranca de ese borrador. Cuando el documento se genera de verdad, se
+   limpia el borrador (pasa a ser el documento final). Reutilizable para nota, pases, etc.
+   No guarda en el primer render (no reescribe con el valor inicial) y falla en silencio:
+   es un autoguardado, nunca corta el flujo de trabajo. */
+function useAutoguardado(exp, clave, valor, { activo = true, retardo = 700, onGuardado } = {}) {
+  const serial = JSON.stringify(valor);
+  const timer = useRef(null);
+  const primera = useRef(true);
+  useEffect(() => {
+    if (!activo || !exp?.id) return;
+    if (primera.current) { primera.current = false; return; }   // no guardar el estado inicial
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      updateDoc(doc(db, COL_EXPEDIENTES, exp.id), { ["borradores." + clave]: JSON.parse(serial) })
+        .then(() => { if (onGuardado) onGuardado(); })
+        .catch(() => {});
+    }, retardo);
+    return () => { if (timer.current) clearTimeout(timer.current); };
+  }, [serial, activo, exp?.id, clave, retardo]);
+}
+function limpiarBorrador(exp, clave) {
+  if (!exp?.id) return Promise.resolve();
+  return updateDoc(doc(db, COL_EXPEDIENTES, exp.id), { ["borradores." + clave]: null }).catch(() => {});
+}
+
 function GenerarResolucion({ exp }) {
   const total = Number(exp.valoresAutorizados?.totalAfectar) > 0
     ? Number(exp.valoresAutorizados.totalAfectar)
@@ -6104,7 +6132,7 @@ function GenerarResolucion({ exp }) {
   const firmaAli = variosExp ? provDelModulo(modAlimentacion) : "";
   const subModoSugerido = !variosExp ? "una" : (firmaInt && firmaAli && firmaInt !== firmaAli ? "dos" : "dosMismo");
 
-  const [f, setF] = useState({
+  const defaultsF = {
     nroResolucion: r.nro || "/DGPRIS",
     tipoTramite: r.tipoTramite || "inicio",
     firmante: r.firmante || "directora",
@@ -6131,8 +6159,25 @@ function GenerarResolucion({ exp }) {
     detalleUnico: r.detalleUnico || detalleDeItems(itemsAdjudicados),
     montoSub342: dictInt > 0 ? dictInt : (r.montoSub342 || (sumar(itemsInternacion.length ? itemsInternacion : itemsAdjudicados) || "")),
     mensualUnico: hayDictTotal ? mensualCab : (r.mensualUnico || mensualCab),
-  });
+  };
+
+  // Si quedó un borrador a medio hacer para este paciente, retomo desde ahí: sus campos
+  // pisan a los defaults. Pero si hay dictamen, los importes SIEMPRE se re-aplican por encima
+  // del borrador (el dictamen manda sobre cualquier número viejo que hubiera quedado tipeado).
+  const borradorRes = exp.borradores?.resolucion || null;
+  const overlayDictamen = {};
+  if (dictInt > 0) { overlayDictamen.mensualA = dictInt; overlayDictamen.montoSub342 = dictInt; }
+  if (dictAli > 0) overlayDictamen.mensualB = dictAli;
+  if (hayDictTotal) overlayDictamen.mensualUnico = mensualCab;
+  const inicialF = borradorRes ? { ...defaultsF, ...borradorRes, ...overlayDictamen } : defaultsF;
+
+  const [f, setF] = useState(inicialF);
   const [revisando, setRevisando] = useState(false);
+  const [borradorAviso, setBorradorAviso] = useState(borradorRes ? "retomado" : null);
+  // Autoguardado del borrador: sólo mientras se edita (no en vista previa) y sólo si el
+  // formulario difiere de los valores por defecto (abrir o descartar no crea borrador vacío).
+  const hayCambios = JSON.stringify(f) !== JSON.stringify(defaultsF);
+  useAutoguardado(exp, "resolucion", f, { activo: !revisando && hayCambios, onGuardado: () => setBorradorAviso("guardado") });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
 
   const cambiarSubpartidaSimple = (s) => setF({ ...f, subpartida: s, imputacion: imputacionResolucionPorSubpartida(s) });
@@ -6188,6 +6233,8 @@ function GenerarResolucion({ exp }) {
               subB: f.subB, firmaB: f.firmaB, tituloB: f.tituloB, detalleB: f.detalleB, mensualB: f.mensualB,
             },
           });
+          // Ya es documento final: limpio el borrador para que la próxima vez no reabra a medio hacer.
+          await limpiarBorrador(exp, "resolucion");
         }}
       />
     );
@@ -6221,6 +6268,24 @@ function GenerarResolucion({ exp }) {
       <div style={{ fontSize: 13, color: "#64748b" }}>
         Elegí quién firma y las subpartidas: con una sola sale el modelo habitual; con 322 y 342 sale el modelo de dos firmas y dos tablas (internación + alimentación). Después la revisás en pantalla y generás el PDF.
       </div>
+
+      {borradorAviso && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 10, background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 8, padding: "7px 12px" }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "#166534" }}>
+            {borradorAviso === "retomado" ? "📝 Retomaste un borrador guardado — seguí donde lo dejaste." : "💾 Borrador guardado. Si salís del paciente, al volver lo retomás acá."}
+          </span>
+          <div style={{ flex: 1 }} />
+          <button
+            style={{ ...S.btnSec, margin: 0, padding: "4px 10px", fontSize: 12.5, color: "#b91c1c", borderColor: "#fca5a5" }}
+            onClick={async () => {
+              if (!confirm("¿Descartar el borrador y empezar de cero?\n\nSe pierde lo tipeado que no hayas generado todavía.")) return;
+              await limpiarBorrador(exp, "resolucion");
+              setF(defaultsF);
+              setBorradorAviso(null);
+            }}
+          >🗑️ Descartar borrador</button>
+        </div>
+      )}
 
       <div style={{ background: "#e0f2fe", borderRadius: 8, padding: 10, marginTop: 12, fontSize: 14, color: "#075e75", fontWeight: 700 }}>
         Adjudicado en el cuadro: {exp.cuadro?.adjudicado} · {formatoPesos(mensualCab)}/mes · Total {exp.periodoMeses} meses: {formatoPesos(total)}
