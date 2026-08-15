@@ -4755,9 +4755,23 @@ function RevisarCuadro({ exp, proveedores = [] }) {
 /* ---------- Pase a Auditoría Médica (documento del inicio del trámite) ---------- */
 
 function PaseAuditoria({ exp }) {
-  const [destinataria, setDestinataria] = useState(exp.paseAuditoria?.destinataria || "Farm. María Gabriela Policelli");
-  const [asunto, setAsunto] = useState(exp.paseAuditoria?.asunto || asuntoAuditoria(exp));
+  const borr = exp.borradores?.paseAuditoria || null;
+  const destDef = exp.paseAuditoria?.destinataria || "Farm. María Gabriela Policelli";
+  const asuntoDef = exp.paseAuditoria?.asunto || asuntoAuditoria(exp);
+  const [destinataria, setDestinataria] = useState(borr?.destinataria ?? destDef);
+  const [asunto, setAsunto] = useState(borr?.asunto ?? asuntoDef);
   const [revisando, setRevisando] = useState(false);
+  const [borradorAviso, setBorradorAviso] = useState(borr ? "retomado" : null);
+
+  const valorBorr = { destinataria, asunto };
+  const defaultsBorr = { destinataria: destDef, asunto: asuntoDef };
+  const hayCambios = JSON.stringify(valorBorr) !== JSON.stringify(defaultsBorr);
+  useAutoguardado(exp, "paseAuditoria", valorBorr, { activo: !revisando && hayCambios, onGuardado: () => setBorradorAviso("guardado") });
+  const descartarBorr = async () => {
+    if (!confirm("¿Descartar el borrador y volver a los valores por defecto?")) return;
+    await limpiarBorrador(exp, "paseAuditoria");
+    setDestinataria(destDef); setAsunto(asuntoDef); setBorradorAviso(null);
+  };
 
   if (revisando) {
     return (
@@ -4769,6 +4783,7 @@ function PaseAuditoria({ exp }) {
             etapa: Math.max(exp.etapa, 5),
             paseAuditoria: { fecha: new Date().toISOString(), destinataria, asunto },
           });
+          await limpiarBorrador(exp, "paseAuditoria");
         }}
       />
     );
@@ -4780,6 +4795,8 @@ function PaseAuditoria({ exp }) {
       <div style={{ fontSize: 13, color: "#64748b" }}>
         Nota dirigida al Departamento de Auditoría Médica solicitando intervención de competencia (para el dictamen). La revisás en pantalla y generás el PDF. Ya sale prellenada con los datos del paciente. Después seguís con Asesoría Letrada.
       </div>
+
+      <AvisoBorrador aviso={borradorAviso} onDescartar={descartarBorr} />
 
       <label style={S.label}>Jefa del Departamento (destinataria)</label>
       <input style={S.input} value={destinataria} onChange={(e) => setDestinataria(e.target.value)} />
@@ -5898,20 +5915,37 @@ function GenerarNota({ exp }) {
   const total = (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6);
   // Si el cuadro adjudicó más de un módulo, el gasto toca las dos subpartidas
   const subDefecto = (exp.cuadro?.adjudicaciones || []).length > 1 ? "ambas" : "322";
-  const [monto, setMonto] = useState(
-    Number(exp.valoresAutorizados?.totalAfectar) > 0
-      ? Number(exp.valoresAutorizados.totalAfectar)
-      : (exp.nota?.monto ?? total)
-  );
-  const [directora, setDirectora] = useState(exp.nota?.directora || "Dra. Noellia Bottone");
-  const [fechaTexto, setFechaTexto] = useState(exp.nota?.fechaTexto || fechaLargaHoy());
-  const [subpartida, setSubpartida] = useState(exp.nota?.subpartida || subDefecto);
-  const [imputacion, setImputacion] = useState(exp.nota?.imputacion || imputacionNotaPorSubpartida(exp.nota?.subpartida || subDefecto));
+  const borr = exp.borradores?.nota || null;
+  const hayDict = Number(exp.valoresAutorizados?.totalAfectar) > 0;
+  // Con dictamen, el importe manda desde valoresAutorizados (no desde el borrador viejo).
+  const montoDef = hayDict ? Number(exp.valoresAutorizados.totalAfectar) : (exp.nota?.monto ?? total);
+  const dirDef = exp.nota?.directora || "Dra. Noellia Bottone";
+  const fechaDef = exp.nota?.fechaTexto || fechaLargaHoy();
+  const subDef = exp.nota?.subpartida || subDefecto;
+  const impDef = exp.nota?.imputacion || imputacionNotaPorSubpartida(exp.nota?.subpartida || subDefecto);
+
+  const [monto, setMonto] = useState(hayDict ? montoDef : (borr?.monto ?? montoDef));
+  const [directora, setDirectora] = useState(borr?.directora ?? dirDef);
+  const [fechaTexto, setFechaTexto] = useState(borr?.fechaTexto ?? fechaDef);
+  const [subpartida, setSubpartida] = useState(borr?.subpartida ?? subDef);
+  const [imputacion, setImputacion] = useState(borr?.imputacion ?? impDef);
   const [revisando, setRevisando] = useState(false);
+  const [borradorAviso, setBorradorAviso] = useState(borr ? "retomado" : null);
+
+  const valorBorr = { monto: Number(monto), directora, fechaTexto, subpartida, imputacion };
+  const defaultsBorr = { monto: Number(montoDef), directora: dirDef, fechaTexto: fechaDef, subpartida: subDef, imputacion: impDef };
+  const hayCambios = JSON.stringify(valorBorr) !== JSON.stringify(defaultsBorr);
+  useAutoguardado(exp, "nota", valorBorr, { activo: !revisando && hayCambios, onGuardado: () => setBorradorAviso("guardado") });
 
   const cambiarSubpartida = (s) => {
     setSubpartida(s);
     setImputacion(imputacionNotaPorSubpartida(s));
+  };
+  const descartarBorr = async () => {
+    if (!confirm("¿Descartar el borrador y volver a los valores por defecto?")) return;
+    await limpiarBorrador(exp, "nota");
+    setMonto(montoDef); setDirectora(dirDef); setFechaTexto(fechaDef); setSubpartida(subDef); setImputacion(impDef);
+    setBorradorAviso(null);
   };
 
   if (revisando) {
@@ -5928,6 +5962,7 @@ function GenerarNota({ exp }) {
               directora, imputacion, subpartida, fechaTexto,
             },
           });
+          await limpiarBorrador(exp, "nota");
         }}
       />
     );
@@ -5939,6 +5974,8 @@ function GenerarNota({ exp }) {
       <div style={{ fontSize: 13, color: "#64748b" }}>
         Con el formato oficial del Word real (Times New Roman). El importe sale del cuadro comparativo y las letras se escriben solas. Primero la revisás en pantalla, la corregís si hace falta, y recién ahí generás el PDF.
       </div>
+
+      <AvisoBorrador aviso={borradorAviso} onDescartar={descartarBorr} />
 
       <div style={{ display: "grid", gridTemplateColumns: "180px 1fr 1fr", gap: 10 }}>
         <div>
@@ -5988,9 +6025,23 @@ function mesAnioActual() {
 /* ---------- Pase a Asesoría Letrada ---------- */
 
 function PaseLetrada({ exp }) {
-  const [fechaTexto, setFechaTexto] = useState(mesAnioActual());
-  const [anio, setAnio] = useState(String(new Date().getFullYear()));
+  const borr = exp.borradores?.paseLetrada || null;
+  const fechaDef = mesAnioActual();
+  const anioDef = String(new Date().getFullYear());
+  const [fechaTexto, setFechaTexto] = useState(borr?.fechaTexto ?? fechaDef);
+  const [anio, setAnio] = useState(borr?.anio ?? anioDef);
   const [revisando, setRevisando] = useState(false);
+  const [borradorAviso, setBorradorAviso] = useState(borr ? "retomado" : null);
+
+  const valorBorr = { fechaTexto, anio };
+  const defaultsBorr = { fechaTexto: fechaDef, anio: anioDef };
+  const hayCambios = JSON.stringify(valorBorr) !== JSON.stringify(defaultsBorr);
+  useAutoguardado(exp, "paseLetrada", valorBorr, { activo: !revisando && hayCambios, onGuardado: () => setBorradorAviso("guardado") });
+  const descartarBorr = async () => {
+    if (!confirm("¿Descartar el borrador y volver a los valores por defecto?")) return;
+    await limpiarBorrador(exp, "paseLetrada");
+    setFechaTexto(fechaDef); setAnio(anioDef); setBorradorAviso(null);
+  };
 
   if (revisando) {
     return (
@@ -6002,6 +6053,7 @@ function PaseLetrada({ exp }) {
             etapa: Math.max(exp.etapa, 6),
             paseLetrada: { fecha: new Date().toISOString(), fechaTexto, anio },
           });
+          await limpiarBorrador(exp, "paseLetrada");
         }}
       />
     );
@@ -6013,6 +6065,8 @@ function PaseLetrada({ exp }) {
       <div style={{ fontSize: 13, color: "#64748b" }}>
         Nota de pase con la firma de la Gerente. La revisás en pantalla y generás el PDF. Cuando vuelva el informe jurídico favorable, seguís con la resolución.
       </div>
+
+      <AvisoBorrador aviso={borradorAviso} onDescartar={descartarBorr} />
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 10 }}>
         <div>
@@ -6042,10 +6096,11 @@ function PaseLetrada({ exp }) {
 function useAutoguardado(exp, clave, valor, { activo = true, retardo = 700, onGuardado } = {}) {
   const serial = JSON.stringify(valor);
   const timer = useRef(null);
-  const primera = useRef(true);
+  const ultimo = useRef(serial);   // valor con el que se montó: ese no se reescribe
   useEffect(() => {
     if (!activo || !exp?.id) return;
-    if (primera.current) { primera.current = false; return; }   // no guardar el estado inicial
+    if (serial === ultimo.current) return;       // sin cambios respecto de lo último conocido
+    ultimo.current = serial;
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => {
       updateDoc(doc(db, COL_EXPEDIENTES, exp.id), { ["borradores." + clave]: JSON.parse(serial) })
@@ -6058,6 +6113,21 @@ function useAutoguardado(exp, clave, valor, { activo = true, retardo = 700, onGu
 function limpiarBorrador(exp, clave) {
   if (!exp?.id) return Promise.resolve();
   return updateDoc(doc(db, COL_EXPEDIENTES, exp.id), { ["borradores." + clave]: null }).catch(() => {});
+}
+
+// Chip reutilizable: avisa que hay un borrador (retomado o recién guardado) y permite descartarlo.
+function AvisoBorrador({ aviso, onDescartar }) {
+  if (!aviso) return null;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 10, background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 8, padding: "7px 12px" }}>
+      <span style={{ fontSize: 13, fontWeight: 700, color: "#166534" }}>
+        {aviso === "retomado" ? "📝 Retomaste un borrador guardado — seguí donde lo dejaste." : "💾 Borrador guardado. Si salís del paciente, al volver lo retomás acá."}
+      </span>
+      <div style={{ flex: 1 }} />
+      <button style={{ ...S.btnSec, margin: 0, padding: "4px 10px", fontSize: 12.5, color: "#b91c1c", borderColor: "#fca5a5" }}
+        onClick={onDescartar}>🗑️ Descartar borrador</button>
+    </div>
+  );
 }
 
 function GenerarResolucion({ exp }) {
@@ -6269,23 +6339,12 @@ function GenerarResolucion({ exp }) {
         Elegí quién firma y las subpartidas: con una sola sale el modelo habitual; con 322 y 342 sale el modelo de dos firmas y dos tablas (internación + alimentación). Después la revisás en pantalla y generás el PDF.
       </div>
 
-      {borradorAviso && (
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 10, background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 8, padding: "7px 12px" }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: "#166534" }}>
-            {borradorAviso === "retomado" ? "📝 Retomaste un borrador guardado — seguí donde lo dejaste." : "💾 Borrador guardado. Si salís del paciente, al volver lo retomás acá."}
-          </span>
-          <div style={{ flex: 1 }} />
-          <button
-            style={{ ...S.btnSec, margin: 0, padding: "4px 10px", fontSize: 12.5, color: "#b91c1c", borderColor: "#fca5a5" }}
-            onClick={async () => {
-              if (!confirm("¿Descartar el borrador y empezar de cero?\n\nSe pierde lo tipeado que no hayas generado todavía.")) return;
-              await limpiarBorrador(exp, "resolucion");
-              setF(defaultsF);
-              setBorradorAviso(null);
-            }}
-          >🗑️ Descartar borrador</button>
-        </div>
-      )}
+      <AvisoBorrador aviso={borradorAviso} onDescartar={async () => {
+        if (!confirm("¿Descartar el borrador y empezar de cero?\n\nSe pierde lo tipeado que no hayas generado todavía.")) return;
+        await limpiarBorrador(exp, "resolucion");
+        setF(defaultsF);
+        setBorradorAviso(null);
+      }} />
 
       <div style={{ background: "#e0f2fe", borderRadius: 8, padding: 10, marginTop: 12, fontSize: 14, color: "#075e75", fontWeight: 700 }}>
         Adjudicado en el cuadro: {exp.cuadro?.adjudicado} · {formatoPesos(mensualCab)}/mes · Total {exp.periodoMeses} meses: {formatoPesos(total)}
