@@ -1108,14 +1108,19 @@ function moduloFraseLista(mods) {
 function textoAclaracionObj(a, comoNota) {
   const pref = comoNota ? "Se deja constancia que " : "Que ";
   if (a.tipo === "tope") {
-    // Tope de cantidad fijado por la observación de Auditoría (ej.: "máximo de 14
-    // sesiones mensuales para Kinesiología Motora"). El número va en dígitos y letras.
-    const n = Number(a.cantidad) || 0;
-    const uni = /hora|hs/i.test(String(a.unidad || "")) ? (n === 1 ? "hora" : "horas") : (n === 1 ? "sesión" : "sesiones");
-    const per = a.periodo === "diario" ? "diarias" : a.periodo === "semanal" ? "semanales" : "mensuales";
-    return pref + "conforme a la observación del Departamento de Auditoría Médica obrante en el dictamen, la prestación de " +
-      (a.prestacion || "").trim() + " se reconoce hasta un máximo de " + n + " (" + cantidadEnLetras(n) + ") " +
-      uni + " " + per + ", tope al que se ajusta la afectación presupuestaria de la presente.";
+    // Topes de cantidad fijados por la observación de Auditoría. Puede ser uno o varios
+    // (enfermería en horas, fonoaudiología/kinesio en sesiones, etc.).
+    const items = (a.topes && a.topes.length) ? a.topes : [{ prestacion: a.prestacion, cantidad: a.cantidad, unidad: a.unidad, periodo: a.periodo }];
+    const partes = items.map((t) => {
+      const num = Number(t.cantidad) || 0;
+      const esHora = /hora|hs/i.test(String(t.unidad || ""));
+      const uni = esHora ? (num === 1 ? "hora" : "horas") : (num === 1 ? "sesión" : "sesiones");
+      const per = t.periodo === "diario" ? "diarias" : t.periodo === "semanal" ? "semanales" : "mensuales";
+      return (t.prestacion || "").trim() + " hasta " + num + " (" + cantidadEnLetras(num) + ") " + uni + " " + per;
+    });
+    const lista = partes.length === 1 ? partes[0] : partes.slice(0, -1).join("; ") + " y " + partes[partes.length - 1];
+    return pref + "conforme a la observación del Departamento de Auditoría Médica obrante en el dictamen, se reconocen las siguientes cantidades: " +
+      lista + "; topes a los que se ajusta la afectación presupuestaria de la presente.";
   }
   const modTxt = moduloFraseLista(a.modulos);
   if (a.tipo === "dias") {
@@ -1128,17 +1133,32 @@ function textoAclaracionObj(a, comoNota) {
     ", se ajustan a lo efectivamente autorizado por el Departamento de Auditoría Médica conforme al dictamen obrante en autos, difiriendo de lo oportunamente cotizado por la firma adjudicada.";
 }
 
-// Número chico (0–99) a palabras, para la aclaración de tope de sesiones/horas.
+// Número a palabras en femenino (horas y sesiones son femeninas), hasta miles.
+// Ej.: 14→"catorce", 31→"treinta y una", 496→"cuatrocientas noventa y seis".
 function cantidadEnLetras(n) {
-  const u = ["cero", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve", "diez",
+  n = Math.round(Number(n) || 0);
+  if (n === 0) return "cero";
+  if (n < 0) return "menos " + cantidadEnLetras(-n);
+  const uni = ["", "una", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve", "diez",
     "once", "doce", "trece", "catorce", "quince", "dieciséis", "diecisiete", "dieciocho", "diecinueve", "veinte",
-    "veintiuno", "veintidós", "veintitrés", "veinticuatro", "veinticinco", "veintiséis", "veintisiete", "veintiocho", "veintinueve"];
-  const d = { 30: "treinta", 40: "cuarenta", 50: "cincuenta", 60: "sesenta", 70: "setenta", 80: "ochenta", 90: "noventa" };
-  const x = Number(n) || 0;
-  if (x < 30) return u[x] || String(x);
-  const dec = Math.floor(x / 10) * 10, un = x % 10;
-  if (un === 0) return d[dec] || String(x);
-  return (d[dec] || "") + " y " + u[un];
+    "veintiuna", "veintidós", "veintitrés", "veinticuatro", "veinticinco", "veintiséis", "veintisiete", "veintiocho", "veintinueve"];
+  const dec = ["", "", "", "treinta", "cuarenta", "cincuenta", "sesenta", "setenta", "ochenta", "noventa"];
+  const cen = ["", "ciento", "doscientas", "trescientas", "cuatrocientas", "quinientas", "seiscientas", "setecientas", "ochocientas", "novecientas"];
+  const decenas = (x) => {
+    if (x < 30) return uni[x];
+    const d = Math.floor(x / 10), u = x % 10;
+    return u === 0 ? dec[d] : dec[d] + " y " + uni[u];
+  };
+  const centenas = (x) => {
+    if (x === 100) return "cien";
+    const c = Math.floor(x / 100), r = x % 100;
+    return (cen[c] + (r ? " " + decenas(r) : "")).trim();
+  };
+  if (n < 100) return decenas(n);
+  if (n < 1000) return centenas(n);
+  const miles = Math.floor(n / 1000), resto = n % 1000;
+  const pfx = miles === 1 ? "mil" : cantidadEnLetras(miles) + " mil";
+  return (pfx + (resto ? " " + (resto < 100 ? decenas(resto) : centenas(resto)) : "")).trim();
 }
 
 // Días base que fija Auditoría en el dictamen. Cubre las variantes reales:
@@ -1236,14 +1256,44 @@ function parsearDictamenDefinitivo(texto) {
 // Devuelve el/los párrafos que arrancan en "Observación(es):" hasta el próximo
 // encabezado fuerte (PASE / firmado digitalmente / Programa Integrado / otro DICTAMEN).
 function _bloqueObservaciones(texto) {
-  const t = String(texto || "").replace(/[\uE000-\uF8FF]/g, " ").replace(/\r/g, "");
-  const n = _norm(t);
-  const idx = n.search(/observaci(?:on|ón|ones|on\b)/);
-  if (idx < 0) return "";
-  let fin = t.length;
-  const corte = n.slice(idx + 5).search(/\bpase\b|firmado digitalmente|programa integrado de salud|dictamen de auditor/);
-  if (corte >= 0) fin = idx + 5 + corte;
-  return t.slice(idx, fin).trim();
+  const raw = String(texto || "").replace(/[\uE000-\uF8FF]/g, " ").replace(/\r/g, "");
+  // El expediente completo (suele traer 40–60 páginas) puede tener varias secciones
+  // "OBSERVACIONES" ajenas: carátulas, notas de otras dependencias, sellos de usuario.
+  // La que importa es la del DICTAMEN DE AUDITORÍA MÉDICA, junto a la tabla de valores.
+  // Extrae el bloque desde el primer "observaci…" del texto dado hasta el próximo
+  // encabezado fuerte, y colapsa saltos de línea (la observación suele venir partida
+  // en varios renglones por el reensamblado de pdf.js).
+  const extraerDesde = (txt) => {
+    const nn = _norm(txt);
+    const i = nn.search(/observaci(?:on|ones)/);
+    if (i < 0) return "";
+    let fin = txt.length;
+    const c = nn.slice(i + 5).search(/\bpase\b|firmado digitalmente|programa integrado de salud/);
+    if (c >= 0) fin = i + 5 + c;
+    return txt.slice(i, fin).replace(/\s+/g, " ").trim();
+  };
+  // 1) Preferimos la observación que aparece DESPUÉS del encabezado del dictamen de
+  //    Auditoría (así descartamos cualquier "OBSERVACIONES" anterior del expediente).
+  const nAll = _norm(raw);
+  const idxDict = nAll.search(/dictamen de auditor[ií]?a/);
+  if (idxDict >= 0) {
+    const desdeDict = extraerDesde(raw.slice(idxDict));
+    if (desdeDict) return desdeDict;
+  }
+  // 2) Respaldo: recorrer TODAS las secciones "observaci…" y quedarnos con la primera
+  //    que contenga un patrón de tope (máximo/hasta/no superar + número). Descarta las
+  //    observaciones administrativas que no tienen impacto numérico.
+  const tieneTope = (b) => /(?:maximo|hasta|tope|no\s+(?:podra|debera|deber[aá])\s+(?:superar|exceder))\s+(?:de\s+)?\d/.test(_norm(b));
+  let cursor = 0;
+  while (cursor < raw.length) {
+    const rel = _norm(raw.slice(cursor)).search(/observaci(?:on|ones)/);
+    if (rel < 0) break;
+    const abs = cursor + rel;
+    const blk = extraerDesde(raw.slice(abs));
+    if (blk && tieneTope(blk)) return blk;
+    cursor = abs + 5;
+  }
+  return "";
 }
 
 // Números en palabras → entero, para "catorce (14) sesiones".
@@ -1253,37 +1303,82 @@ function _palabraANumero(txt) {
   return _PAL_NUM[n] != null ? _PAL_NUM[n] : null;
 }
 
-// Del bloque de observación saca reglas de tope de cantidad. Reconoce:
-//   "un máximo de 14 sesiones mensuales para … Kinesiología Motora"
-//   "hasta catorce (14) sesiones mensuales de kinesiología"
-//   "no podrá superar 8 horas diarias" (enfermería)
-//   "máximo de 3 sesiones semanales para Kinesiología respiratoria"
-// Devuelve { bloque, reglas:[{ tipo:"tope_cant", disc, sub, cantidad, unidad, periodo, crudo }] }.
+// Convierte un token de cantidad a entero. Acepta dígitos ("14", "(14)") y palabras
+// ("catorce", "treinta y uno"). Si hay dígitos, mandan los dígitos.
+function _cantidadDeToken(tok) {
+  const dig = String(tok || "").match(/\d{1,4}/);
+  if (dig) return parseInt(dig[0], 10);
+  return _palabraANumero(String(tok || "").replace(/[()]/g, "").trim());
+}
+
+// Busca la disciplina dentro de una ventana de texto ya normalizado. modo="primera"
+// devuelve la que aparece antes (para mirar DESPUÉS del número); modo="ultima" la que
+// aparece más cerca del final (para mirar ANTES del número). Detecta subtipo cercano.
+function _discEnVentana(win, modo) {
+  const w = _norm(win || "");
+  let disc = null, best = modo === "ultima" ? -1 : Infinity;
+  for (const d of _DISCIPLINAS) {
+    const p = modo === "ultima" ? w.lastIndexOf(d) : w.indexOf(d);
+    if (p < 0) continue;
+    if (modo === "ultima" ? p > best : p < best) { best = p; disc = d; }
+  }
+  if (!disc) return null;
+  let sub = "";
+  const zona = w.slice(Math.max(0, best - 2), best + 45);
+  for (const t of _SUBTIPOS) { if (zona.includes(t)) { sub = t; break; } }
+  if (!sub) for (const t of _SUBTIPOS) { if (w.includes(t)) { sub = t; break; } }
+  return { disc, sub, pos: best };
+}
+
+// Del bloque de observación saca TODAS las reglas de tope de cantidad. A diferencia de
+// la versión anterior (que sacaba un solo tope y ataba el número a la disciplina por
+// orden de lista), acá se ubican todas las cantidades con unidad (horas/sesiones) y a
+// cada una se le asigna la disciplina MÁS CERCANA en el texto. Así una frase con varios
+// topes —"…496 hs. de Enfermería mensuales, un máximo de 14 sesiones para Fonoaudiología
+// y 31 sesiones de Kinesiología Respiratoria"— se interpreta correctamente, sin cruces.
+// Excluye "N días" (eso es base de días) y los importes en pesos.
 function interpretarObservaciones(texto) {
   const bloque = _bloqueObservaciones(texto);
   if (!bloque) return { bloque: "", reglas: [] };
-  const reglas = [];
   const n = _norm(bloque);
-  const numTxt = "(\\d{1,3}|(?:treinta y uno|veinti\\w+|catorce|quince|dieciseis|diecisiete|dieciocho|diecinueve|trece|doce|once|diez|nueve|ocho|siete|seis|cinco|cuatro|tres|dos|una?|uno)(?:\\s*\\(\\d{1,3}\\))?)";
-  const unidad = "(sesiones|sesion|visitas|visita|horas|hora|hs)";
-  const re = new RegExp("(?:un\\s+)?(?:maximo|hasta|tope(?:\\s+de)?|no\\s+(?:podra|debera|deber[aá])\\s+(?:superar|exceder))\\s+(?:de\\s+)?" + numTxt + "\\s+" + unidad + "\\s*(mensual(?:es)?|por mes|al mes|diari\\w+|por dia|semanal(?:es)?|por semana)?", "g");
+
+  const palAlt = Object.keys(_PAL_NUM)
+    .filter((k) => k !== "cero")
+    .sort((a, b) => b.length - a.length)
+    .map((k) => k.replace(/ /g, "\\s+"))
+    .join("|");
+  const numTok = "(?:\\(?\\d{1,4}\\)?|" + palAlt + ")";
+  const uni = "(hs\\.?|horas?|sesiones|sesion|visitas|visita)";
+  const re = new RegExp("(" + numTok + ")\\s*\\)?\\s*" + uni, "g");
+
+  const hits = [];
   let m;
   while ((m = re.exec(n)) !== null) {
-    let cant = null;
-    const cantRaw = m[1];
-    const soloDig = cantRaw.match(/\((\d{1,3})\)/) || cantRaw.match(/^(\d{1,3})$/);
-    if (soloDig) cant = parseInt(soloDig[1], 10);
-    else cant = _palabraANumero(cantRaw.replace(/\s*\(\d+\)/, "").trim());
-    if (cant == null) continue;
-    let periodo = "mensual";
-    const per = m[3] || "";
-    if (/diari|por dia/.test(per)) periodo = "diario";
-    else if (/semanal|por semana/.test(per)) periodo = "semanal";
-    const cola = n.slice(m.index);
-    const disc = _disciplinaDe(cola) || _disciplinaDe(n);
-    const sub = _subtipoDe(cola) || _subtipoDe(n) || "";
-    reglas.push({ tipo: "tope_cant", disc, sub, cantidad: cant, unidad: m[2], periodo, crudo: m[0] });
+    const cant = _cantidadDeToken(m[1]);
+    if (cant == null || cant <= 0) continue;
+    hits.push({ start: m.index, end: m.index + m[0].length, cant, unidadRaw: m[2] });
   }
+  if (!hits.length) return { bloque, reglas: [] };
+
+  const reglas = [];
+  hits.forEach((h, i) => {
+    const prevEnd = i > 0 ? hits[i - 1].end : 0;
+    const nextStart = i + 1 < hits.length ? hits[i + 1].start : n.length;
+    const after = n.slice(h.end, nextStart);
+    let d = _discEnVentana(after, "primera");
+    if (!d) d = _discEnVentana(n.slice(prevEnd, h.start), "ultima");
+    if (!d) return; // cantidad sin disciplina asociable → se ignora
+    const post = n.slice(h.end, Math.min(nextStart, h.end + 24));
+    let periodo = "mensual";
+    if (/semanal|por semana/.test(post)) periodo = "semanal";
+    else if (/diari|por dia/.test(post)) periodo = "diario";
+    const esHora = /hs|hora/.test(h.unidadRaw);
+    reglas.push({
+      tipo: "tope_cant", disc: d.disc, sub: d.sub, cantidad: h.cant,
+      unidad: esHora ? "hs" : "sesiones", periodo,
+      crudo: bloque.slice(h.start, Math.min(nextStart, n.length)).replace(/\s+/g, " ").trim().slice(0, 80),
+    });
+  });
   return { bloque, reglas };
 }
 
@@ -1302,18 +1397,18 @@ function aplicarReglasObservacion(lineas, reglas) {
       const sOk = !rg.sub || _norm(l.sub || "") === _norm(rg.sub) || _norm(l.nombre || "").includes(rg.sub);
       return dOk && sOk;
     });
-    if (idx < 0) { ajustes.push({ estado: "sin_match", crudo: rg.crudo, cantNueva: rg.cantidad, periodo: rg.periodo }); return; }
+    if (idx < 0) { ajustes.push({ estado: "sin_match", crudo: rg.crudo, cantNueva: rg.cantidad, unidad: rg.unidad, periodo: rg.periodo }); return; }
     const l = out[idx];
     const cantNueva = Number(rg.cantidad) || 0;
     if (!cantNueva) { ajustes.push({ estado: "sin_cant", linea: l.nombre, crudo: rg.crudo }); return; }
     // Los topes que no son mensuales no se reescalan automáticamente: se avisa nomás.
     if (rg.periodo !== "mensual") {
-      ajustes.push({ estado: "aviso_no_mensual", linea: l.nombre, cantNueva, periodo: rg.periodo, crudo: rg.crudo });
+      ajustes.push({ estado: "aviso_no_mensual", linea: l.nombre, cantNueva, unidad: rg.unidad, periodo: rg.periodo, crudo: rg.crudo });
       return;
     }
     const cantVieja = Number(l.cantAut) || 0;
     if (cantVieja === cantNueva) {
-      ajustes.push({ estado: "coincide", linea: l.nombre, cant: cantNueva, crudo: rg.crudo });
+      ajustes.push({ estado: "coincide", linea: l.nombre, cant: cantNueva, unidad: rg.unidad, crudo: rg.crudo });
       return;
     }
     const totalViejo = Number(l.total) || 0;
@@ -1322,7 +1417,7 @@ function aplicarReglasObservacion(lineas, reglas) {
     ajustes.push({
       estado: cantNueva > cantVieja ? "ajuste_arriba" : "ajuste_abajo",
       linea: l.nombre, cantVieja, cantNueva, totalViejo, totalNuevo,
-      unitario: Number(l.unitario) || 0, periodo: rg.periodo, crudo: rg.crudo,
+      unitario: Number(l.unitario) || 0, unidad: rg.unidad, periodo: rg.periodo, crudo: rg.crudo,
     });
   });
   return { lineas: out, ajustes };
@@ -1390,16 +1485,19 @@ function construirValoresAutorizados(exp, dictDef) {
   if (modsDias.length) aclaraciones.push({ tipo: "dias", modulos: modsDias, dias: diasBase });
   if (modsRecorte.length) aclaraciones.push({ tipo: "recorte", modulos: modsRecorte });
 
-  // Tope de sesiones/cantidad que la Auditoría fijó por observación (texto libre bajo
-  // la tabla). Si hubo un ajuste real de cantidad, agrega la aclaración al considerando
-  // con el nombre de la prestación y el tope. Los ajustes ya están reflejados en las
-  // líneas y en mensualTotal (se aplicaron en parsearDictamenDefinitivo).
+  // Topes de cantidad que la Auditoría fijó por observación (texto libre bajo la tabla).
+  // Puede haber varios en una sola frase (enfermería en hs, fonoaudiología y kinesio en
+  // sesiones, etc.). Se consolidan en UNA aclaración con la lista. Los ajustes ya están
+  // reflejados en las líneas y en mensualTotal (aplicados en parsearDictamenDefinitivo).
   const ajustesReales = (dictDef.ajustesObservacion || []).filter(
     (a) => a.estado === "ajuste_arriba" || a.estado === "ajuste_abajo"
   );
-  ajustesReales.forEach((a) => {
-    aclaraciones.push({ tipo: "tope", prestacion: a.linea, cantidad: a.cantNueva, periodo: a.periodo });
-  });
+  if (ajustesReales.length) {
+    aclaraciones.push({
+      tipo: "tope",
+      topes: ajustesReales.map((a) => ({ prestacion: a.linea, cantidad: a.cantNueva, unidad: a.unidad, periodo: a.periodo })),
+    });
+  }
 
   return {
     fuente: "dictamen",
@@ -4049,7 +4147,7 @@ function CargarDictamenDefinitivo({ exp }) {
                 {reales.map((a, k) => (
                   <div key={k} style={{ fontSize: 13, color: "#334155", background: "#fff", border: "1px solid #fcd34d", borderRadius: 8, padding: "8px 10px", marginBottom: 6 }}>
                     <div style={{ fontWeight: 700 }}>
-                      {a.linea}: la tabla decía <b>{a.cantVieja}</b>, la observación fija un tope de <b>{a.cantNueva}</b> {a.periodo === "diario" ? "diarias" : a.periodo === "semanal" ? "semanales" : "mensuales"}.
+                      {a.linea}: la tabla decía <b>{a.cantVieja}</b>, la observación fija <b>{a.cantNueva}</b> {/hora|hs/i.test(String(a.unidad || "")) ? "horas" : "sesiones"} {a.periodo === "diario" ? "diarias" : a.periodo === "semanal" ? "semanales" : "mensuales"}.
                     </div>
                     <div style={{ marginTop: 3, color: "#475569" }}>
                       Se recalculó a {formatoPesos(a.totalNuevo)} ({a.cantNueva} × {formatoPesos(a.unitario)}) — antes {formatoPesos(a.totalViejo)}.
