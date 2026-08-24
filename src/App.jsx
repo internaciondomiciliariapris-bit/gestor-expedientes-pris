@@ -432,11 +432,11 @@ function porElloHtml(firmante) {
   );
 }
 
-function firmaResolucionHtml(firmante) {
+function firmaResolucionHtml(firmante, gapTop) {
   const lineas = firmante === "gerente"
     ? "Firmado digitalmente:<br>C.P.N Mariela Agustina Castillo<br>Gerente Administrativo<br>Dirección Gral. Prog. Integrado de Salud<br>SI.PRO.SA."
     : "Firmado digitalmente:<br>Dra. Noelia Bottone<br>Dirección Gral. Prog. Integrado de Salud<br>SI.PRO.SA";
-  return '<p style="font-weight:bold; line-height:1.75; margin-top:90pt; margin-left:5pt;">' + lineas + "</p>";
+  return '<p style="font-weight:bold; line-height:1.75; margin-top:' + (gapTop == null ? 90 : gapTop) + 'pt; margin-left:5pt;">' + lineas + "</p>";
 }
 
 /* ---------- IMPUTACIÓN PLURIANUAL ----------
@@ -576,8 +576,12 @@ function plantillaResolucion(d, logos) {
     art("Emitir la orden de compra respectiva.") +
     art("Comunicar y archivar.-", 20);
 
+  // La firma lleva 90pt de aire arriba en el modelo simple (página 2 corta, así queda
+  // bien abajo). En los modelos de dos firmas / dos subpartidas la página 2 lleva más
+  // contenido, así que se usa un hueco chico para que la firma no se corra a otra hoja.
+  const gapFirma = (d.subModo === "dos" || d.subModo === "dosMismo") ? 20 : 90;
   const pieFinal =
-    firmaResolucionHtml(d.firmante) +
+    firmaResolucionHtml(d.firmante, gapFirma) +
     lineaAzulDoc(12) +
     '<p style="font-size:10pt; line-height:1.2; text-align:justify;">' + PIE_ANIO + "</p>";
 
@@ -675,7 +679,7 @@ function plantillaResolucion(d, logos) {
     const firmas = esc(d.firmaA).toUpperCase() + " Y " + esc(d.firmaB).toUpperCase();
 
     const tabla = (titulo, detalle, mensual, totalM) =>
-      '<table style="width:100%; border-collapse:collapse; margin-top:10pt;"><tr>' +
+      '<table style="width:100%; border-collapse:collapse; margin-top:6pt;"><tr>' +
       '<td style="border:1pt solid #000; padding:2pt 4pt; width:52%;">' + esc(titulo) + "</td>" +
       '<td style="border:1pt solid #000; padding:2pt 4pt; width:22%;">PRECIO POR MES</td>' +
       '<td style="border:1pt solid #000; padding:2pt 4pt; width:26%;">PRECIO TOTAL POR ' + meses + " MESES</td>" +
@@ -710,13 +714,13 @@ function plantillaResolucion(d, logos) {
       aclara + porElloHtml(d.firmante) +
       artDejarSinEfecto() +
       art("ADJUDICAR a las firmas comerciales <b>" + firmas + "</b>, la provisión de los siguientes servicios:") +
+      tabla(d.tituloA, d.detalleA, d.mensualA, totalA) +
       "</div>";
 
     const pag2 =
       '<div class="pagina ultima">' + encabezadoDoc(logos) +
-      tabla(d.tituloA, d.detalleA, d.mensualA, totalA) +
       tabla(d.tituloB, d.detalleB, d.mensualB, totalB) +
-      '<p style="text-align:justify; line-height:1.18; margin-top:14pt;">Por un monto total por ' + meses + " meses <b>" +
+      '<p style="text-align:justify; line-height:1.18; margin-top:8pt;">Por un monto total por ' + meses + " meses <b>" +
       formatoPesos(total) + "</b> (" + letras + "). Dicho servicio comprenderá a partir de la fecha de la orden de compra, " +
       "comprendiendo desde los Meses de <b>" + per + "</b>.</p>" +
       art("Imputar a <b>Subpartida " + esc(d.subA) + "</b> la suma de <b>" + formatoPesos(totalA) + "</b> (" + letrasA +
