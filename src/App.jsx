@@ -506,7 +506,6 @@ function incisosPlurianual(mensual, total, periodoTexto, periodoMeses) {
   if (Math.abs(mensual * Number(periodoMeses || 0) - total) > 1) return null;
 
   const anioVigente = tramos[0].anio;                    // el período arranca en el ejercicio vigente
-  const letra = ["a", "b", "c", "d", "e"];
   let acumulado = 0;
   return tramos.map((t, i) => {
     const n = t.meses.length;
@@ -516,7 +515,7 @@ function incisosPlurianual(mensual, total, periodoTexto, periodoMeses) {
     const cargo = (t.anio <= anioVigente)
       ? "con cargo al Presupuesto vigente del ejercicio " + t.anio + "."
       : "condicionada a la oportuna habilitación de créditos presupuestarios correspondientes al Presupuesto General del Ejercicio " + t.anio + ".";
-    return "<br>" + letra[i] + ") <b>Ejercicio Presupuestario " + t.anio + ":</b> La suma de <b>" +
+    return "<br>La suma de <b>" +
       formatoPesos(monto) + "</b> (" + numeroALetras(monto) + "), correspondiente a " +
       numeroEnLetrasSimple(n) + " (" + n + ") " + (n === 1 ? "mes" : "meses") +
       " de servicio (" + rangoMesesTexto(t.meses, t.anio) + "), " + cargo;
@@ -528,7 +527,7 @@ function incisosPlurianual(mensual, total, periodoTexto, periodoMeses) {
 // después del "(por N meses)" en el modelo de un solo ejercicio (p.ej. "." o "").
 function colaSubpartidaPlurianual(mensual, total, periodoTexto, periodoMeses, mesesTxt, colaUnEjercicio) {
   const incisos = incisosPlurianual(mensual, total, periodoTexto, periodoMeses);
-  if (incisos) return ", con carácter de <b>gasto plurianual</b>, con el siguiente detalle:" + incisos;
+  if (incisos) return ", con el siguiente detalle:" + incisos;
   return " (por " + mesesTxt + " meses)" + (colaUnEjercicio || "");
 }
 
@@ -538,7 +537,7 @@ function cuerpoImputacionPlurianual(d) {
   if (!incisos) return null;
   const total = Number(d.total || 0);
   return "Imputar el gasto total de <b>" + formatoPesos(total) + "</b> (" + numeroALetras(total) +
-    ") con carácter de <b>gasto plurianual</b>, con cargo a la " + esc(d.imputacion) +
+    ") con cargo a la " + esc(d.imputacion) +
     ", con el siguiente detalle:" + incisos;
 }
 
@@ -559,6 +558,13 @@ function plantillaResolucion(d, logos) {
   let n = 1;
   const art = (texto, mt) =>
     '<p style="text-align:justify; line-height:1.18; margin-top:' + (mt || 14) + 'pt;"><b>ARTICULO ' + (n++) + 'º)</b> ' + texto + "</p>";
+
+  // ARTÍCULO 1º opcional: deja sin efecto una resolución interna anterior y corre
+  // la numeración del resto (ADJUDICAR pasa a 2º, Imputar a 3º, etc.). Se muestra
+  // solo si se cargó el número de la resolución a dejar sin efecto.
+  const nroDejarSinEfecto = String(d.dejarSinEfecto || "").trim().replace(/\/?\s*DGPRIS\.?$/i, "").trim();
+  const artDejarSinEfecto = () =>
+    nroDejarSinEfecto ? art("Dejar sin efecto la Resolución Interna Nº " + esc(nroDejarSinEfecto) + "/DGPRIS.") : "";
 
   const encabezadoRes =
     '<p style="text-align:right; margin-top:10pt;">San Miguel de Tucumán, ' + esc(d.fechaTexto) + "</p>" +
@@ -620,7 +626,7 @@ function plantillaResolucion(d, logos) {
       '<p style="' + q + '">Que obra informe jurídico favorable a la contratación. ---------------</p>' +
       '<p style="' + q + '">Que por lo expuesto, no existen objeciones legales que formular para que la Gerencia Administrativa Contable del Programa Integrado de Salud, en virtud de razones de urgencia invocadas, contrate con la firma <b>' +
       adj + "</b>, la adquisición del servicio de Internación Domiciliaria y Módulo de alimentación domiciliaria, bajo la figura de Contratación Directa de conformidad a lo normado por la Res. N°388/SPS/-05.</p>" +
-      aclara + porElloHtml(d.firmante) +
+      aclara + porElloHtml(d.firmante) + artDejarSinEfecto() +
       art("ADJUDICAR a la firma <b>" + adj + "</b>, la provisión de los siguientes servicios:") +
       '<table style="width:100%; border-collapse:collapse; margin-top:8pt;"><tr>' +
       '<td style="border:1pt solid #000; padding:2pt 4pt; width:52%;">SERVICIO</td>' +
@@ -642,7 +648,7 @@ function plantillaResolucion(d, logos) {
       "Imputar a <b>Subpartida " + esc(d.subB) + "</b> la suma de <b>" + formatoPesos(totalSubB) + "</b> (" + letrasSubB +
       ") correspondiente al Módulo de Alimentación domiciliaria, para la firma <b>" + adj + "</b>" +
       (incisosSubB
-        ? ", con carácter de <b>gasto plurianual</b>; a Jurisdicción 67 - Unid. Org. 965 - Recurso 10 - Finalidad/Función 314 - Programa 19 - Actividad 01 - Partida 300, con el siguiente detalle:" + incisosSubB
+        ? "; a Jurisdicción 67 - Unid. Org. 965 - Recurso 10 - Finalidad/Función 314 - Programa 19 - Actividad 01 - Partida 300, con el siguiente detalle:" + incisosSubB
         : " (por " + meses + " meses); a Jurisdicción 67 - Unid. Org. 965 - Recurso 10 - Finalidad/Función 314 - Programa 19 - Actividad 01 - Partida 300 - con cargo al <b>Presupuesto del año " + esc(d.anioPresupuesto) + "</b>.") + "</p>" +
       cierreArticulos() +
       pieFinal +
@@ -702,6 +708,7 @@ function plantillaResolucion(d, logos) {
       "</b>., la adquisición del servicio de Internación Domiciliaria y Modulo de alimentación domiciliaria, bajo la figura de " +
       "Contratación Directa de conformidad a lo normado por la Res. N°388/SPS/-05.</p>" +
       aclara + porElloHtml(d.firmante) +
+      artDejarSinEfecto() +
       art("ADJUDICAR a las firmas comerciales <b>" + firmas + "</b>, la provisión de los siguientes servicios:") +
       tabla(d.tituloA, d.detalleA, d.mensualA, totalA) +
       "</div>";
@@ -718,7 +725,7 @@ function plantillaResolucion(d, logos) {
         "Imputar a <b>Subpartida " + esc(d.subB) + "</b> la suma de <b>" + formatoPesos(totalB) + "</b> para <b>" +
         esc(d.firmaB).toUpperCase() + "</b>" +
         (incisosDobleB
-          ? ", con carácter de <b>gasto plurianual</b>; a Jurisdicción 67 - Unid. Org. 965 - Recurso 10 - Finalidad/Función 314 - Programa 19 - Actividad 01 - Partida 300, con el siguiente detalle:" + incisosDobleB
+          ? "; a Jurisdicción 67 - Unid. Org. 965 - Recurso 10 - Finalidad/Función 314 - Programa 19 - Actividad 01 - Partida 300, con el siguiente detalle:" + incisosDobleB
           : " (por " + meses + " meses); a Jurisdicción 67 - Unid. Org. 965 - Recurso 10 - " +
             "Finalidad/Función 314 - Programa 19 - Actividad 01 - Partida 300 - con cargo al <b>Presupuesto del año " + esc(d.anioPresupuesto) + "</b>.")) +
       cierreArticulos() +
@@ -757,6 +764,7 @@ function plantillaResolucion(d, logos) {
     adj + "</b>, la adquisición del servicio de " + mod +
     ", bajo la figura de Contratación Directa de conformidad a lo normado por la Res. N°388/SPS/-05.</p>" +
     aclara + porElloHtml(d.firmante) +
+    artDejarSinEfecto() +
     art("ADJUDICAR a la firma <b>" + adj + "</b>, la provisión del siguiente servicio:") +
     '<table style="width:100%; border-collapse:collapse; margin-top:8pt;"><tr>' +
     '<td style="border:1pt solid #000; padding:2pt 4pt; width:52%;">SERVICIO</td>' +
@@ -1772,6 +1780,7 @@ const datosResolucion = (exp, extra = {}) => {
     subpartida: extra.subpartida ?? r.subpartida ?? "322",
     imputacion: extra.imputacion ?? r.imputacion ?? imputacionResolucionPorSubpartida(extra.subpartida ?? r.subpartida ?? "322"),
     anioPresupuesto: extra.anio ?? r.anio ?? String(new Date().getFullYear()),
+    dejarSinEfecto: extra.dejarSinEfecto ?? r.dejarSinEfecto ?? "",
     // modelo doble (322 y 342)
     detalleVisto: extra.detalleVisto ?? r.detalleVisto ?? ("Internación Domiciliaria; " + (nombresTxt || limpiarModulo(exp.modulo))),
     detalleModulo: extra.detalleModulo ?? r.detalleModulo ?? (itemsTxt || limpiarModulo(exp.modulo)),
@@ -6617,6 +6626,7 @@ function GenerarResolucion({ exp }) {
     fsCuadro: r.fojas?.cuadro || "",
     fsDictamen: r.fojas?.dictamen || "",
     anio: r.anio || String(new Date().getFullYear()),
+    dejarSinEfecto: r.dejarSinEfecto || "",
     imputacion: r.imputacion || imputacionResolucionPorSubpartida(r.subpartida || "322"),
     // modelo doble (322 y 342)
     subA: r.subA || "342",
@@ -6676,6 +6686,7 @@ function GenerarResolucion({ exp }) {
           fsSolicitud: f.fsSolicitud, fsPresupuesto: f.fsPresupuesto,
           fsCuadro: f.fsCuadro, fsDictamen: f.fsDictamen,
           imputacion: f.imputacion, anio: f.anio,
+          dejarSinEfecto: f.dejarSinEfecto,
           subA: f.subA, firmaA: f.firmaA,
           mensualA: esDobleMismo ? Number(f.montoSub342 || 0) : f.mensualA,
           tituloA: f.tituloA || ("SERVICIOS INTERNACION DOMICILIARIA: " + f.firmaA.toUpperCase()),
@@ -6702,6 +6713,7 @@ function GenerarResolucion({ exp }) {
               montoLetras: data.montoLetras || "",
               fojas: { solicitud: f.fsSolicitud, presupuesto: f.fsPresupuesto, cuadro: f.fsCuadro, dictamen: f.fsDictamen },
               imputacion: f.imputacion, anio: f.anio,
+              dejarSinEfecto: f.dejarSinEfecto || "",
               subA: f.subA, firmaA: f.firmaA, tituloA: f.tituloA, detalleA: f.detalleA, mensualA: f.mensualA,
               detalleUnico: f.detalleUnico, mensualUnico: f.mensualUnico ?? mensualCab ?? "", montoSub342: f.montoSub342,
               subB: f.subB, firmaB: f.firmaB, tituloB: f.tituloB, detalleB: f.detalleB, mensualB: f.mensualB,
@@ -6764,6 +6776,31 @@ function GenerarResolucion({ exp }) {
           <label style={S.label}>Presupuesto (año)</label>
           <input style={S.input} value={f.anio} onChange={set("anio")} placeholder="2026" />
         </div>
+      </div>
+
+      <div style={{ marginTop: 12, background: f.dejarSinEfecto ? "#fef3c7" : "#f8fafc", border: "1.5px solid " + (f.dejarSinEfecto ? "#f59e0b" : "#e2e8f0"), borderRadius: 8, padding: 10 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#334155" }}>
+          <input
+            type="checkbox"
+            checked={!!f.dejarSinEfecto}
+            onChange={(e) => setF({ ...f, dejarSinEfecto: e.target.checked ? (f.dejarSinEfecto || " ") : "" })}
+          />
+          Dejar sin efecto una resolución interna anterior (agrega el ARTÍCULO 1º y corre la numeración)
+        </label>
+        {!!f.dejarSinEfecto && (
+          <div style={{ marginTop: 8 }}>
+            <label style={S.label}>N° de la resolución a dejar sin efecto</label>
+            <input
+              style={S.input}
+              value={f.dejarSinEfecto.trim()}
+              onChange={(e) => setF({ ...f, dejarSinEfecto: e.target.value })}
+              placeholder="Ej: 3123/DGPRIS  (o solo 3123)"
+            />
+            <div style={{ fontSize: 12.5, color: "#92400e", marginTop: 4 }}>
+              Queda: «ARTÍCULO 1º) Dejar sin efecto la Resolución Interna Nº {String(f.dejarSinEfecto).trim().replace(/\/?\s*DGPRIS\.?$/i, "").trim() || "…"}/DGPRIS.» — ADJUDICAR pasa a 2º e Imputar a 3º.
+            </div>
+          </div>
+        )}
       </div>
 
       <label style={S.label}>¿Quién firma la resolución? (cambia el POR ELLO y la firma final)</label>
