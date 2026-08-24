@@ -680,9 +680,9 @@ function plantillaResolucion(d, logos) {
       '<td style="border:1pt solid #000; padding:2pt 4pt; width:22%;">PRECIO POR MES</td>' +
       '<td style="border:1pt solid #000; padding:2pt 4pt; width:26%;">PRECIO TOTAL POR ' + meses + " MESES</td>" +
       "</tr><tr>" +
-      '<td style="border:1pt solid #000; padding:6pt 4pt 12pt;">' + esc(detalle).replace(/\n/g, "<br>") + "</td>" +
-      '<td style="border:1pt solid #000; padding:6pt 4pt 12pt; text-align:center; font-weight:bold;">' + formatoPesos(mensual) + "</td>" +
-      '<td style="border:1pt solid #000; padding:6pt 4pt 12pt; text-align:center; font-weight:bold;">' + formatoPesos(totalM) + "</td>" +
+      '<td style="border:1pt solid #000; padding:3pt 4pt 4pt;">' + esc(detalle).replace(/\n/g, "<br>") + "</td>" +
+      '<td style="border:1pt solid #000; padding:3pt 4pt 4pt; text-align:center; font-weight:bold;">' + formatoPesos(mensual) + "</td>" +
+      '<td style="border:1pt solid #000; padding:3pt 4pt 4pt; text-align:center; font-weight:bold;">' + formatoPesos(totalM) + "</td>" +
       "</tr></table>";
 
     const pag1 =
@@ -710,11 +710,11 @@ function plantillaResolucion(d, logos) {
       aclara + porElloHtml(d.firmante) +
       artDejarSinEfecto() +
       art("ADJUDICAR a las firmas comerciales <b>" + firmas + "</b>, la provisión de los siguientes servicios:") +
-      tabla(d.tituloA, d.detalleA, d.mensualA, totalA) +
       "</div>";
 
     const pag2 =
       '<div class="pagina ultima">' + encabezadoDoc(logos) +
+      tabla(d.tituloA, d.detalleA, d.mensualA, totalA) +
       tabla(d.tituloB, d.detalleB, d.mensualB, totalB) +
       '<p style="text-align:justify; line-height:1.18; margin-top:14pt;">Por un monto total por ' + meses + " meses <b>" +
       formatoPesos(total) + "</b> (" + letras + "). Dicho servicio comprenderá a partir de la fecha de la orden de compra, " +
