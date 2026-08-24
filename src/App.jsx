@@ -439,6 +439,109 @@ function firmaResolucionHtml(firmante) {
   return '<p style="font-weight:bold; line-height:1.75; margin-top:90pt; margin-left:5pt;">' + lineas + "</p>";
 }
 
+/* ---------- IMPUTACIÓN PLURIANUAL ----------
+   Cuando el período de servicio cruza dos (o más) ejercicios presupuestarios
+   —p.ej. "Septiembre 2026 a Febrero 2027"— el gasto debe imputarse como
+   plurianual, con un inciso por cada ejercicio (año calendario). Se detecta a
+   partir del mes/año inicial que figure en el texto del período y de la
+   cantidad de meses. Si no puede determinarse el comienzo, o si cae en un solo
+   ejercicio, se devuelve null y el Artículo 2º usa la imputación de siempre. */
+const MESES_ES = ["enero", "febrero", "marzo", "abril", "mayo", "junio",
+  "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+
+const capMes = (i) => MESES_ES[i].charAt(0).toUpperCase() + MESES_ES[i].slice(1);
+
+// Mes (0-11) que aparece PRIMERO en el texto (por posición), no por índice; -1 si no hay.
+function mesIndiceEs(txt) {
+  const t = String(txt || "").toLowerCase();
+  let best = -1, bestPos = Infinity;
+  for (let i = 0; i < 12; i++) {
+    const p = t.indexOf(MESES_ES[i]);
+    if (p >= 0 && p < bestPos) { bestPos = p; best = i; }
+  }
+  return best;
+}
+
+// { mes:0-11, anio } tomados del comienzo del período (primer mes + primer año).
+function inicioPeriodo(periodoTexto) {
+  const t = String(periodoTexto || "").toLowerCase();
+  const mes = mesIndiceEs(t);
+  const anioM = t.match(/(20\d{2})/);
+  if (mes < 0 || !anioM) return null;
+  return { mes, anio: Number(anioM[1]) };
+}
+
+// Reparte los meses de servicio por ejercicio: [{ anio, meses:[0-11,...] }, ...]
+function tramosPorEjercicio(periodoTexto, periodoMeses) {
+  const ini = inicioPeriodo(periodoTexto);
+  const n = Number(periodoMeses || 0);
+  if (!ini || !(n > 0)) return null;
+  const tramos = [];
+  let mes = ini.mes, anio = ini.anio;
+  for (let k = 0; k < n; k++) {
+    let t = tramos.find((x) => x.anio === anio);
+    if (!t) { t = { anio, meses: [] }; tramos.push(t); }
+    t.meses.push(mes);
+    mes++; if (mes > 11) { mes = 0; anio++; }
+  }
+  return tramos;
+}
+
+// "Septiembre a Diciembre de 2026" · "Enero y Febrero de 2027" · "Enero de 2027"
+function rangoMesesTexto(meses, anio) {
+  if (meses.length === 1) return capMes(meses[0]) + " de " + anio;
+  if (meses.length === 2) return capMes(meses[0]) + " y " + capMes(meses[1]) + " de " + anio;
+  return capMes(meses[0]) + " a " + capMes(meses[meses.length - 1]) + " de " + anio;
+}
+
+// Incisos a)/b)/… del desglose por ejercicio para un importe (mensual × meses = total).
+// Devuelve el HTML de los incisos, o null si el período cae en un solo ejercicio o no cuadra.
+function incisosPlurianual(mensual, total, periodoTexto, periodoMeses) {
+  const tramos = tramosPorEjercicio(periodoTexto, periodoMeses);
+  if (!tramos || tramos.length < 2) return null;         // un solo ejercicio → imputación normal
+  mensual = Number(mensual || 0);
+  total = Number(total || 0);
+  if (!(mensual > 0) || !(total > 0)) return null;
+  // Coherencia: total ≈ mensual × meses. Si no cuadra, no arriesgamos el reparto.
+  if (Math.abs(mensual * Number(periodoMeses || 0) - total) > 1) return null;
+
+  const anioVigente = tramos[0].anio;                    // el período arranca en el ejercicio vigente
+  const letra = ["a", "b", "c", "d", "e"];
+  let acumulado = 0;
+  return tramos.map((t, i) => {
+    const n = t.meses.length;
+    // El último tramo absorbe cualquier diferencia de redondeo.
+    const monto = (i === tramos.length - 1) ? (total - acumulado) : mensual * n;
+    acumulado += monto;
+    const cargo = (t.anio <= anioVigente)
+      ? "con cargo al Presupuesto vigente del ejercicio " + t.anio + "."
+      : "condicionada a la oportuna habilitación de créditos presupuestarios correspondientes al Presupuesto General del Ejercicio " + t.anio + ".";
+    return "<br>" + letra[i] + ") <b>Ejercicio Presupuestario " + t.anio + ":</b> La suma de <b>" +
+      formatoPesos(monto) + "</b> (" + numeroALetras(monto) + "), correspondiente a " +
+      numeroEnLetrasSimple(n) + " (" + n + ") " + (n === 1 ? "mes" : "meses") +
+      " de servicio (" + rangoMesesTexto(t.meses, t.anio) + "), " + cargo;
+  }).join("");
+}
+
+// Cola de una imputación por subpartida: desglose plurianual si cruza ejercicios,
+// o el "(por N meses)" de siempre si es un solo ejercicio. `mtrailing` es lo que va
+// después del "(por N meses)" en el modelo de un solo ejercicio (p.ej. "." o "").
+function colaSubpartidaPlurianual(mensual, total, periodoTexto, periodoMeses, mesesTxt, colaUnEjercicio) {
+  const incisos = incisosPlurianual(mensual, total, periodoTexto, periodoMeses);
+  if (incisos) return ", con carácter de <b>gasto plurianual</b>, con el siguiente detalle:" + incisos;
+  return " (por " + mesesTxt + " meses)" + (colaUnEjercicio || "");
+}
+
+// Cuerpo HTML del Artículo 2º plurianual (modelo simple), o null si es un solo ejercicio.
+function cuerpoImputacionPlurianual(d) {
+  const incisos = incisosPlurianual(d.mensual, d.total, d.periodoTexto, d.periodoMeses);
+  if (!incisos) return null;
+  const total = Number(d.total || 0);
+  return "Imputar el gasto total de <b>" + formatoPesos(total) + "</b> (" + numeroALetras(total) +
+    ") con carácter de <b>gasto plurianual</b>, con cargo a la " + esc(d.imputacion) +
+    ", con el siguiente detalle:" + incisos;
+}
+
 function plantillaResolucion(d, logos) {
   const q = "margin:0; text-align:justify; text-indent:105pt; line-height:1.18;";
   // Aclaración 30/31: va al final de los considerandos, entre comillas y con
@@ -486,6 +589,10 @@ function plantillaResolucion(d, logos) {
     const totalSubB = mensualSubB * meses6;
     const letrasSubA = numeroALetras(totalSubA);
     const letrasSubB = numeroALetras(totalSubB);
+    // Desglose plurianual de la subpartida B (solo si tiene importe y cruza ejercicios).
+    const incisosSubB = totalSubB > 0
+      ? incisosPlurianual(mensualSubB, totalSubB, d.periodoTexto, d.periodoMeses)
+      : null;
     const adj = esc(d.firmaA).toUpperCase();
     const mod = esc(moduloSinPeriodo(d.modulo, d.periodoTexto));
 
@@ -529,11 +636,14 @@ function plantillaResolucion(d, logos) {
       formatoPesos(total) + "</b> (" + letras + "). Dicho servicio comprenderá a partir de la fecha de la orden de compra, comprendiendo desde los Meses de <b>" + per + "</b>.</p>" +
       '<p style="text-align:justify; line-height:1.18; margin-top:14pt;"><b>ARTICULO ' + (n++) + 'º)</b> ' +
       "Imputar a <b>Subpartida " + esc(d.subA) + "</b> la suma de <b>" + formatoPesos(totalSubA) + "</b> (" + letrasSubA +
-      ") correspondiente al servicio de Internación Domiciliaria, para la firma <b>" + adj + "</b> (por " + meses + " meses).</p>" +
+      ") correspondiente al servicio de Internación Domiciliaria, para la firma <b>" + adj + "</b>" +
+      colaSubpartidaPlurianual(mensualSubA || mensualUnico, totalSubA, d.periodoTexto, d.periodoMeses, meses, ".") + "</p>" +
       '<p style="text-align:justify; line-height:1.18; margin-top:0; text-indent:88pt;">' +
       "Imputar a <b>Subpartida " + esc(d.subB) + "</b> la suma de <b>" + formatoPesos(totalSubB) + "</b> (" + letrasSubB +
-      ") correspondiente al Módulo de Alimentación domiciliaria, para la firma <b>" + adj + "</b> (por " + meses + " meses)" +
-      "; a Jurisdicción 67 - Unid. Org. 965 - Recurso 10 - Finalidad/Función 314 - Programa 19 - Actividad 01 - Partida 300 - con cargo al <b>Presupuesto del año " + esc(d.anioPresupuesto) + "</b>.</p>" +
+      ") correspondiente al Módulo de Alimentación domiciliaria, para la firma <b>" + adj + "</b>" +
+      (incisosSubB
+        ? ", con carácter de <b>gasto plurianual</b>; a Jurisdicción 67 - Unid. Org. 965 - Recurso 10 - Finalidad/Función 314 - Programa 19 - Actividad 01 - Partida 300, con el siguiente detalle:" + incisosSubB
+        : " (por " + meses + " meses); a Jurisdicción 67 - Unid. Org. 965 - Recurso 10 - Finalidad/Función 314 - Programa 19 - Actividad 01 - Partida 300 - con cargo al <b>Presupuesto del año " + esc(d.anioPresupuesto) + "</b>.") + "</p>" +
       cierreArticulos() +
       pieFinal +
       "</div>";
@@ -552,6 +662,10 @@ function plantillaResolucion(d, logos) {
     const total = totalA + totalB;
     const letras = numeroALetras(total);
     const letrasA = numeroALetras(totalA);
+    // Desglose plurianual de la subpartida B (solo si tiene importe y cruza ejercicios).
+    const incisosDobleB = totalB > 0
+      ? incisosPlurianual(d.mensualB, totalB, d.periodoTexto, d.periodoMeses)
+      : null;
     const firmas = esc(d.firmaA).toUpperCase() + " Y " + esc(d.firmaB).toUpperCase();
 
     const tabla = (titulo, detalle, mensual, totalM) =>
@@ -599,10 +713,14 @@ function plantillaResolucion(d, logos) {
       formatoPesos(total) + "</b> (" + letras + "). Dicho servicio comprenderá a partir de la fecha de la orden de compra, " +
       "comprendiendo desde los Meses de <b>" + per + "</b>.</p>" +
       art("Imputar a <b>Subpartida " + esc(d.subA) + "</b> la suma de <b>" + formatoPesos(totalA) + "</b> (" + letrasA +
-        ") para <b>" + esc(d.firmaA).toUpperCase() + "</b> (por " + meses + " meses).<br>" +
+        ") para <b>" + esc(d.firmaA).toUpperCase() + "</b>" +
+        colaSubpartidaPlurianual(d.mensualA, totalA, d.periodoTexto, d.periodoMeses, meses, ".") + "<br>" +
         "Imputar a <b>Subpartida " + esc(d.subB) + "</b> la suma de <b>" + formatoPesos(totalB) + "</b> para <b>" +
-        esc(d.firmaB).toUpperCase() + "</b> (por " + meses + " meses); a Jurisdicción 67 - Unid. Org. 965 - Recurso 10 - " +
-        "Finalidad/Función 314 - Programa 19 - Actividad 01 - Partida 300 - con cargo al <b>Presupuesto del año " + esc(d.anioPresupuesto) + "</b>.") +
+        esc(d.firmaB).toUpperCase() + "</b>" +
+        (incisosDobleB
+          ? ", con carácter de <b>gasto plurianual</b>; a Jurisdicción 67 - Unid. Org. 965 - Recurso 10 - Finalidad/Función 314 - Programa 19 - Actividad 01 - Partida 300, con el siguiente detalle:" + incisosDobleB
+          : " (por " + meses + " meses); a Jurisdicción 67 - Unid. Org. 965 - Recurso 10 - " +
+            "Finalidad/Función 314 - Programa 19 - Actividad 01 - Partida 300 - con cargo al <b>Presupuesto del año " + esc(d.anioPresupuesto) + "</b>.")) +
       cierreArticulos() +
       pieFinal +
       "</div>";
@@ -654,8 +772,9 @@ function plantillaResolucion(d, logos) {
     '<div class="pagina ultima">' + encabezadoDoc(logos) +
     '<p style="text-align:justify; line-height:1.18; margin-top:12pt;">Por un monto total por ' + meses +
     " meses <b>" + monto + "</b> (" + letras + "). Dicho servicio comprenderá a partir de la fecha de la orden de compra, comprendiendo desde los Meses de <b>" + per + "</b>.</p>" +
-    art("Imputar dicha suma <b>" + monto + "</b> (" + letras + ") a " + esc(d.imputacion) +
-      ", con cargo al <b>Presupuesto del año " + esc(d.anioPresupuesto) + "</b>.") +
+    art(cuerpoImputacionPlurianual(d) ||
+      ("Imputar dicha suma <b>" + monto + "</b> (" + letras + ") a " + esc(d.imputacion) +
+        ", con cargo al <b>Presupuesto del año " + esc(d.anioPresupuesto) + "</b>.")) +
     cierreArticulos() +
     pieFinal +
     "</div>";
