@@ -304,6 +304,7 @@ const envolverHtml = (css, body, apaisado) =>
   '<!DOCTYPE html><html><head><meta charset="utf-8"><style>' +
   "@page { size: A4" + (apaisado ? " landscape" : "") + "; margin: 0; } body { margin:0; padding:0; } " +
   ".pagina { page-break-after: always; } .pagina.ultima { page-break-after: auto; } " +
+  ".hoja table { page-break-inside: avoid; break-inside: avoid; } " +
   css + "</style></head><body>" + body + "</body></html>";
 
 /* ---------- NOTA DE AFECTACIÓN (Times New Roman 12, formato del Word original) ---------- */
@@ -542,7 +543,7 @@ function cuerpoImputacionPlurianual(d) {
 }
 
 function plantillaResolucion(d, logos) {
-  const q = "margin:0; text-align:justify; text-indent:105pt; line-height:1.18;";
+  const q = "margin:0; text-align:justify; text-indent:105pt; line-height:1.15;";
   // Aclaración 30/31: va al final de los considerandos, entre comillas y con
   // tipografía distinta (Arial itálica) para que se identifique del resto.
   const aclara = (Array.isArray(d.aclaracionDias) ? d.aclaracionDias : (d.aclaracionDias ? [d.aclaracionDias] : []))
@@ -550,7 +551,7 @@ function plantillaResolucion(d, logos) {
     .join("");
   const css =
     ".hoja { font-family:'Times New Roman', Times, serif; font-size:12pt; color:#000; } " +
-    ".hoja .pagina { padding: 26pt 79pt 30pt 85pt; } .hoja p { margin:0; } .hoja td { font-size:12pt; }";
+    ".hoja .pagina { padding: 26pt 79pt 22pt 85pt; } .hoja p { margin:0; } .hoja td { font-size:12pt; line-height:1.15; }";
   const pac = esc(d.paciente).toUpperCase();
   const per = esc(d.periodoTexto || d.periodoMeses + " meses");
   const meses = esc(d.periodoMeses);
@@ -679,7 +680,7 @@ function plantillaResolucion(d, logos) {
     const firmas = esc(d.firmaA).toUpperCase() + " Y " + esc(d.firmaB).toUpperCase();
 
     const tabla = (titulo, detalle, mensual, totalM) =>
-      '<table style="width:100%; border-collapse:collapse; margin-top:6pt;"><tr>' +
+      '<table style="width:100%; border-collapse:collapse; margin-top:4pt;"><tr>' +
       '<td style="border:1pt solid #000; padding:2pt 4pt; width:52%;">' + esc(titulo) + "</td>" +
       '<td style="border:1pt solid #000; padding:2pt 4pt; width:22%;">PRECIO POR MES</td>' +
       '<td style="border:1pt solid #000; padding:2pt 4pt; width:26%;">PRECIO TOTAL POR ' + meses + " MESES</td>" +
@@ -695,7 +696,7 @@ function plantillaResolucion(d, logos) {
       '<p style="text-align:justify; text-indent:52pt; line-height:1.18;">El <b>Expediente N° ' + esc(d.nroExpediente) +
       "</b>, en cual se solicita la <b>" + esc(d.tipoTramite) + "</b> de las prestaciones brindadas de " + esc(d.detalleVisto) +
       " para el paciente, <b>" + pac + "</b>. Y,</p>" +
-      '<p style="font-weight:bold; text-decoration:underline; margin-top:14pt;">CONSIDERANDO:</p>' +
+      '<p style="font-weight:bold; text-decoration:underline; margin-top:10pt;">CONSIDERANDO:</p>' +
       '<p style="' + q + '">Que se solicita la provisión de Servicio de Internación Domiciliaria, modulo: ' + esc(d.detalleModulo) +
       " para el paciente, <b>" + pac + "</b> para los <b>periodos de " + per + "</b>.</p>" +
       '<p style="' + q + '">Que a fs. ' + esc(d.fsSolicitud) +
@@ -713,7 +714,7 @@ function plantillaResolucion(d, logos) {
       "Contratación Directa de conformidad a lo normado por la Res. N°388/SPS/-05.</p>" +
       aclara + porElloHtml(d.firmante) +
       artDejarSinEfecto() +
-      art("ADJUDICAR a las firmas comerciales <b>" + firmas + "</b>, la provisión de los siguientes servicios:") +
+      art("ADJUDICAR a las firmas comerciales <b>" + firmas + "</b>, la provisión de los siguientes servicios:", 10) +
       tabla(d.tituloA, d.detalleA, d.mensualA, totalA) +
       "</div>";
 
