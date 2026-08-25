@@ -420,14 +420,14 @@ function plantillaPase(d, logos) {
 function porElloHtml(firmante) {
   if (firmante === "gerente") {
     return (
-      '<p style="text-align:center; font-weight:bold; margin-top:14pt;">POR ELLO:</p>' +
+      '<p style="text-align:center; font-weight:bold; margin-top:8pt;">POR ELLO:</p>' +
       '<p style="text-align:center; font-weight:bold;">LA GERENCIA ADMINISTRATIVA</p>' +
       '<p style="text-align:center; font-weight:bold;">DEL PROGRAMA INTEGRADO DE SALUD.</p>' +
       '<p style="text-align:center; font-weight:bold; text-decoration:underline;">RESUELVE:</p>'
     );
   }
   return (
-    '<p style="text-align:center; font-weight:bold; margin-top:14pt;">POR ELLO: LA DIRECCION</p>' +
+    '<p style="text-align:center; font-weight:bold; margin-top:8pt;">POR ELLO: LA DIRECCION</p>' +
     '<p style="text-align:center; font-weight:bold;">DEL PROGRAMA INTEGRADO DE SALUD.</p>' +
     '<p style="text-align:center; font-weight:bold; text-decoration:underline;">RESUELVE:</p>'
   );
@@ -543,7 +543,7 @@ function cuerpoImputacionPlurianual(d) {
 }
 
 function plantillaResolucion(d, logos) {
-  const q = "margin:0; text-align:justify; text-indent:105pt; line-height:1.15;";
+  const q = "margin:0; text-align:justify; text-indent:105pt; line-height:1.14;";
   // Aclaración 30/31: va al final de los considerandos, entre comillas y con
   // tipografía distinta (Arial itálica) para que se identifique del resto.
   const aclara = (Array.isArray(d.aclaracionDias) ? d.aclaracionDias : (d.aclaracionDias ? [d.aclaracionDias] : []))
@@ -551,7 +551,7 @@ function plantillaResolucion(d, logos) {
     .join("");
   const css =
     ".hoja { font-family:'Times New Roman', Times, serif; font-size:12pt; color:#000; } " +
-    ".hoja .pagina { padding: 26pt 79pt 22pt 85pt; } .hoja p { margin:0; } .hoja td { font-size:12pt; line-height:1.15; }";
+    ".hoja .pagina { padding: 22pt 79pt 18pt 85pt; } .hoja p { margin:0; } .hoja td { font-size:12pt; line-height:1.14; }";
   const pac = esc(d.paciente).toUpperCase();
   const per = esc(d.periodoTexto || d.periodoMeses + " meses");
   const meses = esc(d.periodoMeses);
@@ -568,9 +568,9 @@ function plantillaResolucion(d, logos) {
     nroDejarSinEfecto ? art("Dejar sin efecto la Resolución Interna Nº " + esc(nroDejarSinEfecto) + "/DGPRIS.") : "";
 
   const encabezadoRes =
-    '<p style="text-align:right; margin-top:10pt;">San Miguel de Tucumán, ' + esc(d.fechaTexto) + "</p>" +
-    '<p style="text-align:center; font-weight:bold; margin-top:14pt;">Resolución Interna: Nº ' + esc(d.nroResolucion) + "</p>" +
-    '<p style="text-align:center; font-weight:bold; margin-top:14pt;">PROGRAMA INTEGRADO DE SALUD</p>';
+    '<p style="text-align:right; margin-top:6pt;">San Miguel de Tucumán, ' + esc(d.fechaTexto) + "</p>" +
+    '<p style="text-align:center; font-weight:bold; margin-top:10pt;">Resolución Interna: Nº ' + esc(d.nroResolucion) + "</p>" +
+    '<p style="text-align:center; font-weight:bold; margin-top:10pt;">PROGRAMA INTEGRADO DE SALUD</p>';
 
   const cierreArticulos = () =>
     art("Pase a Control Pertinente del Honorable Tribunal de Cuentas en el Si.Pro.Sa.-") +
@@ -685,9 +685,9 @@ function plantillaResolucion(d, logos) {
       '<td style="border:1pt solid #000; padding:2pt 4pt; width:22%;">PRECIO POR MES</td>' +
       '<td style="border:1pt solid #000; padding:2pt 4pt; width:26%;">PRECIO TOTAL POR ' + meses + " MESES</td>" +
       "</tr><tr>" +
-      '<td style="border:1pt solid #000; padding:3pt 4pt 4pt;">' + esc(detalle).replace(/\n/g, "<br>") + "</td>" +
-      '<td style="border:1pt solid #000; padding:3pt 4pt 4pt; text-align:center; font-weight:bold;">' + formatoPesos(mensual) + "</td>" +
-      '<td style="border:1pt solid #000; padding:3pt 4pt 4pt; text-align:center; font-weight:bold;">' + formatoPesos(totalM) + "</td>" +
+      '<td style="border:1pt solid #000; padding:2pt 4pt 3pt;">' + esc(detalle).replace(/\n/g, "<br>") + "</td>" +
+      '<td style="border:1pt solid #000; padding:2pt 4pt 3pt; text-align:center; font-weight:bold;">' + formatoPesos(mensual) + "</td>" +
+      '<td style="border:1pt solid #000; padding:2pt 4pt 3pt; text-align:center; font-weight:bold;">' + formatoPesos(totalM) + "</td>" +
       "</tr></table>";
 
     const pag1 =
@@ -696,7 +696,7 @@ function plantillaResolucion(d, logos) {
       '<p style="text-align:justify; text-indent:52pt; line-height:1.18;">El <b>Expediente N° ' + esc(d.nroExpediente) +
       "</b>, en cual se solicita la <b>" + esc(d.tipoTramite) + "</b> de las prestaciones brindadas de " + esc(d.detalleVisto) +
       " para el paciente, <b>" + pac + "</b>. Y,</p>" +
-      '<p style="font-weight:bold; text-decoration:underline; margin-top:10pt;">CONSIDERANDO:</p>' +
+      '<p style="font-weight:bold; text-decoration:underline; margin-top:8pt;">CONSIDERANDO:</p>' +
       '<p style="' + q + '">Que se solicita la provisión de Servicio de Internación Domiciliaria, modulo: ' + esc(d.detalleModulo) +
       " para el paciente, <b>" + pac + "</b> para los <b>periodos de " + per + "</b>.</p>" +
       '<p style="' + q + '">Que a fs. ' + esc(d.fsSolicitud) +
@@ -714,7 +714,7 @@ function plantillaResolucion(d, logos) {
       "Contratación Directa de conformidad a lo normado por la Res. N°388/SPS/-05.</p>" +
       aclara + porElloHtml(d.firmante) +
       artDejarSinEfecto() +
-      art("ADJUDICAR a las firmas comerciales <b>" + firmas + "</b>, la provisión de los siguientes servicios:", 10) +
+      art("ADJUDICAR a las firmas comerciales <b>" + firmas + "</b>, la provisión de los siguientes servicios:", 8) +
       tabla(d.tituloA, d.detalleA, d.mensualA, totalA) +
       "</div>";
 
