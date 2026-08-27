@@ -160,6 +160,29 @@ function numeroEnLetrasSimple(n) {
   return letras[n] || n;
 }
 
+// Datos OBLIGATORIOS del expediente para poder pedir cotización. Si falta alguno,
+// el sistema NO deja enviar el mail (se cargó mal más de una vez por faltar DNI /
+// teléfono / domicilio). Devuelve la lista de etiquetas faltantes (vacía = todo OK).
+function faltantesCotizacion(exp) {
+  const req = [
+    ["paciente", "Paciente"], ["dni", "DNI"], ["domicilio", "Domicilio"],
+    ["telefono", "Teléfono"], ["diagnostico", "Diagnóstico"],
+    ["nroExpediente", "N° de expediente"], ["modulo", "Módulo"],
+    ["detalleServicios", "Detalle de servicios a cotizar"],
+  ];
+  const faltan = [];
+  req.forEach(([k, label]) => { if (!String(exp?.[k] ?? "").trim()) faltan.push(label); });
+  if (!(Number(exp?.periodoMeses) > 0)) faltan.push("Período (meses)");
+  return faltan;
+}
+// Datos deseables pero no bloqueantes (a veces no están): solo avisan.
+function faltantesBlandos(exp) {
+  const f = [];
+  if (!String(exp?.edad ?? "").trim()) f.push("Edad");
+  if (!String(exp?.fechaNacimiento ?? "").trim()) f.push("Fecha de nacimiento");
+  return f;
+}
+
 function formatoPesos(n) {
   return "$ " + Number(n || 0).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
@@ -1469,9 +1492,7 @@ function _discEnVentana(win, modo) {
 // topes —"…496 hs. de Enfermería mensuales, un máximo de 14 sesiones para Fonoaudiología
 // y 31 sesiones de Kinesiología Respiratoria"— se interpreta correctamente, sin cruces.
 // Excluye "N días" (eso es base de días) y los importes en pesos.
-function interpretarObservaciones(texto) {
-  const bloque = _bloqueObservaciones(texto);
-  if (!bloque) return { bloque: "", reglas: [] };
+function _reglasDeBloque(bloque) {
   const n = _norm(bloque);
 
   const palAlt = Object.keys(_PAL_NUM)
@@ -1490,7 +1511,7 @@ function interpretarObservaciones(texto) {
     if (cant == null || cant <= 0) continue;
     hits.push({ start: m.index, end: m.index + m[0].length, cant, unidadRaw: m[2] });
   }
-  if (!hits.length) return { bloque, reglas: [] };
+  if (!hits.length) return [];
 
   const reglas = [];
   hits.forEach((h, i) => {
@@ -1511,7 +1532,40 @@ function interpretarObservaciones(texto) {
       crudo: bloque.slice(h.start, Math.min(nextStart, n.length)).replace(/\s+/g, " ").trim().slice(0, 80),
     });
   });
-  return { bloque, reglas };
+  return reglas;
+}
+
+// Bloque de texto libre del DICTAMEN de Auditoría Médica (debajo de la tabla, antes
+// del PASE). Ahí Auditoría aclara topes que NO están en las celdas, del tipo
+// "…este Departamento autoriza un máximo de 12 hs de enfermería por día".
+function _bloqueDictamenAM(texto) {
+  const raw = String(texto || "").replace(/[\uE000-\uF8FF]/g, " ").replace(/\r/g, "");
+  const n = _norm(raw);
+  let i = n.indexOf("dictamen de auditor"), last = -1;
+  while (i >= 0) { last = i; i = n.indexOf("dictamen de auditor", i + 10); }
+  if (last < 0) return "";
+  let fin = raw.length;
+  const c = n.slice(last + 10).search(/\bpase\b|firmado digitalmente|cumplido[,\s]*vuelva|a[nñ]o de la memoria/);
+  if (c >= 0) fin = last + 10 + c;
+  return raw.slice(last, fin).replace(/\s+/g, " ").trim();
+}
+
+// Topes que Auditoría fija en el TEXTO del dictamen inicial (no en la tabla). Solo
+// devuelve reglas si el bloque trae un disparador de tope (máximo/hasta/autoriza…),
+// para no "corregir" con un número suelto del párrafo.
+function interpretarTopesDictamenInicial(texto) {
+  const bloque = _bloqueDictamenAM(texto);
+  if (!bloque) return [];
+  const nb = _norm(bloque);
+  const hayTope = /(maximo|hasta|tope|no\s+(?:podra|deber[aá])\s+(?:superar|exceder)|autoriza)/.test(nb);
+  if (!hayTope) return [];
+  return _reglasDeBloque(bloque);
+}
+
+function interpretarObservaciones(texto) {
+  const bloque = _bloqueObservaciones(texto);
+  if (!bloque) return { bloque: "", reglas: [] };
+  return { bloque, reglas: _reglasDeBloque(bloque) };
 }
 
 // Aplica las reglas de tope sobre las líneas ya parseadas de la tabla. Solo actúa
@@ -3663,6 +3717,51 @@ function parsearDictamen(texto) {
     if (cantidad.length > 70) cantidad = cantidad.slice(0, 70).trim();
     out.prestaciones[_LABELS_DICT[i]] = cantidad;
   }
+
+  // ── TOPE POR TEXTO DEL DICTAMEN ─────────────────────────────────────────
+  // La tabla dice lo SOLICITADO (ej. Enfermería 18 hs/día), pero abajo Auditoría
+  // suele topar ("…autoriza un máximo de 12 hs de enfermería por día"). Ese recorte
+  // manda. Lo aplicamos sobre la celda correspondiente y dejamos registro para avisar.
+  out.topesDictamen = [];
+  const topes = interpretarTopesDictamenInicial(t);
+  topes.forEach((rg) => {
+    const label = _LABELS_DICT.find((L) => {
+      const nl = _norm(L);
+      const dOk = rg.disc && nl.includes(rg.disc);
+      const sOk = !rg.sub || nl.includes(rg.sub);
+      return dOk && sOk;
+    });
+    if (!label) { out.topesDictamen.push({ estado: "sin_match", ...rg }); return; }
+    const actual = out.prestaciones[label] || "";
+    const na = _norm(actual);
+    const mismaUnidad = rg.unidad === "hs" ? /\bhs\b|hora/.test(na) : /sesion|visita/.test(na);
+    // Período de la celda de la tabla (día / semana / mes) para no cruzar bases distintas.
+    const cellPeriodo = /x\s*d[ií]a|por d[ií]a|diari/.test(na) ? "diario"
+      : /x\s*semana|por semana|semanal/.test(na) ? "semanal"
+      : /mensual|x\s*mes|por mes/.test(na) ? "mensual" : "";
+    // Solo reescribimos si el período coincide (o la celda no lo aclara). Si difieren
+    // (p.ej. tope mensual sobre celda semanal), NO tocamos: solo dejamos aviso.
+    if (cellPeriodo && rg.periodo && cellPeriodo !== rg.periodo) {
+      out.topesDictamen.push({ estado: "aviso_periodo", label, cellPeriodo, ...rg });
+      return;
+    }
+    const mNum = actual.match(/\d{1,4}/);
+    const cantVieja = mNum ? parseInt(mNum[0], 10) : null;
+    if (!actual.trim() || cantVieja == null) {
+      const uni = rg.unidad === "hs" ? "hs" : "sesiones";
+      const per = rg.periodo === "diario" ? " por día" : rg.periodo === "semanal" ? " por semana" : "";
+      out.prestaciones[label] = rg.cantidad + " " + uni + per;
+      out.topesDictamen.push({ estado: "completado", label, cantNueva: rg.cantidad, unidad: rg.unidad, periodo: rg.periodo, crudo: rg.crudo });
+      return;
+    }
+    if (mismaUnidad && rg.cantidad < cantVieja) {
+      out.prestaciones[label] = actual.replace(/\d{1,4}/, String(rg.cantidad));
+      out.topesDictamen.push({ estado: "recorte", label, cantVieja, cantNueva: rg.cantidad, unidad: rg.unidad, periodo: rg.periodo, crudo: rg.crudo });
+    } else {
+      out.topesDictamen.push({ estado: "sin_cambio", label, cantVieja, cantNueva: rg.cantidad, unidad: rg.unidad, periodo: rg.periodo, crudo: rg.crudo });
+    }
+  });
+
   return out;
 }
 
@@ -3706,7 +3805,16 @@ function FichaDictamen({ exp }) {
           prestaciones: pres,
         };
       });
-      alert("✅ Leí el dictamen y pre-llené lo que pude. Revisá y corregí lo que falte antes de guardar (sobre todo los días de Alimentación).");
+      const topesTxt = (d.topesDictamen || [])
+        .filter((x) => x.estado === "recorte" || x.estado === "completado")
+        .map((x) => {
+          const suf = x.periodo === "diario" ? "/día" : x.periodo === "semanal" ? "/semana" : x.periodo === "mensual" ? "/mes" : "";
+          return x.estado === "recorte"
+            ? `• ${x.label}: la tabla pedía ${x.cantVieja}, pero Auditoría topeó a ${x.cantNueva} ${x.unidad}${suf}`
+            : `• ${x.label}: Auditoría fijó ${x.cantNueva} ${x.unidad}${suf}`;
+        }).join("\n");
+      alert("✅ Leí el dictamen y pre-llené lo que pude. Revisá y corregí lo que falte antes de guardar (sobre todo los días de Alimentación)." +
+        (topesTxt ? "\n\n⚠️ APLIQUÉ un tope que Auditoría aclaró en el TEXTO del dictamen (no estaba en la tabla):\n" + topesTxt + "\n\nVerificá que sea correcto." : ""));
     } catch (e) {
       alert("No pude leer el archivo automáticamente (" + (e.message || e) + "). Cargá los datos a mano.");
     } finally {
@@ -4423,6 +4531,7 @@ function AfectacionEstimada31({ exp }) {
 function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
   // Etapa que se está mirando. Arranca en la actual y se mueve sola cuando el expediente avanza.
   const [abierta, setAbierta] = useState(Math.min(exp.etapa, ETAPAS.length - 1));
+  const [reenviarCotiz, setReenviarCotiz] = useState(false);
   const etapaRef = useRef(exp.etapa);
   useEffect(() => {
     if (etapaRef.current !== exp.etapa) {
@@ -4522,6 +4631,25 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
                 <><br /><a href={exp.cotizacion.carpetaUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📁 Ver carpeta del expediente en Drive</a></>
               )}
             </div>
+            {!reenviarCotiz && (
+              <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #cbd5e1" }}>
+                <div style={{ fontSize: 13, color: "#475569", marginBottom: 6 }}>
+                  ¿No les llegó el mail a los proveedores o salió con algún error? Podés <b>volver a enviarlo</b> sin rehacer el expediente.
+                </div>
+                <button style={{ ...S.btnSec, borderColor: "#f59e0b", color: "#b45309" }} onClick={() => setReenviarCotiz(true)}>
+                  📨 Volver a enviar el pedido de cotización
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+        {exp.etapa >= 1 && reenviarCotiz && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#b45309", marginBottom: 6 }}>
+              🔁 Reenvío del pedido de cotización (el expediente sigue en la misma etapa)
+            </div>
+            <EnvioCotizacion exp={exp} proveedores={proveedores} reenvio onListo={() => setReenviarCotiz(false)} />
+            <button style={{ ...S.btnSec, marginTop: 8 }} onClick={() => setReenviarCotiz(false)}>✖ Cancelar reenvío</button>
           </div>
         )}
       </>)}
@@ -5231,7 +5359,7 @@ function PaseAuditoria({ exp }) {
 
 /* ---------- Envío de cotización ---------- */
 
-function EnvioCotizacion({ exp, proveedores }) {
+function EnvioCotizacion({ exp, proveedores, reenvio = false, onListo }) {
   const activos = proveedores.filter((p) => p.activo);
   const firmaInicial = (USUARIOS.find((u) => u.id === exp.responsable)?.firma) || FIRMANTES[0];
   const [seleccion, setSeleccion] = useState({});
@@ -5258,6 +5386,8 @@ function EnvioCotizacion({ exp, proveedores }) {
   // Para cuando el mail ya salió por fuera del sistema (ej: bloqueo de red en la oficina):
   // registra la cotización como enviada SIN mandar ningún mail, con la fecha real del envío.
   const registrarManual = async () => {
+    const faltan = faltantesCotizacion(exp);
+    if (faltan.length) { alert("⛔ No puedo registrar: faltan datos del expediente.\n\n" + faltan.map((x) => "• " + x).join("\n") + "\n\nCompletalos en «Datos del expediente» y volvé a intentar."); return; }
     const elegidos = activos.filter((p) => seleccion[p.id]);
     if (elegidos.length === 0) { alert("Seleccioná los proveedores a los que les mandaste el mail."); return; }
     if (!fechaManual) { alert("Cargá la fecha en que enviaste el mail."); return; }
@@ -5274,7 +5404,10 @@ function EnvioCotizacion({ exp, proveedores }) {
           manual: true,
         },
       });
-      alert("✅ Cotización registrada como enviada manualmente. El expediente pasó a la etapa de Presupuestos.");
+      alert(reenvio
+        ? "✅ Reenvío registrado manualmente (el mail salió por fuera del sistema)."
+        : "✅ Cotización registrada como enviada manualmente. El expediente pasó a la etapa de Presupuestos.");
+      if (onListo) onListo();
     } catch (e) {
       alert("❌ Error al registrar: " + e.message);
     }
@@ -5282,6 +5415,10 @@ function EnvioCotizacion({ exp, proveedores }) {
   };
 
   const enviar = async () => {
+    const faltan = faltantesCotizacion(exp);
+    if (faltan.length) { alert("⛔ No puedo enviar el mail: faltan datos del expediente.\n\n" + faltan.map((x) => "• " + x).join("\n") + "\n\nCompletalos en «Datos del expediente» y volvé a intentar."); return; }
+    const blandos = faltantesBlandos(exp);
+    if (blandos.length && !confirm("Faltan estos datos (no obligatorios):\n\n" + blandos.map((x) => "• " + x).join("\n") + "\n\n¿Enviar igual?")) return;
     const elegidos = activos.filter((p) => seleccion[p.id]);
     if (elegidos.length === 0) { alert("Seleccioná al menos un proveedor."); return; }
     if (archivos.length === 0 && !confirm("No adjuntaste la historia clínica. ¿Enviar igual sin adjuntos?")) return;
@@ -5320,7 +5457,8 @@ function EnvioCotizacion({ exp, proveedores }) {
           carpetaUrl: data.carpetaUrl || "",
         },
       });
-      alert("✅ Mail de cotización enviado correctamente a " + elegidos.length + " proveedor(es).");
+      alert((reenvio ? "✅ Pedido de cotización REENVIADO a " : "✅ Mail de cotización enviado correctamente a ") + elegidos.length + " proveedor(es).");
+      if (onListo) onListo();
     } catch (e) {
       alert("❌ Error al enviar: " + e.message + "\n\nRevisá la URL del Apps Script y la conexión.");
     }
@@ -5329,7 +5467,7 @@ function EnvioCotizacion({ exp, proveedores }) {
 
   return (
     <div style={{ ...S.card, borderLeft: "5px solid #f59e0b" }}>
-      <h3 style={{ color: "#075e75", marginBottom: 4 }}>✉️ Enviar pedido de cotización</h3>
+      <h3 style={{ color: "#075e75", marginBottom: 4 }}>{reenvio ? "🔁 Reenviar pedido de cotización" : "✉️ Enviar pedido de cotización"}</h3>
       <div style={{ fontSize: 13, color: "#64748b" }}>
         El mail sale desde <b>internaciondomiciliariapris@gmail.com</b> con copia (CC) a todos los proveedores seleccionados, igual que lo hacés hoy. Todo queda guardado en el Drive.
       </div>
