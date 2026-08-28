@@ -3335,11 +3335,16 @@ function NuevoExpediente({ modo = "nuevo", usuario = "", inicial = null, expId =
         );
         return;
       }
-      const prestArr = PRESTACIONES_DICTAMEN.map((n) => ({ nombre: n, cantidad: d.prestaciones[n] || "" }));
-      // detalle de servicios = solo las prestaciones autorizadas (con cantidad), una por línea
+      const prestArr = PRESTACIONES_DICTAMEN.map((n) => {
+        const cantidad = d.prestaciones[n] || "";
+        const tm = totalMensualDesde(cantidad).total;
+        return { nombre: n, cantidad, totalMensual: tm != null ? String(tm) : "" };
+      });
+      // detalle de servicios = solo las prestaciones autorizadas (con cantidad), una por línea,
+      // con el TOTAL MENSUAL calculado según la tabla de Auditoría (lo que cotizan los proveedores).
       const detalle = prestArr
         .filter((p) => (p.cantidad || "").trim() !== "")
-        .map((p) => `${p.nombre}: ${p.cantidad}`)
+        .map((p) => `${p.nombre}: ${p.cantidad}` + (p.totalMensual ? ` — Total mensual: ${p.totalMensual}` : ""))
         .join("\n");
       setF((prev) => ({
         ...prev,
@@ -3540,6 +3545,42 @@ const PRESTACIONES_DICTAMEN = [
   "Alimentación",
 ];
 
+// ── TABLA DE CONVERSIÓN DE AUDITORÍA MÉDICA ────────────────────────────────
+// Convierte la cantidad/frecuencia de una prestación al TOTAL MENSUAL, según la
+// tabla que definió Auditoría Médica. Días base: L a D = 31, L a V = 23.
+//   • N hs/sesiones por día  → N × (31 ó 23)   (24 L-D=744, 12 L-D=372, 12 L-V=276, 1 L-V=23)
+//   • x semana               → tabla fija {1:5, 2:10, 3:14}
+//   • Quincenal              → 2
+//   • Alimentación (L a D)   → 31
+// Devuelve { total, regla, revisar }. total=null cuando no hay regla exacta.
+function totalMensualDesde(txt) {
+  const n = _norm(txt);
+  if (!n.trim()) return { total: null, regla: "vacío" };
+
+  const esLaV = /l\s*a\s*v|lunes a viernes|habil|5\s*dias/.test(n);
+  const dias = esLaV ? 23 : 31; // por defecto L a D
+  const mNum = n.match(/\d{1,4}/);
+  const q = mNum ? parseInt(mNum[0], 10) : null;
+
+  if (/quincenal/.test(n)) return { total: 2, regla: "quincenal" };
+  if (/aliment/.test(n)) return { total: dias, regla: "alimentación (" + (esLaV ? "L a V" : "L a D") + ")" };
+
+  const esDiaria = /(?:hs|hora|vez|veces|sesion|sesiones)[^]{0,12}(?:x|por)\s*dia|diaria|x\s*dia|por dia|semana completa|7\s*dias/.test(n);
+  const esSemanal = /(?:x|por)\s*semana|semanal/.test(n);
+
+  if (esSemanal && !esDiaria) {
+    const tabla = { 1: 5, 2: 10, 3: 14 };
+    if (q != null && tabla[q] != null) return { total: tabla[q], regla: q + " x semana" };
+    if (q != null) return { total: Math.round(q * 4.33), regla: q + " x semana (fuera de tabla)", revisar: true };
+    return { total: null, regla: "x semana sin número", revisar: true };
+  }
+  if (esDiaria) {
+    if (q != null) return { total: q * dias, regla: q + " x día " + (esLaV ? "L a V" : "L a D") };
+    return { total: null, regla: "diaria sin número", revisar: true };
+  }
+  return { total: null, regla: "sin regla automática", revisar: true };
+}
+
 // Estado inicial de la ficha: si ya hay dictamen cargado lo usa; si no,
 // pre-siembra con datos que ya tenemos del expediente.
 function dictamenInicial(exp) {
@@ -3554,8 +3595,13 @@ function dictamenInicial(exp) {
       observaciones: exp.dictamen.observaciones || "",
       prestaciones:
         Array.isArray(exp.dictamen.prestaciones) && exp.dictamen.prestaciones.length
-          ? exp.dictamen.prestaciones.map((p) => ({ nombre: p.nombre || "", cantidad: p.cantidad || "" }))
-          : PRESTACIONES_DICTAMEN.map((n) => ({ nombre: n, cantidad: "" })),
+          ? exp.dictamen.prestaciones.map((p) => ({
+              nombre: p.nombre || "", cantidad: p.cantidad || "",
+              totalMensual: p.totalMensual != null && p.totalMensual !== ""
+                ? String(p.totalMensual)
+                : (totalMensualDesde(p.cantidad || "").total ?? "") + "",
+            }))
+          : PRESTACIONES_DICTAMEN.map((n) => ({ nombre: n, cantidad: "", totalMensual: "" })),
     };
   }
   const base = `${exp.modulo || ""} ${exp.periodoTexto || ""}`;
@@ -3567,7 +3613,7 @@ function dictamenInicial(exp) {
     periodoAutorizado: exp.periodoTexto || "",
     firmante: "",
     observaciones: "",
-    prestaciones: PRESTACIONES_DICTAMEN.map((n) => ({ nombre: n, cantidad: "" })),
+    prestaciones: PRESTACIONES_DICTAMEN.map((n) => ({ nombre: n, cantidad: "", totalMensual: "" })),
   };
 }
 
@@ -3792,7 +3838,12 @@ function FichaDictamen({ exp }) {
       setF((prev) => {
         const pres = prev.prestaciones.map((p) => {
           const key = Object.keys(d.prestaciones).find((k) => _norm(k) === _norm(p.nombre));
-          return key && d.prestaciones[key] ? { ...p, cantidad: d.prestaciones[key] } : p;
+          if (key && d.prestaciones[key]) {
+            const cantidad = d.prestaciones[key];
+            const tm = totalMensualDesde(cantidad).total;
+            return { ...p, cantidad, totalMensual: tm != null ? String(tm) : "" };
+          }
+          return p;
         });
         return {
           ...prev,
@@ -3827,12 +3878,22 @@ function FichaDictamen({ exp }) {
 
   const setPrest = (i, campo, val) =>
     setF((prev) => {
-      const arr = prev.prestaciones.map((p, k) => (k === i ? { ...p, [campo]: val } : p));
+      const arr = prev.prestaciones.map((p, k) => {
+        if (k !== i) return p;
+        const np = { ...p, [campo]: val };
+        // Al editar la cantidad, recalculo el total mensual con la tabla de Auditoría.
+        // Si el usuario edita el total a mano, respeto ese valor.
+        if (campo === "cantidad") {
+          const tm = totalMensualDesde(val).total;
+          np.totalMensual = tm != null ? String(tm) : "";
+        }
+        return np;
+      });
       return { ...prev, prestaciones: arr };
     });
 
   const agregarPrest = () =>
-    setF((prev) => ({ ...prev, prestaciones: [...prev.prestaciones, { nombre: "", cantidad: "" }] }));
+    setF((prev) => ({ ...prev, prestaciones: [...prev.prestaciones, { nombre: "", cantidad: "", totalMensual: "" }] }));
 
   const quitarPrest = (i) =>
     setF((prev) => ({ ...prev, prestaciones: prev.prestaciones.filter((_, k) => k !== i) }));
@@ -3856,7 +3917,7 @@ function FichaDictamen({ exp }) {
         observaciones: f.observaciones.trim(),
         // solo guardo filas con algún dato, y normalizo
         prestaciones: f.prestaciones
-          .map((p) => ({ nombre: (p.nombre || "").trim(), cantidad: (p.cantidad || "").trim() }))
+          .map((p) => ({ nombre: (p.nombre || "").trim(), cantidad: (p.cantidad || "").trim(), totalMensual: (p.totalMensual || "").toString().trim() }))
           .filter((p) => p.nombre !== "" || p.cantidad !== ""),
         cargadoEl: new Date().toISOString(),
       };
@@ -3995,11 +4056,21 @@ function FichaDictamen({ exp }) {
 
           <label style={{ ...S.label, marginTop: 16 }}>Prestaciones autorizadas — cantidad tal cual figura en el dictamen</label>
           <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 6 }}>
-            Dejá en blanco la cantidad de las prestaciones que el dictamen NO autoriza. Podés agregar o quitar filas.
+            Dejá en blanco la cantidad de las prestaciones que el dictamen NO autoriza. El <b>Total mensual</b> se calcula solo
+            con la tabla de Auditoría (L a D = 31 días · L a V = 23 · x semana: 1→5, 2→10, 3→14 · quincenal → 2). Podés corregirlo a mano.
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1.2fr 110px auto", gap: 6, marginBottom: 2 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b" }}>PRESTACIÓN</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b" }}>CANTIDAD / FRECUENCIA</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b" }}>TOTAL MENSUAL</div>
+            <div />
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {f.prestaciones.map((p, i) => (
-              <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1.2fr auto", gap: 6, alignItems: "center" }}>
+            {f.prestaciones.map((p, i) => {
+              const sug = totalMensualDesde(p.cantidad);
+              const distinto = (p.cantidad || "").trim() && sug.total != null && String(sug.total) !== String(p.totalMensual || "");
+              return (
+              <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1.2fr 110px auto", gap: 6, alignItems: "center" }}>
                 <input
                   style={{ ...S.input, marginTop: 0, fontWeight: 700 }}
                   value={p.nombre}
@@ -4012,6 +4083,24 @@ function FichaDictamen({ exp }) {
                   onChange={(e) => setPrest(i, "cantidad", e.target.value)}
                   placeholder="Cantidad (ej: 16hs L-D · 31 días · 3 ses/sem)"
                 />
+                <div>
+                  <input
+                    style={{ ...S.input, marginTop: 0, textAlign: "center", fontWeight: 700, background: distinto ? "#fef9c3" : undefined }}
+                    value={p.totalMensual || ""}
+                    onChange={(e) => setPrest(i, "totalMensual", e.target.value.replace(/[^\d]/g, ""))}
+                    placeholder={sug.total != null ? String(sug.total) : "—"}
+                    title={sug.regla ? "Regla aplicada: " + sug.regla : ""}
+                  />
+                  {distinto && (
+                    <button
+                      style={{ fontSize: 10, color: "#b45309", background: "none", border: "none", cursor: "pointer", padding: "2px 0" }}
+                      title={"Según la tabla de Auditoría: " + sug.regla}
+                      onClick={() => setPrest(i, "totalMensual", String(sug.total))}
+                    >
+                      ↺ usar {sug.total}
+                    </button>
+                  )}
+                </div>
                 <button
                   style={{ ...S.btnRojo, padding: "8px 10px" }}
                   title="Quitar esta prestación"
@@ -4020,7 +4109,7 @@ function FichaDictamen({ exp }) {
                   ✕
                 </button>
               </div>
-            ))}
+            );})}
           </div>
           <button style={{ ...S.btnSec, marginTop: 8 }} onClick={agregarPrest}>➕ Agregar prestación</button>
 
