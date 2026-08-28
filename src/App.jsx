@@ -7338,9 +7338,9 @@ function mapearPrestacionAVisitas(nombre, cantidadTexto, totalMensual) {
   if (/kinesi/.test(n) && /respirator/.test(n)) return { key: "Kinesiología respiratoria", cantidad: _sesSemana(t, num, esLaV), unidad: "ses/semana", modo: "semanal" };
   if (/kinesi/.test(n)) return { key: "Kinesiología motora", cantidad: _sesSemana(t, num, esLaV), unidad: "ses/semana", modo: "semanal" };
   if (/rehabilit/.test(n)) return { key: "Rehabilitación", cantidad: _sesSemana(t, num, esLaV), unidad: "ses/semana", modo: "semanal" };
-  if (/medic|visita med/.test(n)) return { key: "Visita médica", cantidad: tm || 0, unidad: "visitas/mes", modo: "semanal" };
-  if (/aliment/.test(n)) return { key: "Alimentación domiciliaria", cantidad: tm || 0, unidad: "días", modo: "semanal" };
-  if (/traslad/.test(n)) return { key: "Traslado", cantidad: tm || 0, unidad: "viajes/mes", modo: "semanal" };
+  if (/medic|visita med/.test(n)) return { key: "Visita médica", cantidad: tm || num || 0, unidad: "visitas/mes", modo: "semanal" };
+  if (/aliment/.test(n)) return { key: "Alimentación domiciliaria", cantidad: tm || num || 0, unidad: "días", modo: "semanal" };
+  if (/traslad/.test(n)) return { key: "Traslado", cantidad: tm || num || 0, unidad: "viajes/mes", modo: "semanal" };
   return null;
 }
 
