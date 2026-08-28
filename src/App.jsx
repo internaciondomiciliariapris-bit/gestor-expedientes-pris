@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, Fragment } from "react";
 import { initializeApp } from "firebase/app";
 import {
-  getFirestore, collection, addDoc, doc, updateDoc, deleteDoc, onSnapshot,
+  getFirestore, collection, addDoc, doc, updateDoc, deleteDoc, onSnapshot, getDocs, setDoc,
 } from "firebase/firestore";
 import { getAuth, signInAnonymously } from "firebase/auth";
 import { PACIENTES_USUARIOS } from "./usuarios.js";
@@ -52,6 +52,8 @@ const auth = getAuth(app);
 
 const COL_EXPEDIENTES = "gexp_expedientes";
 const COL_PROVEEDORES = "gexp_proveedores";
+const APP_BUILD = "gestor \u00b7 seguimiento-visitas 2026-08-28";
+if (typeof window !== "undefined") console.log("%c GESTOR build: " + APP_BUILD + " ", "background:#2563eb;color:#fff;font-weight:700;");
 
 const ETAPAS = [
   "Cotización enviada",
@@ -4621,6 +4623,7 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
   // Etapa que se está mirando. Arranca en la actual y se mueve sola cuando el expediente avanza.
   const [abierta, setAbierta] = useState(Math.min(exp.etapa, ETAPAS.length - 1));
   const [reenviarCotiz, setReenviarCotiz] = useState(false);
+  const [modalSeg, setModalSeg] = useState(false);
   const etapaRef = useRef(exp.etapa);
   useEffect(() => {
     if (etapaRef.current !== exp.etapa) {
@@ -4905,8 +4908,15 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
             <div style={{ fontSize: 13, color: "#475569", marginTop: 4 }}>
               Las 9 etapas del circuito están cerradas. Cuando se acerque el fin del período, usá <b>🔄 Renovar período</b> para arrancar el trámite nuevo con los datos ya cargados.
             </div>
+            <button style={{ ...S.btn, marginTop: 12, background: "#2563eb" }} onClick={() => setModalSeg(true)}>
+              📋 Enviar a seguimiento (Visitas SIPROSA)
+            </button>
+            <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
+              Da de alta (o renueva) al paciente en Visitas para arrancar el control de prestaciones. Te muestra todo antes de confirmar.
+            </div>
           </div>
         )}
+        {modalSeg && <EnviarASeguimiento exp={exp} onClose={() => setModalSeg(false)} />}
         {exp.etapa < 8 && aviso("Todavía falta el pase al Tribunal de Cuentas.")}
       </>)}
 
@@ -7288,6 +7298,224 @@ Atte. ${firmante}
 Internaciones Domiciliarias.
 Oficina de Compras y Contrataciones.
 Gerencia Administrativa.`
+  );
+}
+
+/* ============================================================
+   PUENTE GESTOR → VISITAS SIPROSA
+   Al completar el expediente, registra/renueva al paciente en la
+   colección `pacientes` (misma base Firebase) para arrancar el
+   seguimiento. Siempre con confirmación antes de escribir.
+   ============================================================ */
+const COL_PACIENTES = "pacientes";
+const VISITAS_EMPRESAS = ["SIAD", "NUTRIHOME", "QUIMUR", "OMNES", "MARCKAY", "ROMERO", "NUTRICION"];
+const USUARIO_A_GESTORA = { JORGE: "G_JOR", YAMILA: "G_YAM", PAULA: "G_PAU", JULIETA: "G_JUL" };
+const GESTORAS_SEG = [
+  { cod: "G_JOR", nombre: "Jorge" }, { cod: "G_YAM", nombre: "Yamila" },
+  { cod: "G_PAU", nombre: "Paula" }, { cod: "G_JUL", nombre: "Julieta" },
+];
+const _digitos = (s) => String(s || "").replace(/\D/g, "");
+const _empresaNorm = (s) => String(s || "").replace(/\([^)]*\)/g, "").trim().toUpperCase();
+
+// sesiones por semana a partir del texto del dictamen
+function _sesSemana(txtNorm, num, esLaV) {
+  if (num == null) return 0;
+  if (/x\s*semana|por semana|semanal/.test(txtNorm)) return num;
+  if (/x\s*dia|por dia|diari/.test(txtNorm)) return num * (esLaV ? 5 : 7);
+  return num;
+}
+// Convierte una prestación del dictamen a { key, cantidad, unidad, modo } de Visitas,
+// respetando la unidad de cada una (Enfermería en hs/día, Kinesios/Fono en ses/semana,
+// Médico y Alimentación en total mensual).
+function mapearPrestacionAVisitas(nombre, cantidadTexto, totalMensual) {
+  const n = _norm(nombre), t = _norm(cantidadTexto);
+  const esLaV = /l\s*a\s*v|lunes a viernes|habil|5\s*dias/.test(t);
+  const m = String(cantidadTexto || "").match(/\d{1,4}/);
+  const num = m ? parseInt(m[0], 10) : null;
+  const tm = (totalMensual != null && totalMensual !== "") ? Number(totalMensual) : (totalMensualDesde(cantidadTexto).total);
+  if (/enfermer/.test(n)) return { key: "Enfermería", cantidad: num || 0, unidad: "hs/día", modo: "semanal" };
+  if (/fonoaud/.test(n)) return { key: "Fonoaudiología", cantidad: _sesSemana(t, num, esLaV), unidad: "ses/semana", modo: "semanal" };
+  if (/kinesi/.test(n) && /respirator/.test(n)) return { key: "Kinesiología respiratoria", cantidad: _sesSemana(t, num, esLaV), unidad: "ses/semana", modo: "semanal" };
+  if (/kinesi/.test(n)) return { key: "Kinesiología motora", cantidad: _sesSemana(t, num, esLaV), unidad: "ses/semana", modo: "semanal" };
+  if (/rehabilit/.test(n)) return { key: "Rehabilitación", cantidad: _sesSemana(t, num, esLaV), unidad: "ses/semana", modo: "semanal" };
+  if (/medic|visita med/.test(n)) return { key: "Visita médica", cantidad: tm || 0, unidad: "visitas/mes", modo: "semanal" };
+  if (/aliment/.test(n)) return { key: "Alimentación domiciliaria", cantidad: tm || 0, unidad: "días", modo: "semanal" };
+  if (/traslad/.test(n)) return { key: "Traslado", cantidad: tm || 0, unidad: "viajes/mes", modo: "semanal" };
+  return null;
+}
+
+function EnviarASeguimiento({ exp, onClose }) {
+  const nombre = (exp.paciente || "").toUpperCase().trim();
+  const dni = _digitos(exp.dni);
+
+  // gestora sugerida según el padrón del gestor (usuarios.js)
+  const gestoraSug = useMemo(() => {
+    const objetivo = _norm(nombre).replace(/\([^)]*\)/g, "").replace(/\b(alimentacion|internacion|rehabilitacion|traslado)\b/g, "").replace(/\s+/g, " ").trim();
+    const found = (PACIENTES_USUARIOS || []).find((x) => {
+      const xn = _norm(x.n).replace(/\([^)]*\)/g, "").replace(/\b(alimentacion|internacion|rehabilitacion|traslado)\b/g, "").replace(/\s+/g, " ").trim();
+      return xn === objetivo;
+    });
+    return found ? (USUARIO_A_GESTORA[String(found.u).toUpperCase()] || "") : "";
+  }, [nombre]);
+
+  const prestaciones = useMemo(() => {
+    const out = [], vistos = new Set();
+    (exp.dictamen?.prestaciones || []).forEach((p) => {
+      const r = mapearPrestacionAVisitas(p.nombre, p.cantidad, p.totalMensual);
+      if (r && r.cantidad > 0 && !vistos.has(r.key)) { vistos.add(r.key); out.push(r); }
+    });
+    return out;
+  }, [exp]);
+
+  const provsRaw = useMemo(() => {
+    const arr = [];
+    (exp.oc?.envios || []).forEach((e) => { if (e.proveedor) arr.push(e.proveedor); });
+    (exp.cuadro?.adjudicaciones || []).forEach((a) => { if (a.proveedor) arr.push(a.proveedor); });
+    const adj = exp.cuadro?.adjudicado;
+    if (adj) arr.push(typeof adj === "string" ? adj : adj.nombre);
+    return Array.from(new Set(arr.filter(Boolean)));
+  }, [exp]);
+
+  const { conocidas, desconocidas } = useMemo(() => {
+    const c = [], d = [];
+    provsRaw.forEach((p) => { const nn = _empresaNorm(p); if (VISITAS_EMPRESAS.includes(nn)) c.push(nn); else d.push({ original: p, norm: nn }); });
+    return { conocidas: Array.from(new Set(c)), desconocidas: d };
+  }, [provsRaw]);
+
+  const [gestora, setGestora] = useState(gestoraSug);
+  const [resol, setResol] = useState({});
+  const [estado, setEstado] = useState(null); // { existe, docId, data }
+  const [cargando, setCargando] = useState(true);
+  const [enviando, setEnviando] = useState(false);
+  const [resultado, setResultado] = useState(null);
+
+  useEffect(() => { const r = {}; desconocidas.forEach((d) => { r[d.norm] = d.norm; }); setResol(r); }, [provsRaw]); // eslint-disable-line
+  useEffect(() => {
+    (async () => {
+      try {
+        const snap = await getDocs(collection(db, COL_PACIENTES));
+        const docs = snap.docs.map((d) => ({ docId: d.id, data: d.data() }));
+        const ex = docs.find((x) => _digitos(x.data.dni) && _digitos(x.data.dni) === dni);
+        if (ex) { setEstado({ existe: true, docId: ex.docId, data: ex.data }); if (ex.data.gestora) setGestora(ex.data.gestora); }
+        else setEstado({ existe: false });
+      } catch (e) { setEstado({ error: e.message }); }
+      setCargando(false);
+    })();
+  }, [dni]);
+
+  const empresasFinal = useMemo(() => {
+    const res = desconocidas.map((d) => resol[d.norm] || d.norm);
+    return Array.from(new Set([...conocidas, ...res].filter(Boolean)));
+  }, [conocidas, desconocidas, resol]);
+
+  async function confirmar() {
+    if (!gestora) { alert("Elegí la gestora antes de enviar."); return; }
+    if (!dni) { alert("El expediente no tiene DNI cargado. Completalo y volvé a intentar."); return; }
+    if (prestaciones.length === 0) { alert("No hay prestaciones autorizadas para enviar. Revisá el dictamen."); return; }
+    setEnviando(true);
+    try {
+      const desde = new Date().toISOString().slice(0, 10);
+      if (estado?.existe) {
+        const p = estado.data;
+        const auth = { ...(p.autorizaciones || {}) };
+        prestaciones.forEach((pr) => {
+          const prev = auth[pr.key] || { activa: true, modo: pr.modo, historial: [] };
+          auth[pr.key] = { activa: true, modo: prev.modo || pr.modo, historial: [...(prev.historial || []), { cantidad: pr.cantidad, desde }] };
+        });
+        const empresasUnion = Array.from(new Set([...(p.empresas || []), ...empresasFinal]));
+        const prestUnion = Array.from(new Set([...(p.prestaciones || []), ...prestaciones.map((x) => x.key)]));
+        await setDoc(doc(db, COL_PACIENTES, estado.docId), { ...p, gestora, empresas: empresasUnion, prestaciones: prestUnion, autorizaciones: auth, activo: true, direccion: p.direccion || exp.domicilio || "" });
+        setResultado({ tipo: "renovacion", nombre: p.nombre });
+      } else {
+        const id = "P" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+        const auth = {};
+        prestaciones.forEach((pr) => { auth[pr.key] = { activa: true, modo: pr.modo, historial: [{ cantidad: pr.cantidad, desde }] }; });
+        await setDoc(doc(db, COL_PACIENTES, id), {
+          id, nombre, dni, gestora, empresas: empresasFinal,
+          prestaciones: prestaciones.map((x) => x.key), autorizaciones: auth,
+          cantidades: {}, activo: true, direccion: exp.domicilio || "", lat: null, lng: null,
+        });
+        setResultado({ tipo: "alta", nombre });
+      }
+    } catch (e) { alert("❌ No se pudo enviar a Visitas: " + e.message); }
+    setEnviando(false);
+  }
+
+  const overlay = { position: "fixed", inset: 0, background: "rgba(15,23,42,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 };
+  const caja = { ...S.card, maxWidth: 580, width: "100%", maxHeight: "90vh", overflowY: "auto", marginTop: 0 };
+
+  if (resultado) {
+    return (
+      <div style={overlay}><div style={caja}>
+        <div style={{ fontSize: 34, textAlign: "center" }}>✅</div>
+        <div style={{ fontWeight: 800, fontSize: 17, textAlign: "center", color: "#166534" }}>
+          {resultado.tipo === "alta" ? "Paciente dado de ALTA en Visitas" : "RENOVACIÓN registrada en Visitas"}
+        </div>
+        <div style={{ textAlign: "center", color: "#475569", marginTop: 6 }}>{resultado.nombre}</div>
+        <div style={{ fontSize: 13, color: "#64748b", textAlign: "center", marginTop: 8 }}>
+          Ya podés seguirlo en Visitas SIPROSA. {resultado.tipo === "renovacion" ? "Se agregó un tramo nuevo al historial de cada prestación, sin perder lo anterior." : ""}
+        </div>
+        <button style={{ ...S.btn, width: "100%", marginTop: 16 }} onClick={onClose}>Cerrar</button>
+      </div></div>
+    );
+  }
+
+  return (
+    <div style={overlay}><div style={caja}>
+      <h3 style={{ color: "#075e75", marginTop: 0, marginBottom: 4 }}>📋 Enviar a seguimiento — Visitas SIPROSA</h3>
+      <div style={{ fontSize: 13, color: "#64748b", marginBottom: 10 }}>Revisá los datos. Nada se guarda hasta que confirmes.</div>
+
+      {cargando ? (
+        <div style={{ padding: 20, textAlign: "center", color: "#64748b" }}>Buscando si el paciente ya existe…</div>
+      ) : (<>
+        {estado?.error && <div style={{ ...S.card, background: "#fef2f2", color: "#b91c1c", borderColor: "#fecaca" }}>No pude leer los pacientes de Visitas: {estado.error}</div>}
+        <div style={{ ...S.card, background: estado?.existe ? "#fffbeb" : "#f0fdf4", borderColor: estado?.existe ? "#fcd34d" : "#86efac", marginTop: 0 }}>
+          <b>{estado?.existe ? "🔁 RENOVACIÓN" : "🆕 ALTA nueva"}</b> — {nombre} · DNI {dni || "(sin DNI)"}
+          {estado?.existe && <div style={{ fontSize: 12, color: "#92400e", marginTop: 4 }}>Ya existe en Visitas: se agrega un tramo al historial de cada prestación.</div>}
+        </div>
+
+        <label style={S.label}>Gestora que sigue al paciente</label>
+        <select style={S.input} value={gestora} onChange={(e) => setGestora(e.target.value)}>
+          <option value="">— elegí gestora —</option>
+          {GESTORAS_SEG.map((g) => <option key={g.cod} value={g.cod}>{g.nombre}</option>)}
+        </select>
+        {gestoraSug && gestora === gestoraSug && <div style={{ fontSize: 12, color: "#0369a1", marginTop: 4 }}>Sugerida según el padrón. Podés cambiarla.</div>}
+
+        <label style={S.label}>Prestaciones a seguir</label>
+        {prestaciones.length === 0 ? (
+          <div style={{ fontSize: 13, color: "#b91c1c" }}>No hay prestaciones con cantidad. Revisá el dictamen antes de enviar.</div>
+        ) : (
+          <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, overflow: "hidden" }}>
+            {prestaciones.map((p, i) => (
+              <div key={p.key} style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", background: i % 2 ? "#f8fafc" : "#fff", fontSize: 13 }}>
+                <span style={{ fontWeight: 600 }}>{p.key}</span>
+                <span><b>{p.cantidad}</b> <span style={{ color: "#64748b" }}>{p.unidad}</span></span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <label style={S.label}>Empresas (proveedores adjudicados)</label>
+        {conocidas.length > 0 && <div style={{ fontSize: 13, marginBottom: desconocidas.length ? 6 : 0 }}>✓ {conocidas.join(", ")}</div>}
+        {desconocidas.map((d) => (
+          <div key={d.norm} style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
+            <span style={{ fontSize: 13, minWidth: 120 }}>⚠️ {d.original}</span>
+            <select style={{ ...S.input, marginTop: 0 }} value={resol[d.norm] || d.norm} onChange={(e) => setResol((r) => ({ ...r, [d.norm]: e.target.value }))}>
+              {VISITAS_EMPRESAS.map((e) => <option key={e} value={e}>{e}</option>)}
+              <option value={d.norm}>Crear "{d.norm}" como nueva</option>
+            </select>
+          </div>
+        ))}
+        {desconocidas.length > 0 && <div style={{ fontSize: 12, color: "#92400e", marginTop: 4 }}>Estos proveedores no existen en Visitas. Elegí a cuál corresponden o dejalos para crearlos.</div>}
+
+        <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+          <button style={{ ...S.btnSec, flex: 1 }} onClick={onClose} disabled={enviando}>Cancelar</button>
+          <button style={{ ...S.btn, flex: 2, background: "#2563eb", opacity: enviando ? 0.6 : 1 }} onClick={confirmar} disabled={enviando}>
+            {enviando ? "Enviando…" : (estado?.existe ? "Confirmar renovación" : "Confirmar alta")}
+          </button>
+        </div>
+      </>)}
+    </div></div>
   );
 }
 
