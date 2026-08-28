@@ -7360,10 +7360,18 @@ function EnviarASeguimiento({ exp, onClose }) {
 
   const prestaciones = useMemo(() => {
     const out = [], vistos = new Set();
-    (exp.dictamen?.prestaciones || []).forEach((p) => {
-      const r = mapearPrestacionAVisitas(p.nombre, p.cantidad, p.totalMensual);
+    const agregar = (nombre, cantidadTexto, totalMensual) => {
+      const r = mapearPrestacionAVisitas(nombre, cantidadTexto, totalMensual);
       if (r && r.cantidad > 0 && !vistos.has(r.key)) { vistos.add(r.key); out.push(r); }
-    });
+    };
+    // 1) Prioridad: tabla del Dictamen de Auditoría Médica, si está cargada.
+    (exp.dictamen?.prestaciones || []).forEach((p) => agregar(p.nombre, p.cantidad, p.totalMensual));
+    // 2) Si el dictamen no está cargado como tabla (expedientes viejos / validados a mano),
+    //    usar las prestaciones del cuadro comparativo — las MISMAS que figuran en la resolución.
+    //    Solo lee lo ya guardado; nunca envía precios (mapearPrestacionAVisitas devuelve sin importes).
+    if (out.length === 0) {
+      (exp.itemsPrestacion || []).forEach((it) => agregar(it.nombre, it.cantTexto, ""));
+    }
     return out;
   }, [exp]);
 
