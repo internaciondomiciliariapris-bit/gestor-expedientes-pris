@@ -7339,7 +7339,14 @@ function mapearPrestacionAVisitas(nombre, cantidadTexto, totalMensual) {
   if (/kinesi/.test(n)) return { key: "Kinesiología motora", cantidad: _sesSemana(t, num, esLaV), unidad: "ses/semana", modo: "semanal" };
   if (/rehabilit/.test(n)) return { key: "Rehabilitación", cantidad: _sesSemana(t, num, esLaV), unidad: "ses/semana", modo: "semanal" };
   if (/medic|visita med/.test(n)) return { key: "Visita médica", cantidad: tm || num || 0, unidad: "visitas/mes", modo: "semanal" };
-  if (/aliment/.test(n)) return { key: "Alimentación domiciliaria", cantidad: tm || num || 0, unidad: "días", modo: "semanal" };
+  if (/aliment/.test(n)) {
+    // La Alimentación Enteral es DIARIA: 31 días fijo (23 si fuera L a V). El número que
+    // aparezca en el texto (ej. "15 set de infusión") es la entrega de sets — uno cada 15
+    // días —, NO los días de servicio. Solo se respeta un "N días" explícito si lo hubiera.
+    const _md = t.match(/(\d{1,3})\s*d[ií]a/);
+    const _dias = _md ? parseInt(_md[1], 10) : (esLaV ? 23 : 31);
+    return { key: "Alimentación domiciliaria", cantidad: _dias, unidad: "días", modo: "semanal" };
+  }
   if (/traslad/.test(n)) return { key: "Traslado", cantidad: tm || num || 0, unidad: "viajes/mes", modo: "semanal" };
   return null;
 }
