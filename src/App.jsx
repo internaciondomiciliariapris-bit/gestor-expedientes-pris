@@ -7305,7 +7305,7 @@ En consecuencia, se solicita dar inicio a la prestación dando cumplimiento a la
 
 2) *Datos a informar por este medio:* a efectos de emitir la Orden de Compra, se solicita comunicar la recepción y conformidad de la presente, la fecha y hora de inicio efectivo de la prestación, y la nómina del personal asignado, con nombre, apellido y función.
 
-3) *Canal oficial de comunicación:* el único canal oficial es el de *Internación Domiciliaria*, y aquel que en el futuro se disponga. Toda comunicación, coordinación y remisión de documentación deberá canalizarse exclusivamente por esa vía.
+3) *Canal oficial de comunicación:* el único canal oficial es la casilla de correo *internaciondomiciliariapris@gmail.com*, o la que en el futuro se disponga oficialmente. La respuesta a la presente deberá enviarse *respondiendo a este mismo correo*, sin abrir un mensaje nuevo, de modo que toda la comunicación quede registrada en un único hilo. Por esta vía deberá canalizarse la totalidad de la coordinación y la remisión de documentación.
 
 Se deja constancia de que la *Orden de Compra* correspondiente será remitida por este mismo medio *una vez recibida su respuesta* con los datos solicitados.
 
