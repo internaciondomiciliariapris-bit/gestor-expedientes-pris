@@ -7277,19 +7277,78 @@ function PaseTribunal({ exp }) {
   );
 }
 
-function generarCuerpoAdjudicacion(exp, nroOC, firmante, moduloTexto) {
+// Texto del período (usa exp.periodoTexto y, si no, "N meses")
+function periodoTextoDe(exp) {
+  return String(exp.periodoTexto || (exp.periodoMeses ? exp.periodoMeses + " meses" : "")).trim();
+}
+
+// ── MAIL 1 ── Adjudicación + condiciones de inicio (presentación/instalación en domicilio,
+//             datos a informar y canal oficial). SIN Orden de Compra.
+function generarCuerpoSolicitudInicio(exp, firmante, moduloTexto) {
   const moduloMail = String(moduloTexto || exp.modulo || "").toUpperCase();
+  const paciente = String(exp.paciente || "").toUpperCase();
+  const periodo = periodoTextoDe(exp);
+  const lineaPeriodo = periodo ? `, correspondiente al período *${periodo}*` : "";
   return (
 `Estimados:
 
-*INICIO DE PRESTACIÓN expte ${exp.nroExpediente} ${exp.paciente.toUpperCase()}. ${moduloMail}.* En la que se Adjudica a uds como Proveedores de la Prestación de Servicios.
+*ADJUDICACIÓN — INICIO DE PRESTACIÓN.* Expte. ${exp.nroExpediente} — Paciente: *${paciente}*.
 
-*Se solicita se nos informe vía mail:*
+Por la presente se comunica que, conforme al procedimiento de contratación tramitado en el expediente de referencia, esa firma ha resultado *adjudicataria* de la prestación del servicio de *${moduloMail}*${lineaPeriodo}.
 
-• *RECEPCIÓN DEL MAIL.*
-• *FECHA DE INICIO EN LA QUE SE BRINDARÁ LA PRESTACIÓN.*
+En consecuencia, se solicita dar inicio a la prestación dando cumplimiento a las siguientes condiciones:
 
-ENVÍO *Nº DE ORDEN ${nroOC || "____"}*.-
+1) *Presentación e instalación en el domicilio:* el ingreso al domicilio del paciente deberá realizarse con la *coordinadora de la prestadora* al frente, acompañada del equipo de trabajo asignado. Según el tipo de prestación:
+
+• Bomba de alimentación: deberá concurrirse con el set completo correspondiente, el cual deberá quedar *instalado y en funcionamiento el mismo día*, dándose inicio de inmediato a la prestación.
+• Internación domiciliaria: deberá concurrirse con los profesionales que correspondan al caso, a fin de dar comienzo efectivo a la atención.
+
+2) *Datos a informar por este medio:* a efectos de emitir la Orden de Compra, se solicita comunicar la recepción y conformidad de la presente, la fecha y hora de inicio efectivo de la prestación, y la nómina del personal asignado, con nombre, apellido y función.
+
+3) *Canal oficial de comunicación:* el único canal oficial es el de *Internación Domiciliaria*, y aquel que en el futuro se disponga. Toda comunicación, coordinación y remisión de documentación deberá canalizarse exclusivamente por esa vía.
+
+Se deja constancia de que la *Orden de Compra* correspondiente será remitida por este mismo medio *una vez recibida su respuesta* con los datos solicitados.
+
+Quedamos a la espera de su pronta respuesta.
+
+Atentamente,
+
+--
+Confirmar Recepción
+Atte. ${firmante}
+
+Internaciones Domiciliarias.
+Oficina de Compras y Contrataciones.
+Gerencia Administrativa.`
+  );
+}
+
+// ── MAIL 2 ── Envío de la Orden de Compra (va adjunta). Obligaciones + cláusula de sanción.
+function generarCuerpoOrdenCompra(exp, nroOC, firmante, moduloTexto) {
+  const moduloMail = String(moduloTexto || exp.modulo || "").toUpperCase();
+  const paciente = String(exp.paciente || "").toUpperCase();
+  return (
+`Estimados:
+
+*ENVÍO DE ORDEN DE COMPRA Nº ${nroOC || "____"}.* Expte. ${exp.nroExpediente} — Paciente: *${paciente}*. Servicio de *${moduloMail}*.
+
+Adjunto a la presente se remite la *Orden de Compra Nº ${nroOC || "____"}*, que autoriza y respalda la prestación del servicio adjudicado. Se solicita dar inicio a la prestación conforme a los datos oportunamente informados.
+
+La prestación deberá brindarse dando estricto cumplimiento a las siguientes condiciones:
+
+• Continuidad: el servicio no podrá interrumpirse ni suspenderse sin previa autorización de esta Gerencia.
+• Personal: la prestación estará a cargo del equipo informado, debidamente matriculado y habilitado.
+• Documentación: deberá remitirse en tiempo y forma la documentación respaldatoria que se requiera para la facturación.
+
+*IMPORTANTE — INCUMPLIMIENTO: el incumplimiento total o parcial de las condiciones de la prestación, así como su interrupción injustificada, dará lugar a la aplicación de las sanciones administrativas que correspondan y podrá afectar futuras adjudicaciones.*
+
+Se solicita se nos informe vía mail:
+
+• Recepción y conformidad: de la Orden de Compra adjunta.
+
+Quedamos a la espera de su pronta respuesta.
+
+Atentamente,
 
 --
 Confirmar Recepción
@@ -7555,30 +7614,49 @@ function OrdenCompraEnvio({ exp, proveedores }) {
   };
   const textoModulo = (nombres) => modulosDe(nombres).join(" y ") || exp.modulo || "";
 
-  // Órdenes que YA se enviaron (quedan grabadas en el expediente).
-  // Sirve para que, si cerrás la pantalla o se corta a mitad de camino,
-  // al volver no se pueda mandar dos veces la misma orden al mismo proveedor.
+  // Asunto ÚNICO por bloque para el Mail 1 (incluye la firma → un hilo por proveedor).
+  const asuntoSolicitud = (g) =>
+    "INICIO DE PRESTACIÓN " + textoModulo(g).toUpperCase() + " " + exp.paciente.toUpperCase() + " — " + g.join(" / ").toUpperCase();
+  const asuntoOC = (g) =>
+    "ENVIO ORDEN DE COMPRA " + textoModulo(g).toUpperCase() + " " + exp.paciente.toUpperCase();
+
+  // Lo que YA quedó grabado en el expediente (para retomar si se cierra la pantalla)
   const ocGuardada = exp.oc || {};
   const yaEnviados = ocGuardada.envios || [];
   const modoInicial = ocGuardada.modo || (varias ? "porFirma" : "una");
 
-  // Un bloque = una orden de compra a enviar
+  // Un bloque = una orden de compra a gestionar (solicitud → respuesta → OC)
   const armarBloques = (m, quien) => {
     const grupos = m === "porFirma" ? firmas.map((fm) => [fm]) : [firmas];
     return grupos.map((g) => {
       const clave = g.join(" / ");
-      const ya = yaEnviados.find((e) => e.proveedor === clave);
+      const ya = yaEnviados.find((e) => e.proveedor === clave) || {};
+      const sol = ya.solicitud || {};
+      const resp = ya.respuesta || {};
       return {
         clave,
         firmas: g,
-        nro: ya ? ya.nro || "" : "",
-        destinatarios: ya ? ya.destinatarios || emailsDe(g) : emailsDe(g),
-        asunto: "ENVIO ORDEN DE COMPRA " + textoModulo(g).toUpperCase() + " " + exp.paciente.toUpperCase(),
-        cuerpo: generarCuerpoAdjudicacion(exp, ya ? ya.nro || "" : "", quien, textoModulo(g)),
+        destinatarios: ya.destinatarios || emailsDe(g),
+        // Fase 1 — solicitud de inicio
+        asuntoSol: sol.asunto || asuntoSolicitud(g),
+        cuerpoSol: generarCuerpoSolicitudInicio(exp, quien, textoModulo(g)),
+        solEnviado: !!sol.enviado,
+        solFecha: sol.fecha || "",
+        threadId: sol.threadId || "",
+        // Fase 1.5 — respuesta del proveedor
+        respOk: !!resp.recibida,
+        respDe: resp.de || "",
+        respFecha: resp.fecha || "",
+        respResumen: resp.resumen || "",
+        respUrl: resp.url || "",
+        // Fase 2 — orden de compra
+        nro: ya.nro || "",
+        asuntoOC: asuntoOC(g),
+        cuerpoOC: generarCuerpoOrdenCompra(exp, ya.nro || "", quien, textoModulo(g)),
         archivo: null,
-        enviado: !!ya,
-        pdfUrl: ya ? ya.pdfUrl || "" : "",
-        fechaEnvio: ya ? ya.fecha || "" : "",
+        ocEnviado: !!ya.enviado,
+        pdfUrl: ya.pdfUrl || "",
+        fechaEnvio: ya.fecha || "",
       };
     });
   };
@@ -7586,11 +7664,13 @@ function OrdenCompraEnvio({ exp, proveedores }) {
   const [modo, setModo] = useState(modoInicial);
   const [firmante, setFirmante] = useState(ocGuardada.firmante || firmaInicial);
   const [bloques, setBloques] = useState(() => armarBloques(modoInicial, ocGuardada.firmante || firmaInicial));
-  const [enviando, setEnviando] = useState("");
+  const [ocupado, setOcupado] = useState(""); // "clave|accion" mientras trabaja
+
+  const hayAlgoIniciado = bloques.some((b) => b.solEnviado || b.ocEnviado);
 
   const cambiarModo = (m) => {
-    if (bloques.some((b) => b.enviado)) {
-      alert("Ya enviaste una de las órdenes. Si necesitás cambiar el modo, recargá la pantalla.");
+    if (hayAlgoIniciado) {
+      alert("Ya arrancaste el circuito de una de las órdenes. Si necesitás cambiar el modo, recargá la pantalla.");
       return;
     }
     setModo(m);
@@ -7599,7 +7679,9 @@ function OrdenCompraEnvio({ exp, proveedores }) {
   const cambiarFirmante = (nuevo) => {
     setFirmante(nuevo);
     setBloques(bloques.map((b) => ({
-      ...b, cuerpo: generarCuerpoAdjudicacion(exp, b.nro, nuevo, textoModulo(b.firmas)),
+      ...b,
+      cuerpoSol: b.solEnviado ? b.cuerpoSol : generarCuerpoSolicitudInicio(exp, nuevo, textoModulo(b.firmas)),
+      cuerpoOC: b.ocEnviado ? b.cuerpoOC : generarCuerpoOrdenCompra(exp, b.nro, nuevo, textoModulo(b.firmas)),
     })));
   };
   const setB = (k, campo, valor) =>
@@ -7607,19 +7689,115 @@ function OrdenCompraEnvio({ exp, proveedores }) {
       ? {
           ...b,
           [campo]: valor,
-          cuerpo: campo === "nro" ? generarCuerpoAdjudicacion(exp, valor, firmante, textoModulo(b.firmas)) : b.cuerpo,
+          cuerpoOC: campo === "nro" ? generarCuerpoOrdenCompra(exp, valor, firmante, textoModulo(b.firmas)) : b.cuerpoOC,
         }
       : b)));
 
-  const enviar = async (k) => {
+  // Persiste el estado de los bloques en exp.oc (sin romper los campos de siempre)
+  const persistir = async (nuevos, marcarEtapa) => {
+    const usados = nuevos.filter((x) => x.solEnviado || x.ocEnviado);
+    const envios = usados.map((x) => ({
+      proveedor: x.clave,
+      modulo: textoModulo(x.firmas),
+      destinatarios: x.destinatarios,
+      solicitud: { enviado: x.solEnviado, fecha: x.solFecha || "", threadId: x.threadId || "", asunto: x.asuntoSol },
+      respuesta: { recibida: x.respOk, fecha: x.respFecha || "", de: x.respDe || "", resumen: x.respResumen || "", url: x.respUrl || "" },
+      nro: x.nro || "",
+      enviado: x.ocEnviado,
+      pdfUrl: x.pdfUrl || "",
+      fecha: x.fechaEnvio || "",
+    }));
+    const ocEnviadas = envios.filter((e) => e.enviado);
+    await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
+      ...(marcarEtapa ? { etapa: 9 } : {}),
+      oc: {
+        fecha: new Date().toISOString(),
+        modo,
+        firmante,
+        envios,
+        // campos históricos (compatibilidad con lo ya guardado / la vista de cierre)
+        nro: ocEnviadas.map((e) => e.nro).join(" / "),
+        destinatarios: ocEnviadas.map((e) => e.destinatarios).join(" / "),
+        pdfUrl: ocEnviadas[0]?.pdfUrl || "",
+      },
+    });
+  };
+
+  // ── FASE 1 ── Enviar la solicitud de inicio (Mail 1, sin OC)
+  const enviarSolicitud = async (k) => {
     const b = bloques[k];
+    const listaDest = b.destinatarios.split(",").map((e) => e.trim()).filter(Boolean);
+    if (listaDest.length === 0) { alert("Cargá al menos un correo de destino para " + b.clave + "."); return; }
+    if (!confirm(`Se enviará la SOLICITUD DE INICIO (sin la Orden de Compra) a:\n\n${listaDest.map((d) => "• " + d).join("\n")}\n\n¿Confirmás el envío?`)) return;
+
+    setOcupado(b.clave + "|sol");
+    try {
+      const res = await fetch(APPS_SCRIPT_URL, {
+        method: "POST",
+        body: JSON.stringify({
+          accion: "solicitarInicio", clave: APPS_SCRIPT_CLAVE,
+          nroExpediente: exp.nroExpediente, paciente: exp.paciente,
+          firmante, asunto: b.asuntoSol, cuerpo: b.cuerpoSol, destinatarios: listaDest,
+        }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "Error en Apps Script");
+
+      const ahora = new Date().toISOString();
+      const nuevos = bloques.map((x, i) => (i === k
+        ? { ...x, solEnviado: true, solFecha: ahora, threadId: data.threadId || "", destinatarios: listaDest.join(", ") }
+        : x));
+      setBloques(nuevos);
+      await persistir(nuevos, false);
+      alert("✅ Solicitud de inicio enviada a " + b.clave + ".\n\nCuando el proveedor responda, tocá \"Verificar respuesta\" y ahí vas a poder enviar la Orden de Compra.");
+    } catch (e) {
+      alert("❌ Error al enviar la solicitud: " + e.message);
+    }
+    setOcupado("");
+  };
+
+  // ── FASE 1.5 ── Verificar si el proveedor ya respondió
+  const verificar = async (k) => {
+    const b = bloques[k];
+    setOcupado(b.clave + "|ver");
+    try {
+      const res = await fetch(APPS_SCRIPT_URL, {
+        method: "POST",
+        body: JSON.stringify({
+          accion: "verificarRespuesta", clave: APPS_SCRIPT_CLAVE,
+          threadId: b.threadId || "", asunto: b.asuntoSol, desde: b.solFecha || "",
+        }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "Error en Apps Script");
+
+      if (!data.recibida) {
+        alert("Todavía no figura una respuesta del proveedor en el hilo.\n\nProbá de nuevo más tarde. (La Orden de Compra se habilita recién cuando conteste.)");
+        setOcupado("");
+        return;
+      }
+      const nuevos = bloques.map((x, i) => (i === k
+        ? { ...x, respOk: true, respDe: data.de || "", respFecha: data.fecha || "", respResumen: data.resumen || "", respUrl: data.url || "" }
+        : x));
+      setBloques(nuevos);
+      await persistir(nuevos, false);
+      alert("✅ ¡Respondieron! Ya podés cargar el N° de OC, adjuntar el PDF y enviar la Orden de Compra a " + b.clave + ".");
+    } catch (e) {
+      alert("❌ Error al verificar: " + e.message);
+    }
+    setOcupado("");
+  };
+
+  // ── FASE 2 ── Enviar la Orden de Compra (Mail 2, con la OC adjunta) — la mandás VOS
+  const enviarOC = async (k) => {
+    const b = bloques[k];
+    if (!b.respOk) { alert("Primero verificá que el proveedor haya respondido la solicitud de inicio."); return; }
     if (!b.nro) { alert("Cargá el N° de la orden de compra de " + b.clave + "."); return; }
     if (!b.archivo) { alert("Adjuntá el PDF de la orden de compra de " + b.clave + "."); return; }
     const listaDest = b.destinatarios.split(",").map((e) => e.trim()).filter(Boolean);
-    if (listaDest.length === 0) { alert("Cargá al menos un correo de destino para " + b.clave + "."); return; }
-    if (!confirm(`Se enviará el mail de adjudicación con la OC Nº ${b.nro} adjunta a:\n\n${listaDest.map((d) => "• " + d).join("\n")}\n\n¿Confirmás el envío?`)) return;
+    if (!confirm(`Se enviará la ORDEN DE COMPRA Nº ${b.nro} adjunta, como respuesta en el hilo con:\n\n${listaDest.map((d) => "• " + d).join("\n")}\n\n¿Confirmás el envío?`)) return;
 
-    setEnviando(b.clave);
+    setOcupado(b.clave + "|oc");
     try {
       const base64 = await leerArchivoBase64(b.archivo);
       const res = await fetch(APPS_SCRIPT_URL, {
@@ -7628,7 +7806,8 @@ function OrdenCompraEnvio({ exp, proveedores }) {
           accion: "enviarAdjudicacion", clave: APPS_SCRIPT_CLAVE,
           nroExpediente: exp.nroExpediente, paciente: exp.paciente,
           modulo: textoModulo(b.firmas), nroOC: b.nro, firmante,
-          asunto: b.asunto, cuerpo: b.cuerpo, destinatarios: listaDest,
+          asunto: b.asuntoOC, cuerpo: b.cuerpoOC, destinatarios: listaDest,
+          threadId: b.threadId || "",
           adjunto: { nombre: b.archivo.name, mimeType: b.archivo.type || "application/pdf", base64 },
         }),
       });
@@ -7636,39 +7815,18 @@ function OrdenCompraEnvio({ exp, proveedores }) {
       if (!data.ok) throw new Error(data.error || "Error en Apps Script");
 
       const ahora = new Date().toISOString();
-      const nuevos = bloques.map((x, i) => (i === k ? { ...x, enviado: true, pdfUrl: data.ocPdfUrl || "", fechaEnvio: ahora } : x));
+      const nuevos = bloques.map((x, i) => (i === k ? { ...x, ocEnviado: true, pdfUrl: data.ocPdfUrl || "", fechaEnvio: ahora } : x));
       setBloques(nuevos);
-
-      const todasEnviadas = nuevos.every((x) => x.enviado);
-      const envios = nuevos.filter((x) => x.enviado).map((x) => ({
-        proveedor: x.clave,
-        modulo: textoModulo(x.firmas),
-        nro: x.nro,
-        destinatarios: x.destinatarios,
-        pdfUrl: x.pdfUrl || "",
-        fecha: x.fechaEnvio || ahora,
-      }));
-      await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
-        ...(todasEnviadas ? { etapa: 9 } : {}),
-        oc: {
-          fecha: ahora,
-          modo,
-          envios,
-          // se mantienen los campos de siempre para no romper lo ya guardado
-          nro: envios.map((e) => e.nro).join(" / "),
-          firmante,
-          destinatarios: envios.map((e) => e.destinatarios).join(" / "),
-          pdfUrl: envios[0]?.pdfUrl || "",
-        },
-      });
+      const todasEnviadas = nuevos.every((x) => x.ocEnviado);
+      await persistir(nuevos, todasEnviadas);
       alert(todasEnviadas
-        ? "✅ Mail de adjudicación enviado con la OC Nº " + b.nro + ". ¡Expediente completo! 🎉"
-        : "✅ Enviada la OC Nº " + b.nro + " a " + b.clave + ".\n\nTodavía queda por enviar: " +
-          nuevos.filter((x) => !x.enviado).map((x) => x.clave).join(", "));
+        ? "✅ Orden de Compra Nº " + b.nro + " enviada. ¡Expediente completo! 🎉"
+        : "✅ Enviada la OC Nº " + b.nro + " a " + b.clave + ".\n\nTodavía queda por gestionar: " +
+          nuevos.filter((x) => !x.ocEnviado).map((x) => x.clave).join(", "));
     } catch (e) {
-      alert("❌ Error al enviar: " + e.message);
+      alert("❌ Error al enviar la OC: " + e.message);
     }
-    setEnviando("");
+    setOcupado("");
   };
 
   const chipOC = (activo) => ({
@@ -7676,13 +7834,22 @@ function OrdenCompraEnvio({ exp, proveedores }) {
     borderRadius: 8, border: "1.5px solid " + (activo ? "#0891b2" : "#cbd5e1"),
     background: activo ? "#e0f2fe" : "#fff", cursor: "pointer", fontSize: 14, fontWeight: 600,
   });
+  const pill = (texto, activo, hecho) => (
+    <span style={{
+      fontSize: 12, fontWeight: 700, padding: "3px 9px", borderRadius: 999,
+      color: hecho ? "#166534" : activo ? "#075e75" : "#94a3b8",
+      background: hecho ? "#dcfce7" : activo ? "#e0f2fe" : "#f1f5f9",
+      border: "1px solid " + (hecho ? "#86efac" : activo ? "#7dd3fc" : "#e2e8f0"),
+    }}>{hecho ? "✓ " : ""}{texto}</span>
+  );
 
   return (
     <div style={{ ...S.card, borderLeft: "5px solid #f59e0b" }}>
-      <h3 style={{ color: "#075e75", marginBottom: 4 }}>🧾 Orden de compra y mail al adjudicado</h3>
+      <h3 style={{ color: "#075e75", marginBottom: 4 }}>🧾 Adjudicación y Orden de compra</h3>
       <div style={{ fontSize: 13, color: "#64748b" }}>
-        La OC la emitís en el sistema del SIPROSA como siempre. Acá cargás el número, subís el PDF y el sistema se lo manda a{" "}
-        <b>{firmas.join(" y ") || "el proveedor adjudicado"}</b> con el texto oficial, tu firma y los logos. La OC queda guardada también en el Drive del expediente.
+        El circuito son dos pasos, y los dos los disparás vos: <b>1)</b> mandás la solicitud de inicio (sin la OC),{" "}
+        <b>2)</b> cuando el proveedor responde con la fecha de inicio y el equipo, recién ahí cargás el N° de OC, subís el PDF y enviás la Orden de Compra.
+        Todo queda en un mismo hilo de Gmail y guardado en el Drive del expediente.
       </div>
 
       {varias && (
@@ -7701,7 +7868,7 @@ function OrdenCompraEnvio({ exp, proveedores }) {
         </>
       )}
 
-      <label style={S.label}>¿Quién envía {bloques.length > 1 ? "los mails" : "este mail"}? (la firma sale en el mail)</label>
+      <label style={S.label}>¿Quién firma {bloques.length > 1 ? "los mails" : "el mail"}? (la firma sale en el mail)</label>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
         {FIRMANTES.map((fi) => (
           <label key={fi} style={chipOC(firmante === fi)}>
@@ -7711,62 +7878,125 @@ function OrdenCompraEnvio({ exp, proveedores }) {
         ))}
       </div>
 
-      {bloques.map((b, k) => (
-        <div key={b.clave} style={{
-          border: "1px solid " + (b.enviado ? "#86efac" : "#e2e8f0"), borderRadius: 10,
-          padding: 12, marginTop: 14, background: b.enviado ? "#f0fdf4" : "#fff",
-        }}>
-          {bloques.length > 1 && (
-            <div style={{ fontWeight: 800, color: "#075e75", marginBottom: 8 }}>
-              {b.enviado ? "✅ " : "📄 "}Orden de compra para {b.clave}
-              {modulosDe(b.firmas).length > 0 && (
-                <span style={{ fontWeight: 600, color: "#64748b" }}> — {modulosDe(b.firmas).join(" y ")}</span>
-              )}
-            </div>
-          )}
-
-          {b.enviado ? (
-            <div style={{ fontSize: 14, color: "#166534", fontWeight: 600 }}>
-              Enviada la OC Nº {b.nro} a {b.destinatarios}
-            </div>
-          ) : (
-            <>
-              <div style={{ display: "grid", gridTemplateColumns: "180px 1fr", gap: 10 }}>
-                <div>
-                  <label style={S.label}>N° de orden de compra</label>
-                  <input style={S.input} value={b.nro} onChange={(e) => setB(k, "nro", e.target.value)} placeholder="18344" />
-                </div>
-                <div>
-                  <label style={S.label}>Correo(s) del adjudicado — separados por coma</label>
-                  <input style={S.input} value={b.destinatarios} onChange={(e) => setB(k, "destinatarios", e.target.value)} placeholder="correo@proveedor.com.ar" />
-                </div>
+      {bloques.map((b, k) => {
+        const trabajando = ocupado.startsWith(b.clave + "|");
+        return (
+          <div key={b.clave} style={{
+            border: "1px solid " + (b.ocEnviado ? "#86efac" : "#e2e8f0"), borderRadius: 10,
+            padding: 12, marginTop: 14, background: b.ocEnviado ? "#f0fdf4" : "#fff",
+          }}>
+            {bloques.length > 1 && (
+              <div style={{ fontWeight: 800, color: "#075e75", marginBottom: 8 }}>
+                {b.ocEnviado ? "✅ " : "📄 "}Orden de compra para {b.clave}
+                {modulosDe(b.firmas).length > 0 && (
+                  <span style={{ fontWeight: 600, color: "#64748b" }}> — {modulosDe(b.firmas).join(" y ")}</span>
+                )}
               </div>
+            )}
 
-              <label style={S.label}>PDF de la orden de compra (obligatorio — va adjunto al mail)</label>
-              <input type="file" accept="application/pdf" style={{ marginTop: 6 }} onChange={(e) => setB(k, "archivo", e.target.files[0])} />
-              {b.archivo && <div style={{ fontSize: 13, color: "#334155", marginTop: 6 }}>📎 {b.archivo.name} ({(b.archivo.size / 1024 / 1024).toFixed(1)} MB)</div>}
+            {/* Semáforo de los 3 pasos */}
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+              {pill("1. Solicitud de inicio", !b.solEnviado, b.solEnviado)}
+              {pill("2. Respuesta del proveedor", b.solEnviado && !b.respOk, b.respOk)}
+              {pill("3. Orden de compra", b.respOk && !b.ocEnviado, b.ocEnviado)}
+            </div>
 
-              <label style={S.label}>Asunto</label>
-              <input style={S.input} value={b.asunto} onChange={(e) => setB(k, "asunto", e.target.value)} />
+            {b.ocEnviado ? (
+              <div style={{ fontSize: 14, color: "#166534", fontWeight: 600 }}>
+                Enviada la OC Nº {b.nro} a {b.destinatarios}
+                {b.pdfUrl && (
+                  <> · <a href={b.pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📄 OC en el Drive</a></>
+                )}
+              </div>
+            ) : (
+              <>
+                {/* ── PASO 1: SOLICITUD DE INICIO ── */}
+                {!b.solEnviado ? (
+                  <>
+                    <label style={S.label}>Correo(s) del adjudicado — separados por coma</label>
+                    <input style={S.input} value={b.destinatarios} onChange={(e) => setB(k, "destinatarios", e.target.value)} placeholder="correo@proveedor.com.ar" />
 
-              <label style={S.label}>Cuerpo del mail — lo que ves acá es lo que sale. Para NEGRITA encerrá la palabra entre asteriscos: *así*.</label>
-              <textarea style={{ ...S.input, minHeight: 220, fontFamily: "inherit", fontSize: 14 }} value={b.cuerpo} onChange={(e) => setB(k, "cuerpo", e.target.value)} />
+                    <label style={S.label}>Asunto</label>
+                    <input style={S.input} value={b.asuntoSol} onChange={(e) => setB(k, "asuntoSol", e.target.value)} />
 
-              <button style={{ ...S.btn, marginTop: 14, width: "100%", fontSize: 16, opacity: enviando ? 0.6 : 1 }}
-                disabled={!!enviando} onClick={() => enviar(k)}>
-                {enviando === b.clave
-                  ? "⏳ Enviando mail y guardando en Drive..."
-                  : "📨 ENVIAR ORDEN DE COMPRA A " + b.clave.toUpperCase()}
-              </button>
-            </>
-          )}
-        </div>
-      ))}
+                    <label style={S.label}>Cuerpo del mail — lo que ves acá es lo que sale. Para NEGRITA encerrá la palabra entre asteriscos: *así*.</label>
+                    <textarea style={{ ...S.input, minHeight: 260, fontFamily: "inherit", fontSize: 14 }} value={b.cuerpoSol} onChange={(e) => setB(k, "cuerpoSol", e.target.value)} />
 
-      {bloques.length > 1 && !bloques.every((b) => b.enviado) && (
+                    <button style={{ ...S.btn, marginTop: 14, width: "100%", fontSize: 16, opacity: trabajando ? 0.6 : 1 }}
+                      disabled={trabajando} onClick={() => enviarSolicitud(k)}>
+                      {ocupado === b.clave + "|sol" ? "⏳ Enviando solicitud..." : "📨 ENVIAR SOLICITUD DE INICIO A " + b.clave.toUpperCase()}
+                    </button>
+                  </>
+                ) : (
+                  <div style={{ fontSize: 13, color: "#166534", marginBottom: 6 }}>
+                    ✅ Solicitud de inicio enviada a <b>{b.destinatarios}</b>{b.solFecha ? " · " + formatearFecha(b.solFecha) : ""}.
+                  </div>
+                )}
+
+                {/* ── PASO 2: VERIFICAR RESPUESTA ── */}
+                {b.solEnviado && !b.respOk && (
+                  <div style={{ marginTop: 10, padding: 12, borderRadius: 10, background: "#f8fafc", border: "1px dashed #cbd5e1" }}>
+                    <div style={{ fontSize: 13, color: "#475569", marginBottom: 8 }}>
+                      Esperando que el proveedor responda con la <b>fecha de inicio</b> y el <b>equipo de trabajo</b>.
+                      La Orden de Compra se habilita recién cuando conteste.
+                    </div>
+                    <button style={{ ...S.btnSec, opacity: trabajando ? 0.6 : 1 }}
+                      disabled={trabajando} onClick={() => verificar(k)}>
+                      {ocupado === b.clave + "|ver" ? "⏳ Verificando..." : "🔄 Verificar respuesta"}
+                    </button>
+                  </div>
+                )}
+
+                {/* ── PASO 3: ENVIAR ORDEN DE COMPRA (habilitado tras la respuesta) ── */}
+                {b.respOk && (
+                  <div style={{ marginTop: 10 }}>
+                    {b.respResumen && (
+                      <div style={{ padding: 10, borderRadius: 10, background: "#ecfeff", border: "1px solid #a5f3fc", marginBottom: 12 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "#075e75", marginBottom: 4 }}>
+                          📩 Respondió {b.respDe}{b.respFecha ? " · " + b.respFecha : ""}
+                          {b.respUrl && (<> · <a href={b.respUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>ver en Gmail</a></>)}
+                        </div>
+                        <div style={{ fontSize: 13, color: "#334155", whiteSpace: "pre-wrap", maxHeight: 140, overflow: "auto" }}>{b.respResumen}</div>
+                      </div>
+                    )}
+
+                    <div style={{ display: "grid", gridTemplateColumns: "180px 1fr", gap: 10 }}>
+                      <div>
+                        <label style={S.label}>N° de orden de compra</label>
+                        <input style={S.input} value={b.nro} onChange={(e) => setB(k, "nro", e.target.value)} placeholder="18344" />
+                      </div>
+                      <div>
+                        <label style={S.label}>Correo(s) del adjudicado</label>
+                        <input style={S.input} value={b.destinatarios} onChange={(e) => setB(k, "destinatarios", e.target.value)} placeholder="correo@proveedor.com.ar" />
+                      </div>
+                    </div>
+
+                    <label style={S.label}>PDF de la orden de compra (obligatorio — va adjunto al mail)</label>
+                    <input type="file" accept="application/pdf" style={{ marginTop: 6 }} onChange={(e) => setB(k, "archivo", e.target.files[0])} />
+                    {b.archivo && <div style={{ fontSize: 13, color: "#334155", marginTop: 6 }}>📎 {b.archivo.name} ({(b.archivo.size / 1024 / 1024).toFixed(1)} MB)</div>}
+
+                    <label style={S.label}>Asunto</label>
+                    <input style={S.input} value={b.asuntoOC} onChange={(e) => setB(k, "asuntoOC", e.target.value)} />
+
+                    <label style={S.label}>Cuerpo del mail — lo que ves acá es lo que sale. Para NEGRITA encerrá la palabra entre asteriscos: *así*.</label>
+                    <textarea style={{ ...S.input, minHeight: 260, fontFamily: "inherit", fontSize: 14 }} value={b.cuerpoOC} onChange={(e) => setB(k, "cuerpoOC", e.target.value)} />
+
+                    <button style={{ ...S.btn, marginTop: 14, width: "100%", fontSize: 16, opacity: trabajando ? 0.6 : 1 }}
+                      disabled={trabajando} onClick={() => enviarOC(k)}>
+                      {ocupado === b.clave + "|oc" ? "⏳ Enviando OC y guardando en Drive..." : "📨 ENVIAR ORDEN DE COMPRA A " + b.clave.toUpperCase()}
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        );
+      })}
+
+      {bloques.length > 1 && !bloques.every((b) => b.ocEnviado) && (
         <div style={{ fontSize: 13, color: "#b45309", marginTop: 10, fontWeight: 600 }}>
-          El expediente se cierra cuando estén enviadas las {bloques.length} órdenes.
-          {bloques.some((b) => b.enviado) && " Las que figuran en verde ya salieron y no se vuelven a enviar."}
+          El expediente se cierra cuando estén enviadas las {bloques.length} órdenes de compra.
+          {bloques.some((b) => b.ocEnviado) && " Las que figuran en verde ya salieron y no se vuelven a enviar."}
         </div>
       )}
     </div>
