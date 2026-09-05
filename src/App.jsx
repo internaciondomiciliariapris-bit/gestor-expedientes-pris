@@ -2475,21 +2475,18 @@ function Login({ onOk }) {
         <button
           style={{ ...S.btnSec, width: "100%", marginTop: 10 }}
           onClick={() => setConsulta(true)}
-        >🔍 Consultar estado de un expediente</button>
+        >🔍 Búsqueda rápida</button>
       </div>
     </div>
   );
 }
 
-/* ---------- Consulta pública de estado (previa al login, SOLO LECTURA) ----------
-   Permite ver en qué etapa va un expediente SIN ingresar la contraseña.
-   Muestra únicamente el trámite administrativo: paciente, N° de expediente,
-   período, etapa/estado, N° de resolución y N° de orden de compra. NO expone
-   DNI, domicilio, teléfono, diagnóstico, prestaciones ni el buscador de Gmail;
-   para eso hay que loguearse. Lee una sola vez con getDocs: nunca escribe ni
-   dispara migraciones de esquema. */
+/* ---------- Consulta previa al login: Búsqueda rápida completa ----------
+   Traslada la MISMA Búsqueda rápida a la pantalla de ingreso, sin contraseña.
+   Reutiliza el componente BusquedaRapida tal cual (Firestore + Gmail, USUARIOS,
+   filtros, prestaciones). Solo se encarga de cargar los expedientes con getDocs
+   (lectura única, sin disparar las migraciones de esquema del onSnapshot). */
 function ConsultaPublica({ onVolver }) {
-  const [texto, setTexto] = useState("");
   const [expedientes, setExpedientes] = useState([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
@@ -2510,86 +2507,24 @@ function ConsultaPublica({ onVolver }) {
     return () => { vivo = false; };
   }, []);
 
-  const resultados = useMemo(() => {
-    const q = normNombrePac(texto);
-    const nq = texto.replace(/\D/g, "");
-    if (q.length < 2 && nq.length < 3) return [];
-    return expedientes
-      .filter((e) => {
-        const nom = normNombrePac(e.paciente);
-        const nro = String(e.nroExpediente || "").replace(/\D/g, "");
-        const matchNom = q.length >= 2 && nom.includes(q);
-        const matchNro = nq.length >= 3 && nro.includes(nq);
-        return matchNom || matchNro;
-      })
-      .sort((a, b) => String(a.paciente || "").localeCompare(String(b.paciente || ""), "es"))
-      .slice(0, 40);
-  }, [texto, expedientes]);
-
-  const estadoDe = (e) => {
-    const et = e.etapa || 0;
-    if (et >= ETAPAS.length) return { txt: "Expediente completo", hecho: true };
-    return { txt: "En trámite · " + (ETAPAS[et] || "Inicio"), hecho: false };
-  };
-
-  return (
-    <div style={{ ...S.page }}>
-      <header style={S.header}>
-        <img src={LOGO_PRIS} alt="" style={S.logo} onError={(e) => (e.target.style.display = "none")} />
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 19, fontWeight: 800, letterSpacing: 0.3 }}>Consulta de expedientes</div>
-          <div style={{ fontSize: 12, opacity: 0.9 }}>Estado de trámite · solo lectura</div>
-        </div>
-        <img src={LOGO_GOBIERNO} alt="" style={S.logo} onError={(e) => (e.target.style.display = "none")} />
-      </header>
-
-      <div style={{ maxWidth: 720, margin: "0 auto", padding: "20px 14px 60px" }}>
-        <button style={{ ...S.btnSec, marginBottom: 14 }} onClick={onVolver}>← Volver al ingreso</button>
-
-        <div style={S.card}>
-          <input
-            autoFocus
-            placeholder="Buscar por apellido del paciente o N° de expediente…"
-            style={S.input}
-            value={texto}
-            onChange={(e) => setTexto(e.target.value)}
-          />
-          <div style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>
-            Consulta administrativa del estado del trámite. Los datos del paciente
-            (DNI, domicilio, diagnóstico, prestaciones) requieren ingresar con contraseña.
-          </div>
-        </div>
-
-        {cargando && <div style={{ ...S.card, color: "#64748b" }}>Cargando…</div>}
-        {error && <div style={{ ...S.card, color: "#b91c1c" }}>{error}</div>}
-
-        {!cargando && !error && texto.trim() && resultados.length === 0 && (
-          <div style={{ ...S.card, color: "#64748b" }}>No se encontraron expedientes para “{texto}”.</div>
-        )}
-
-        {resultados.map((e) => {
-          const est = estadoDe(e);
-          const ocNro = (e.oc?.nro || e.oc?.envios?.[0]?.nro || "").toString();
-          return (
-            <div key={e.id} style={S.card}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
-                <div style={{ fontSize: 16, fontWeight: 800, color: "#0f172a" }}>{e.paciente || "—"}</div>
-                <span style={S.chip(!est.hecho, est.hecho)}>{est.txt}</span>
-              </div>
-              <div style={{ fontSize: 13, color: "#334155", marginTop: 8, display: "grid", gap: 4 }}>
-                <div><b>Expediente:</b> {e.nroExpediente || "—"}</div>
-                {periodoDeExpediente(e) && <div><b>Período:</b> {periodoDeExpediente(e)}</div>}
-                {e.resolucion?.nro && (
-                  <div><b>Resolución:</b> N° {e.resolucion.nro}{e.resolucion.fecha ? " · " + fechaCortaISO(e.resolucion.fecha) : ""}</div>
-                )}
-                {ocNro && <div><b>Orden de compra:</b> N° {ocNro}</div>}
-              </div>
-            </div>
-          );
-        })}
+  if (cargando) {
+    return (
+      <div style={{ ...S.page, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ ...S.card, textAlign: "center", color: "#64748b" }}>Cargando…</div>
       </div>
-    </div>
-  );
+    );
+  }
+  if (error) {
+    return (
+      <div style={{ ...S.page, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ ...S.card, textAlign: "center", width: 340 }}>
+          <div style={{ color: "#b91c1c", marginBottom: 12 }}>{error}</div>
+          <button style={S.btnSec} onClick={onVolver}>← Volver al ingreso</button>
+        </div>
+      </div>
+    );
+  }
+  return <BusquedaRapida expedientes={expedientes} onVolver={onVolver} />;
 }
 
 /* ---------- Selección de usuario ---------- */
