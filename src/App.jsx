@@ -3253,6 +3253,135 @@ function TarjetaCorreo({ c }) {
 
 /* ---------- Tablero ---------- */
 
+function TarjetaExpediente({ e, abrir }) {
+  const [editando, setEditando] = useState(false);
+  const [dom, setDom] = useState(e.domicilio || "");
+  const [tel, setTel] = useState(e.telefono || "");
+  const [guardando, setGuardando] = useState(false);
+  const [ok, setOk] = useState(false);
+
+  // Si el expediente se actualiza desde afuera (onSnapshot) y no estoy editando,
+  // reflejo los valores nuevos en los inputs.
+  useEffect(() => {
+    if (!editando) { setDom(e.domicilio || ""); setTel(e.telefono || ""); }
+  }, [e.domicilio, e.telefono, editando]);
+
+  const dias = e.etapa >= 1 && e.cotizacion ? diasHabilesDesde(e.cotizacion.fecha) : null;
+  const vencido = dias !== null && dias > 5 && e.etapa === 1;
+
+  const stop = (ev) => ev.stopPropagation();
+  const abrirEdicion = (ev) => {
+    ev.stopPropagation();
+    setDom(e.domicilio || ""); setTel(e.telefono || "");
+    setOk(false); setEditando(true);
+  };
+  const cancelar = (ev) => {
+    ev.stopPropagation();
+    setDom(e.domicilio || ""); setTel(e.telefono || "");
+    setEditando(false);
+  };
+  const guardar = async (ev) => {
+    ev.stopPropagation();
+    setGuardando(true);
+    try {
+      await updateDoc(doc(db, COL_EXPEDIENTES, e.id), { domicilio: dom.trim(), telefono: tel.trim() });
+      setEditando(false);
+      setOk(true);
+      setTimeout(() => setOk(false), 2500);
+    } catch (err) {
+      alert("No se pudo guardar el contacto. Reintentá en unos segundos.");
+    } finally {
+      setGuardando(false);
+    }
+  };
+
+  return (
+    <div style={{ ...S.card, cursor: editando ? "default" : "pointer" }} onClick={() => { if (!editando) abrir(e); }}>
+      <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+        <div>
+          <div style={{ fontWeight: 800, fontSize: 16, color: "#075e75" }}>{e.paciente.toUpperCase()}</div>
+          <div style={{ fontSize: 13, color: "#475569" }}>
+            Expte. {e.nroExpediente} · DNI {e.dni}
+          </div>
+          <div style={{ fontSize: 13, color: "#475569", marginTop: 2 }}>{e.modulo}</div>
+          <div style={{ fontSize: 14, fontWeight: 800, color: "#334155", marginTop: 4, textAlign: "center" }}>
+            🗓️ {e.periodoTexto ? e.periodoTexto : (e.periodoMeses ? e.periodoMeses + " meses" : "Período no cargado")}
+          </div>
+          <div style={{ fontSize: 12, marginTop: 4, fontWeight: 700, color: e.responsable ? "#0e7490" : "#94a3b8" }}>
+            👤 {e.responsable || "Sin responsable asignado"}
+          </div>
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <span style={S.chip(true, e.etapa > 0)}>
+            {e.etapa === 0 ? "⏳ Sin cotizar" : ETAPAS[e.etapa - 1] + " ✓"}
+          </span>
+          {e.etapa >= 9 && e.cuadro?.adjudicado && (
+            <div style={{ fontSize: 12, marginTop: 6, fontWeight: 800, color: "#166534" }}>
+              🏆 {e.cuadro.adjudicado}
+            </div>
+          )}
+          {dias !== null && e.etapa === 1 && (
+            <div style={{ fontSize: 12, marginTop: 6, fontWeight: 700, color: vencido ? "#dc2626" : "#f59e0b" }}>
+              {vencido ? `⚠️ Plazo vencido (${dias} días hábiles)` : `Día hábil ${dias} de 5`}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Contacto del paciente / familiar: visible y editable sin abrir el expediente */}
+      <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #eef2f7" }} onClick={stop}>
+        {!editando ? (
+          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "6px 16px" }}>
+            <div style={{ fontSize: 13, color: "#334155" }}>
+              📍 <b>Domicilio:</b>{" "}
+              {e.domicilio ? e.domicilio : <span style={{ color: "#94a3b8" }}>sin cargar</span>}
+            </div>
+            <div style={{ fontSize: 13, color: "#334155" }}>
+              📞 <b>Tel.:</b>{" "}
+              {e.telefono ? e.telefono : <span style={{ color: "#94a3b8" }}>sin cargar</span>}
+            </div>
+            <div style={{ flex: 1 }} />
+            {ok && <span style={{ fontSize: 12, color: "#16a34a", fontWeight: 700 }}>✓ Guardado</span>}
+            <button
+              style={{ ...S.btnSec, padding: "5px 12px", fontSize: 13 }}
+              onClick={abrirEdicion}
+            >✏️ Editar contacto</button>
+          </div>
+        ) : (
+          <div style={{ display: "grid", gap: 8 }} onClick={stop}>
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 700, color: "#334155", display: "block" }}>📍 Domicilio</label>
+              <input
+                style={S.input}
+                value={dom}
+                onChange={(ev) => setDom(ev.target.value)}
+                onClick={stop}
+                placeholder="Domicilio del paciente o familiar"
+              />
+            </div>
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 700, color: "#334155", display: "block" }}>📞 Teléfono</label>
+              <input
+                style={S.input}
+                value={tel}
+                onChange={(ev) => setTel(ev.target.value)}
+                onClick={stop}
+                placeholder="Teléfono de contacto"
+              />
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 2 }}>
+              <button style={{ ...S.btnSec, padding: "6px 14px" }} onClick={cancelar} disabled={guardando}>Cancelar</button>
+              <button style={{ ...S.btn, padding: "6px 14px" }} onClick={guardar} disabled={guardando}>
+                {guardando ? "Guardando…" : "Guardar"}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Tablero({ expedientes, usuario, abrir }) {
   const [filtro, setFiltro] = useState("mios"); // mios | todos
   const lista = (filtro === "mios"
@@ -3281,44 +3410,9 @@ function Tablero({ expedientes, usuario, abrir }) {
         </div>
       )}
 
-      {lista.map((e) => {
-        const dias = e.etapa >= 1 && e.cotizacion ? diasHabilesDesde(e.cotizacion.fecha) : null;
-        const vencido = dias !== null && dias > 5 && e.etapa === 1;
-        return (
-          <div key={e.id} style={{ ...S.card, cursor: "pointer" }} onClick={() => abrir(e)}>
-            <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-              <div>
-                <div style={{ fontWeight: 800, fontSize: 16, color: "#075e75" }}>{e.paciente.toUpperCase()}</div>
-                <div style={{ fontSize: 13, color: "#475569" }}>
-                  Expte. {e.nroExpediente} · DNI {e.dni}
-                </div>
-                <div style={{ fontSize: 13, color: "#475569", marginTop: 2 }}>{e.modulo}</div>
-                <div style={{ fontSize: 14, fontWeight: 800, color: "#334155", marginTop: 4, textAlign: "center" }}>
-                  🗓️ {e.periodoTexto ? e.periodoTexto : (e.periodoMeses ? e.periodoMeses + " meses" : "Período no cargado")}
-                </div>
-                <div style={{ fontSize: 12, marginTop: 4, fontWeight: 700, color: e.responsable ? "#0e7490" : "#94a3b8" }}>
-                  👤 {e.responsable || "Sin responsable asignado"}
-                </div>
-              </div>
-              <div style={{ textAlign: "right" }}>
-                <span style={S.chip(true, e.etapa > 0)}>
-                  {e.etapa === 0 ? "⏳ Sin cotizar" : ETAPAS[e.etapa - 1] + " ✓"}
-                </span>
-                {e.etapa >= 9 && e.cuadro?.adjudicado && (
-                  <div style={{ fontSize: 12, marginTop: 6, fontWeight: 800, color: "#166534" }}>
-                    🏆 {e.cuadro.adjudicado}
-                  </div>
-                )}
-                {dias !== null && e.etapa === 1 && (
-                  <div style={{ fontSize: 12, marginTop: 6, fontWeight: 700, color: vencido ? "#dc2626" : "#f59e0b" }}>
-                    {vencido ? `⚠️ Plazo vencido (${dias} días hábiles)` : `Día hábil ${dias} de 5`}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        );
-      })}
+      {lista.map((e) => (
+        <TarjetaExpediente key={e.id} e={e} abrir={abrir} />
+      ))}
     </div>
   );
 }
