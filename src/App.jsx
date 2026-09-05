@@ -4770,6 +4770,7 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
   const [abierta, setAbierta] = useState(Math.min(exp.etapa, ETAPAS.length - 1));
   const [reenviarCotiz, setReenviarCotiz] = useState(false);
   const [modalSeg, setModalSeg] = useState(false);
+  const [rondaVista, setRondaVista] = useState("activa"); // "activa" | índice en exp.rondas
   const etapaRef = useRef(exp.etapa);
   useEffect(() => {
     if (etapaRef.current !== exp.etapa) {
@@ -4812,6 +4813,29 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
       {/* ====== PASO 2: cruce de lo autorizado (dictamen) contra lo cotizado/adjudicado ====== */}
       <CruceDictamenPresupuesto exp={exp} />
 
+      {/* ====== Selector de rondas (desistimiento / 2º oferente) ====== */}
+      {Array.isArray(exp.rondas) && exp.rondas.length > 0 && (
+        <div style={{ ...S.card, borderLeft: "5px solid #0891b2" }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: "#075e75", marginBottom: 8 }}>🔀 Rondas de adjudicación</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button
+              onClick={() => setRondaVista("activa")}
+              style={{ ...(rondaVista === "activa" ? S.btn : S.btnSec), padding: "8px 14px" }}
+            >🟢 {exp.rondas.length + 1}º oferente · en curso</button>
+            {exp.rondas.map((r, i) => (
+              <button
+                key={i}
+                onClick={() => setRondaVista(i)}
+                style={{ ...(rondaVista === i ? S.btn : S.btnSec), padding: "8px 14px" }}
+              >🗂️ {r.n}º oferente · {r.adjudicado || "sin adjudicar"} (archivado)</button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {rondaVista === "activa" && exp.etapa >= 6 && exp.cuadro?.adjudicado && <PasarSegundoOferente exp={exp} />}
+
+      {rondaVista === "activa" ? (<>
       {/* semáforo de etapas: ahora cada chip abre su etapa */}
       <div style={S.card}>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -5066,7 +5090,225 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
         {exp.etapa < 8 && aviso("Todavía falta el pase al Tribunal de Cuentas.")}
       </>)}
 
+      </>) : (
+        <RondaArchivada ronda={exp.rondas?.[rondaVista]} onVolver={() => setRondaVista("activa")} />
+      )}
+
       <BotonEliminar exp={exp} volver={volver} />
+    </div>
+  );
+}
+
+/* ---------- Pasar al 2º oferente (desistimiento del adjudicatario) ----------
+   Archiva la ronda viva en exp.rondas[] (solo lectura) y reabre el circuito para
+   re-adjudicar al siguiente oferente. No toca la etapa Presupuestos: el 2º ya
+   cotizó y se re-adjudica desde el Cuadro. Aditivo: no modifica ningún generador. */
+function PasarSegundoOferente({ exp }) {
+  const [abierto, setAbierto] = useState(false);
+  const [motivo, setMotivo] = useState("");
+  const [archivo, setArchivo] = useState(null);
+  const [ocupado, setOcupado] = useState(false);
+
+  const confirmar = async () => {
+    if (!motivo.trim()) { alert("Escribí el motivo por el que se pasa al siguiente oferente."); return; }
+    if (!archivo) { alert("Adjuntá el PDF que respalda el desistimiento del adjudicatario."); return; }
+    if (!confirm(
+      "PASAR AL SIGUIENTE OFERENTE\n\n" +
+      "• Se archiva la ronda actual (" + (exp.cuadro?.adjudicado || "adjudicatario actual") + ") como consulta de solo lectura.\n" +
+      "• El expediente vuelve a la etapa Nota, con el Cuadro reabierto para adjudicar al 2º oferente y rehacer nota y resolución.\n" +
+      "• NO se toca la etapa Presupuestos.\n\n¿Confirmás?"
+    )) return;
+    setOcupado(true);
+    try {
+      // 1) Documentación → carpeta del expediente en Drive (acción existente del puente).
+      let docUrl = "", docNombre = archivo.name;
+      const base64 = await leerArchivoBase64(archivo);
+      const res = await fetch(APPS_SCRIPT_URL, {
+        method: "POST",
+        body: JSON.stringify({
+          accion: "subirPresupuesto", clave: APPS_SCRIPT_CLAVE,
+          nroExpediente: exp.nroExpediente, paciente: exp.paciente,
+          proveedor: "DESISTIMIENTO - " + (exp.cuadro?.adjudicado || ""),
+          adjunto: { nombre: archivo.name, mimeType: archivo.type || "application/pdf", base64 },
+        }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "No se pudo subir el documento al Drive");
+      docUrl = data.url || data.pdfUrl || data.carpetaUrl || "";
+
+      // 2) Snapshot de la ronda viva.
+      const rondasPrev = Array.isArray(exp.rondas) ? exp.rondas : [];
+      const n = rondasPrev.length + 1;
+      const snapshot = {
+        n,
+        adjudicado: exp.cuadro?.adjudicado || "",
+        cuadro: exp.cuadro || null,
+        nota: exp.nota || null,
+        resolucion: exp.resolucion || null,
+        oc: exp.oc || null,
+        etapaAlCerrar: exp.etapa || 0,
+        motivoCierre: motivo.trim(),
+        docNombre, docUrl,
+        cerradaEl: new Date().toISOString(),
+      };
+      // 3) Justificación reutilizable por la ronda nueva (nota AM + considerando resolución).
+      const desistimiento = {
+        motivo: motivo.trim(),
+        docNombre, docUrl,
+        resolucionAnuladaNro: exp.resolucion?.nro || "",
+        proveedorDesistio: exp.cuadro?.adjudicado || "",
+        fecha: new Date().toISOString(),
+        rondaAnterior: n,
+      };
+      // 4) Limpiar lo vivo (queda archivado) y reabrir en Nota, con el Cuadro disponible
+      //    para re-adjudicar. Se conserva exp.cuadro para no tocar Presupuestos.
+      await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
+        rondas: [...rondasPrev, snapshot],
+        desistimiento,
+        nota: null, resolucion: null, oc: null, valoresAutorizados: null,
+        etapa: 3,
+      });
+      setAbierto(false); setMotivo(""); setArchivo(null);
+      alert(
+        "✅ Ronda archivada.\n\n" +
+        "El expediente volvió a la etapa Nota, con el Cuadro comparativo reabierto.\n\n" +
+        "Ahora: entrá a la etapa «Cuadro comparativo», revisá el cuadro, marcá al 2º oferente como ADJUDICADO y confirmá. " +
+        "Después seguí normal (Nota → Pase a Auditoría Médica → Resolución). " +
+        "Si tenías dictamen definitivo aplicado, volvé a aplicarlo en la etapa Nota.\n\n" +
+        "La ronda anterior queda en el selector «Rondas de adjudicación» de arriba, en solo lectura."
+      );
+    } catch (e) {
+      alert("❌ " + (e.message || e));
+    } finally { setOcupado(false); }
+  };
+
+  return (
+    <div style={{ ...S.card, borderLeft: "5px solid #f59e0b", background: "#fffdf5" }}>
+      {!abierto ? (
+        <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <div style={{ fontWeight: 800, color: "#b45309" }}>⚠️ ¿El adjudicatario no se presentó a prestar el servicio?</div>
+            <div style={{ fontSize: 13, color: "#7c5b13", marginTop: 2 }}>
+              Archivá esta ronda y pasá al 2º oferente sin perder lo actuado con {exp.cuadro?.adjudicado || "el adjudicatario actual"}.
+            </div>
+          </div>
+          <button style={{ ...S.btnSec, borderColor: "#f59e0b", color: "#b45309" }} onClick={() => setAbierto(true)}>
+            🔁 Pasar al 2º oferente
+          </button>
+        </div>
+      ) : (
+        <div>
+          <div style={{ fontWeight: 800, color: "#b45309", marginBottom: 8 }}>🔁 Pasar al 2º oferente</div>
+          <label style={{ fontSize: 13, fontWeight: 700, color: "#334155", display: "block" }}>Motivo / fundamentación</label>
+          <textarea
+            style={{ ...S.input, minHeight: 90, fontFamily: "inherit" }}
+            value={motivo}
+            onChange={(e) => setMotivo(e.target.value)}
+            placeholder="Ej.: Notificada la adjudicación, la firma no se presentó a prestar el servicio en la fecha comprometida. Se adjunta constancia. Corresponde adjudicar al oferente que sigue en orden de mérito según el cuadro comparativo."
+          />
+          <label style={{ fontSize: 13, fontWeight: 700, color: "#334155", display: "block", marginTop: 10 }}>Documentación (PDF)</label>
+          <input
+            type="file"
+            accept="application/pdf,.pdf"
+            onChange={(e) => setArchivo(e.target.files?.[0] || null)}
+            style={{ marginTop: 4 }}
+          />
+          {archivo && <div style={{ fontSize: 12, color: "#475569", marginTop: 4 }}>📎 {archivo.name}</div>}
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
+            <button style={S.btnSec} disabled={ocupado} onClick={() => { setAbierto(false); setMotivo(""); setArchivo(null); }}>Cancelar</button>
+            <button style={{ ...S.btn, background: "#d97706" }} disabled={ocupado} onClick={confirmar}>
+              {ocupado ? "Archivando…" : "Confirmar y pasar al 2º oferente"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------- Vista de una ronda archivada (solo lectura) ---------- */
+function RondaArchivada({ ronda, onVolver }) {
+  if (!ronda) {
+    return (
+      <div style={{ ...S.card, color: "#64748b" }}>
+        No se encontró la ronda archivada.
+        <div style={{ marginTop: 10 }}>
+          <button style={S.btnSec} onClick={onVolver}>← Volver a la ronda en curso</button>
+        </div>
+      </div>
+    );
+  }
+  const c = ronda.cuadro || {};
+  const nota = ronda.nota || {};
+  const r = ronda.resolucion || {};
+  const oc = ronda.oc || {};
+  return (
+    <div>
+      <div style={{ ...S.card, borderLeft: "5px solid #64748b", background: "#f8fafc" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+          <div style={{ fontWeight: 800, color: "#334155", fontSize: 16 }}>
+            🗂️ {ronda.n}º oferente · {ronda.adjudicado || "sin adjudicar"}{" "}
+            <span style={{ fontWeight: 600, color: "#94a3b8", fontSize: 13 }}>(archivado · solo lectura)</span>
+          </div>
+          <button style={S.btnSec} onClick={onVolver}>← Volver a la ronda en curso</button>
+        </div>
+        <div style={{ fontSize: 13, color: "#64748b", marginTop: 6 }}>
+          Ronda cerrada el {formatearFecha(ronda.cerradaEl)}. Esta vista es solo para consulta.
+        </div>
+      </div>
+
+      <div style={{ ...S.card, borderLeft: "5px solid #f59e0b", background: "#fffdf5" }}>
+        <div style={{ fontWeight: 800, color: "#b45309", marginBottom: 4 }}>Motivo del pase al siguiente oferente</div>
+        <div style={{ fontSize: 14, color: "#334155", whiteSpace: "pre-wrap" }}>{ronda.motivoCierre || "—"}</div>
+        {ronda.docNombre && (
+          <div style={{ fontSize: 13, color: "#475569", marginTop: 8 }}>
+            📎 Documentación adjunta:{" "}
+            {ronda.docUrl
+              ? <a href={ronda.docUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>{ronda.docNombre}</a>
+              : <><b>{ronda.docNombre}</b> <span style={{ color: "#94a3b8" }}>(en la carpeta del expediente en Drive)</span></>}
+          </div>
+        )}
+      </div>
+
+      <div style={S.card}>
+        <div style={{ fontWeight: 800, color: "#166534", marginBottom: 6 }}>Cuadro comparativo — Adjudicado: {c.adjudicado || "—"}</div>
+        {c.fecha && <div style={{ fontSize: 13, color: "#475569" }}><b>Fecha:</b> {formatearFecha(c.fecha)}</div>}
+        {c.mensual != null && <div style={{ fontSize: 13, color: "#475569" }}><b>Mensual:</b> {formatoPesos(c.mensual)} · <b>Total:</b> {formatoPesos(c.total)}</div>}
+        {(c.adjudicaciones || []).length > 1 && c.adjudicaciones.map((a, k) => (
+          <div key={k} style={{ fontSize: 13, color: "#334155" }}>🧩 <b>{a.modulo || "Sin módulo"}:</b> {a.proveedor} — {formatoPesos(a.mensual)}/mes</div>
+        ))}
+      </div>
+
+      {nota.monto != null && (
+        <div style={S.card}>
+          <div style={{ fontWeight: 800, color: "#166534", marginBottom: 4 }}>Nota de afectación</div>
+          <div style={{ fontSize: 13, color: "#475569" }}><b>Importe:</b> {formatoPesos(nota.monto)} {nota.montoLetras ? "(" + nota.montoLetras + ")" : ""}</div>
+        </div>
+      )}
+
+      {(r.nro || r.total != null) && (
+        <div style={S.card}>
+          <div style={{ fontWeight: 800, color: "#166534", marginBottom: 4 }}>Resolución Interna</div>
+          <div style={{ fontSize: 13, color: "#475569" }}>
+            {r.nro && <><b>Nº:</b> {r.nro}/DGPRIS </>}
+            {r.fecha && <>· <b>Fecha:</b> {formatearFecha(r.fecha)} </>}
+            {r.total != null && <>· <b>Total:</b> {formatoPesos(r.total)}</>}
+          </div>
+        </div>
+      )}
+
+      {(oc.nro || (oc.envios || []).length > 0) && (
+        <div style={S.card}>
+          <div style={{ fontWeight: 800, color: "#166534", marginBottom: 4 }}>Orden de Compra</div>
+          {oc.nro && <div style={{ fontSize: 13, color: "#475569" }}><b>Nº:</b> {oc.nro} {oc.fecha ? "· " + formatearFecha(oc.fecha) : ""}</div>}
+          {(oc.envios || []).map((e, k) => (
+            <div key={k} style={{ fontSize: 13, color: "#334155" }}>
+              🧾 <b>{e.proveedor}</b> — OC Nº {e.nro}{e.modulo ? " (" + e.modulo + ")" : ""}
+              {e.pdfUrl && <> · <a href={e.pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2" }}>PDF</a></>}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
