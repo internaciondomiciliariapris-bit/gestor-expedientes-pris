@@ -3315,6 +3315,16 @@ function TarjetaExpediente({ e, abrir }) {
           <span style={S.chip(true, e.etapa > 0)}>
             {e.etapa === 0 ? "⏳ Sin cotizar" : ETAPAS[e.etapa - 1] + " ✓"}
           </span>
+          {e.etapa > 0 && (() => {
+            const _est = estadoExpediente(e);
+            return (
+              <div title={_est.detalle.join("\n") || _est.texto}
+                style={{ fontSize: 11.5, marginTop: 6, fontWeight: 700, color: _est.color,
+                  background: _est.color + "18", borderRadius: 8, padding: "2px 8px", display: "inline-block" }}>
+                {_est.icono} {_est.texto}
+              </div>
+            );
+          })()}
           {e.etapa >= 9 && e.cuadro?.adjudicado && (
             <div style={{ fontSize: 12, marginTop: 6, fontWeight: 800, color: "#166534" }}>
               🏆 {e.cuadro.adjudicado}
@@ -5812,6 +5822,7 @@ function PaseAuditoria({ exp }) {
         construirPlantilla={(logos) => plantillaPase(datosPaseAuditoria(exp, { destinataria, asunto }), logos)}
         onCerrar={() => setRevisando(false)}
         onListo={async () => {
+          { const _b = validarAvanceEtapa(exp, 5); if (_b) { alert(_b); return; } }
           await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
             etapa: Math.max(exp.etapa, 5),
             paseAuditoria: { fecha: new Date().toISOString(), destinataria, asunto },
@@ -6027,6 +6038,175 @@ function EnvioCotizacion({ exp, proveedores, reenvio = false, onListo }) {
 
 /* ---------- Registro de presupuestos (Fase 2) ---------- */
 
+/* ================================================================
+   GUARDA DE IDENTIDAD DEL PACIENTE
+   Verifica que el PDF de presupuesto cargado corresponda al paciente del
+   expediente. Motivo: se coló un presupuesto a nombre de otra persona y el
+   sistema lo dejó avanzar hasta la orden de compra. La comparación es por
+   tokens del nombre: tolerante a acentos (JESÙS/JESÚS/JESUS), al orden
+   (apellido primero o nombre primero) y a que el nombre venga enterrado en la
+   línea "Cliente: ... Pcte APELLIDO, NOMBRES" del presupuesto.
+   - rojo    → ningún nombre en común: es otra persona. BLOQUEA.
+   - amarillo→ coincide en parte pero no del todo: pide confirmación.
+   - sinDato → no se pudo leer el nombre en el PDF: pide confirmación.
+   - ok      → todos los nombres del expediente aparecen en el PDF.
+   ================================================================ */
+const _PARTICULAS_NOMBRE = new Set(["DE", "DEL", "LA", "LAS", "LOS", "Y", "E", "DA", "DO", "DI"]);
+function _tokensNombre(s) {
+  return String(s || "")
+    .toUpperCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")   // saca acentos: JESÙS/JESÚS → JESUS
+    .replace(/[^A-ZÑ]+/g, " ")                            // saca comas, puntos, números
+    .trim().split(/\s+/)
+    .filter((t) => t.length >= 2 && !_PARTICULAS_NOMBRE.has(t));
+}
+// Saca el nombre del paciente del texto del PDF (después del marcador "Pcte"/"Paciente").
+function _pacienteDeTextoPdf(texto) {
+  const m = String(texto || "").match(/\bp(?:cte|aciente)\.?\s*:?\s*([^\n\r]+)/i);
+  if (!m) return null;
+  let s = m[1].trim();
+  // corta si en la misma línea sigue otra etiqueta del presupuesto o el punto final
+  s = s.split(/\s{2,}|\bperiodo\b|\bcond\.?\b|\bvendedor\b|\bmoneda\b|\bflete\b|\bdni\b/i)[0];
+  return s.replace(/\.\s*$/, "").trim();
+}
+function verificarIdentidadPaciente(exp, textoPdf) {
+  const tExp = _tokensNombre(exp?.paciente);
+  if (tExp.length === 0) return { estado: "ok", nombrePdf: null }; // expediente sin paciente: nada que comparar
+  const nombrePdf = _pacienteDeTextoPdf(textoPdf);
+  if (!nombrePdf) {
+    return {
+      estado: "sinDato", nombrePdf: null,
+      mensaje: `No pude leer el nombre del paciente dentro del PDF para compararlo con "${exp.paciente}". ` +
+        `Verificá a mano que el presupuesto sea de este paciente.`,
+    };
+  }
+  const setPdf = new Set(_tokensNombre(nombrePdf));
+  const comunes = tExp.filter((t) => setPdf.has(t));
+  const faltantes = tExp.filter((t) => !setPdf.has(t));
+  if (faltantes.length === 0) return { estado: "ok", nombrePdf };
+  if (comunes.length === 0) {
+    return {
+      estado: "rojo", nombrePdf,
+      mensaje: `El PDF figura a nombre de "${nombrePdf}", que NO coincide con el paciente del expediente ` +
+        `"${exp.paciente}". No coincide ningún nombre.`,
+    };
+  }
+  return {
+    estado: "amarillo", nombrePdf,
+    mensaje: `El PDF figura a nombre de "${nombrePdf}" y el paciente del expediente es "${exp.paciente}". ` +
+      `Coinciden en parte, pero no del todo (revisá: ${faltantes.join(", ")}).`,
+  };
+}
+
+/* ================================================================
+   CAPA CENTRAL DE VALIDACIÓN DEL CIRCUITO
+   Una sola definición de "qué está completo/coherente" en cada etapa,
+   que alimenta: (1) el candado de continuidad cronológica —no se avanza si
+   una etapa anterior está incompleta—, (2) el semáforo del tablero y (3) el
+   portón final antes de emitir la Orden de Compra. Los indicadores son los
+   rastros que cada etapa deja en el expediente (fecha/objeto), para no dar
+   falsos "incompleto" cuando la etapa sí se hizo.
+   ================================================================ */
+function _faltaEtapa(exp, n) {
+  const f = [];
+  switch (n) {
+    case 1:
+      faltantesCotizacion(exp).forEach((x) => f.push("Falta: " + x));
+      if (!exp?.cotizacion) f.push("La cotización todavía no fue registrada/enviada");
+      break;
+    case 2: {
+      const pres = exp?.presupuestos || {};
+      const respondieron = Object.values(pres).filter((p) => p && p.estado);
+      const cotizaron = Object.values(pres).filter((p) => p && p.estado === "cotizo" && Number(p.mensual) > 0);
+      if (respondieron.length === 0) f.push("Ningún proveedor tiene respuesta cargada");
+      else if (cotizaron.length === 0) f.push("Ningún presupuesto con monto cargado");
+      break;
+    }
+    case 3:
+      if (!exp?.cuadro?.adjudicado) f.push("El cuadro comparativo no tiene adjudicatario");
+      if (!(Number(exp?.cuadro?.mensual) > 0)) f.push("El cuadro no tiene monto mensual");
+      break;
+    case 4:
+      if (!exp?.nota?.fecha) f.push("La nota de afectación no fue generada");
+      else if (!(Number(exp?.nota?.monto) > 0)) f.push("La nota de afectación no tiene monto");
+      break;
+    case 5:
+      if (!exp?.paseAuditoria?.fecha) f.push("El pase a Auditoría Médica no fue generado");
+      break;
+    case 6:
+      if (!exp?.paseLetrada?.fecha) f.push("El pase a Asesoría Letrada no fue generado");
+      break;
+    case 7:
+      if (!exp?.resolucion?.fecha) f.push("La resolución no fue generada");
+      else if (!String(exp?.resolucion?.nro || "").trim()) f.push("La resolución no tiene número");
+      break;
+    case 8:
+      if (!exp?.paseTribunal?.fecha) f.push("El pase a Tribunal de Cuentas no fue generado");
+      break;
+    case 9: {
+      const env = exp?.oc?.envios || [];
+      if (!env.some((e) => e && e.enviado)) f.push("La orden de compra no fue enviada");
+      break;
+    }
+  }
+  return f;
+}
+
+// Inconsistencias entre etapas (aviso, no bloquean el avance salvo en el portón final).
+function _incoherencias(exp) {
+  const a = [];
+  const cuadroMes = Number(exp?.cuadro?.mensual) || 0;
+  const cuadroTot = Number(exp?.cuadro?.total) || 0;
+  if (exp?.nota?.fecha && cuadroMes > 0 && Number(exp?.nota?.monto) > 0) {
+    if (Math.abs(Number(exp.nota.monto) - cuadroMes) > 1)
+      a.push("El monto de la Nota (" + formatoPesos(exp.nota.monto) + ") no coincide con el mensual del Cuadro (" + formatoPesos(cuadroMes) + ")");
+  }
+  if (exp?.resolucion?.fecha && cuadroTot > 0 && Number(exp?.resolucion?.total) > 0) {
+    if (Math.abs(Number(exp.resolucion.total) - cuadroTot) > 1)
+      a.push("El total de la Resolución (" + formatoPesos(exp.resolucion.total) + ") no coincide con el total del Cuadro (" + formatoPesos(cuadroTot) + ")");
+  }
+  if (exp?.resolucion?.adjudicado && exp?.cuadro?.adjudicado &&
+      _norm(exp.resolucion.adjudicado) !== _norm(exp.cuadro.adjudicado))
+    a.push("El adjudicatario de la Resolución (" + exp.resolucion.adjudicado + ") no coincide con el del Cuadro (" + exp.cuadro.adjudicado + ")");
+  return a;
+}
+
+// Candado de continuidad: null si se puede avanzar; si no, el texto de por qué.
+function validarAvanceEtapa(exp, destino) {
+  const actual = Number(exp?.etapa) || 0;
+  if (destino <= actual) return null; // regenerar/rehacer/retroceso deliberado: no es avanzar
+  const problemas = [];
+  for (let n = 1; n < destino; n++) {
+    const falta = _faltaEtapa(exp, n);
+    if (falta.length) problemas.push("▸ " + ETAPAS[n - 1] + "\n   • " + falta.join("\n   • "));
+  }
+  if (!problemas.length) return null;
+  return "⛔ No se puede avanzar a «" + ETAPAS[destino - 1] + "»: hay etapas anteriores sin completar.\n\n" +
+    problemas.join("\n\n") + "\n\nCompletá esas etapas en orden antes de continuar.";
+}
+
+// Estado global para el semáforo del tablero.
+function estadoExpediente(exp) {
+  const hasta = Number(exp?.etapa) || 0;
+  const huecos = [];
+  for (let n = 1; n <= hasta; n++) { const ff = _faltaEtapa(exp, n); if (ff.length) huecos.push(ETAPAS[n - 1] + ": " + ff.join("; ")); }
+  const incoh = _incoherencias(exp);
+  if (huecos.length) return { color: "#dc2626", icono: "🔴", texto: "Faltan datos en etapas ya cursadas", detalle: huecos.concat(incoh) };
+  if (incoh.length) return { color: "#f59e0b", icono: "🟡", texto: "Revisar posibles inconsistencias", detalle: incoh };
+  return { color: "#16a34a", icono: "🟢", texto: "Circuito en orden", detalle: [] };
+}
+
+// ¿El nombre del proveedor de la fila aparece en el texto del PDF? (para avisar
+// si se cargó el presupuesto de un proveedor en la fila de otro).
+function _proveedorEnTexto(nombreProv, textoPdf) {
+  const t = String(textoPdf || "").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const tokens = String(nombreProv || "").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/\([^)]*\)/g, " ").replace(/\bS\.?\s?A\.?\b|\bS\.?\s?R\.?\s?L\.?\b/g, " ")
+    .replace(/[^A-Z0-9]+/g, " ").trim().split(/\s+/).filter((x) => x.length >= 3);
+  if (!tokens.length) return true;
+  return tokens.some((tok) => t.includes(tok));
+}
+
 function RegistroPresupuestos({ exp }) {
   const consultados = (exp.cotizacion?.proveedores || "").split(",").map((s) => s.trim()).filter(Boolean);
   const guardados = exp.presupuestos || {};
@@ -6130,6 +6310,23 @@ function RegistroPresupuestos({ exp }) {
   // 📄→💲 Lee el PDF recién elegido y precarga los casilleros (unitario/mensual)
   // por ítem. NO sube nada al Drive todavía (eso sigue pasando al tocar "Guardar");
   // acá solo llenamos los precios, y todo queda editable.
+  // Verifica identidad del paciente en el PDF de una negativa (proveedor que NO cotizó).
+  const verificarPdfNegativa = async (nombre, file) => {
+    if (!file) return;
+    try {
+      let texto = "";
+      const esPdf = /pdf/i.test(file.type) || /\.pdf$/i.test(file.name);
+      texto = esPdf ? await textoDePdf(file) : await ocrImagen(file);
+      if (esPdf && _norm(texto).replace(/[^a-z]/g, "").length < 30) texto = await ocrPdfEscaneado(file);
+      const ident = verificarIdentidadPaciente(exp, texto);
+      if (ident.estado === "rojo") {
+        alert("🚫 PDF RECHAZADO — NO corresponde a este paciente\n\n" + ident.mensaje + "\n\nEl archivo fue descartado.");
+        setArchivos((s) => { const n = { ...s }; delete n[nombre]; return n; });
+        setInfoPdf((s) => ({ ...s, [nombre]: "🚫 PDF de negativa rechazado: figura a nombre de \"" + ident.nombrePdf + "\", que no es el paciente del expediente." }));
+      }
+    } catch (e) { /* si no se puede leer el PDF de la negativa, no se bloquea */ }
+  };
+
   const leerPreciosDelPdf = async (nombre, file) => {
     if (!file) return;
     setLeyendoPdf((s) => ({ ...s, [nombre]: true }));
@@ -6144,6 +6341,46 @@ function RegistroPresupuestos({ exp }) {
       } else {
         texto = await ocrImagen(file);
       }
+
+      // 🛡️ GUARDA DE IDENTIDAD: el PDF tiene que ser del paciente del expediente.
+      const ident = verificarIdentidadPaciente(exp, texto);
+      if (ident.estado === "rojo") {
+        alert(
+          "🚫 PDF RECHAZADO — NO corresponde a este paciente\n\n" + ident.mensaje +
+          "\n\nNo se cargó ningún precio y el archivo fue descartado. Verificá el PDF antes de volver a subirlo."
+        );
+        setArchivos((s) => { const n = { ...s }; delete n[nombre]; return n; });
+        setInfoPdf((s) => ({ ...s, [nombre]: "🚫 PDF rechazado: figura a nombre de \"" + ident.nombrePdf + "\", que no es el paciente del expediente. No se cargó nada." }));
+        setLeyendoPdf((s) => ({ ...s, [nombre]: false }));
+        return;
+      }
+      if (ident.estado === "amarillo" || ident.estado === "sinDato") {
+        const seguir = confirm(
+          "⚠️ ATENCIÓN — verificá el paciente\n\n" + ident.mensaje +
+          "\n\n¿Confirmás que el PDF corresponde igual a este paciente y querés cargarlo?"
+        );
+        if (!seguir) {
+          setArchivos((s) => { const n = { ...s }; delete n[nombre]; return n; });
+          setInfoPdf((s) => ({ ...s, [nombre]: "🚫 Carga cancelada: el PDF quedó pendiente de verificar contra el paciente del expediente." }));
+          setLeyendoPdf((s) => ({ ...s, [nombre]: false }));
+          return;
+        }
+      }
+
+      // 🏢 Aviso si el PDF no parece ser del proveedor de esta fila.
+      if (!_proveedorEnTexto(nombre, texto)) {
+        const seguirProv = confirm(
+          "⚠️ Este PDF no parece ser del proveedor «" + nombre + "» (no encontré su nombre en el documento).\n\n" +
+          "¿Cargarlo igual como presupuesto de " + nombre + "?"
+        );
+        if (!seguirProv) {
+          setArchivos((s) => { const n = { ...s }; delete n[nombre]; return n; });
+          setInfoPdf((s) => ({ ...s, [nombre]: "🚫 Carga cancelada: el PDF no coincide con el proveedor de esta fila." }));
+          setLeyendoPdf((s) => ({ ...s, [nombre]: false }));
+          return;
+        }
+      }
+
       const precios = extraerPreciosDePdf(texto, items);
       const enc = precios.filter((p) => p.encontrado).length;
       if (enc === 0) {
@@ -6478,6 +6715,8 @@ function RegistroPresupuestos({ exp }) {
   };
 
   const confirmarCuadro = async (conExcel) => {
+    const _bloqueoCuadro = validarAvanceEtapa(exp, 3);
+    if (_bloqueoCuadro) { alert(_bloqueoCuadro); return; }
     setOcupado(true);
     try {
       // PDF fabricado en el navegador con pdf-lib (grises y logos grabados en el archivo)
@@ -6925,6 +7164,7 @@ function RegistroPresupuestos({ exp }) {
                     const file = e.target.files[0];
                     setArchivos({ ...archivos, [nombre]: file });
                     if (file && d.estado === "cotizo") leerPreciosDelPdf(nombre, file);
+                    else if (file && d.estado === "desestimo") verificarPdfNegativa(nombre, file);
                   }} />
                 {leyendoPdf[nombre] && (
                   <div style={{ fontSize: 13, color: "#0891b2", marginTop: 4, fontWeight: 600 }}>⏳ Leyendo el PDF y precargando precios…</div>
@@ -6997,6 +7237,7 @@ function GenerarNota({ exp }) {
         construirPlantilla={(logos) => plantillaNota(datosNota(exp, { monto: Number(monto), directora, imputacion, fechaTexto }), logos)}
         onCerrar={() => setRevisando(false)}
         onListo={async (data) => {
+          { const _b = validarAvanceEtapa(exp, 4); if (_b) { alert(_b); return; } }
           await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
             etapa: Math.max(exp.etapa, 4),
             nota: {
@@ -7092,6 +7333,7 @@ function PaseLetrada({ exp }) {
         construirPlantilla={(logos) => plantillaPase(datosPaseLetrada(exp, { fechaTexto, anio }), logos)}
         onCerrar={() => setRevisando(false)}
         onListo={async () => {
+          { const _b = validarAvanceEtapa(exp, 6); if (_b) { alert(_b); return; } }
           await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
             etapa: Math.max(exp.etapa, 6),
             paseLetrada: { fecha: new Date().toISOString(), fechaTexto, anio },
@@ -7332,6 +7574,7 @@ function GenerarResolucion({ exp }) {
         }), logos)}
         onCerrar={() => setRevisando(false)}
         onListo={async (data) => {
+          { const _b = validarAvanceEtapa(exp, 7); if (_b) { alert(_b); return; } }
           await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
             etapa: Math.max(exp.etapa, 7),
             resolucion: {
@@ -7642,6 +7885,7 @@ function PaseTribunal({ exp }) {
         construirPlantilla={(logos) => plantillaPase(datosPaseTribunal(exp), logos)}
         onCerrar={() => setRevisando(false)}
         onListo={async () => {
+          { const _b = validarAvanceEtapa(exp, 8); if (_b) { alert(_b); return; } }
           await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
             etapa: Math.max(exp.etapa, 8),
             paseTribunal: { fecha: new Date().toISOString() },
@@ -8182,6 +8426,14 @@ function OrdenCompraEnvio({ exp, proveedores }) {
     if (!b.respOk) { alert("Primero verificá que el proveedor haya respondido la solicitud de inicio."); return; }
     if (!b.nro) { alert("Cargá el N° de la orden de compra de " + b.clave + "."); return; }
     if (!b.archivo) { alert("Adjuntá el PDF de la orden de compra de " + b.clave + "."); return; }
+    // 🛡️ ÚLTIMO PORTÓN: revalidar TODA la cadena antes de emitir la Orden de Compra.
+    {
+      const _faltasTot = [];
+      for (let n = 1; n <= 8; n++) { const ff = _faltaEtapa(exp, n); if (ff.length) _faltasTot.push("▸ " + ETAPAS[n - 1] + "\n   • " + ff.join("\n   • ")); }
+      if (_faltasTot.length) { alert("⛔ NO se puede emitir la Orden de Compra: hay etapas anteriores incompletas.\n\n" + _faltasTot.join("\n\n") + "\n\nCorregilas antes de enviar la OC."); return; }
+      const _incoh = _incoherencias(exp);
+      if (_incoh.length && !confirm("⚠️ Antes de emitir la OC, revisá estas posibles inconsistencias:\n\n" + _incoh.map((x) => "• " + x).join("\n") + "\n\n¿Emitir la Orden de Compra igual?")) return;
+    }
     const listaDest = b.destinatarios.split(",").map((e) => e.trim()).filter(Boolean);
     if (!confirm(`Se enviará la ORDEN DE COMPRA Nº ${b.nro} adjunta, como respuesta en el hilo con:\n\n${listaDest.map((d) => "• " + d).join("\n")}\n\n¿Confirmás el envío?`)) return;
 
