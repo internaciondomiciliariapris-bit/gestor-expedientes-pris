@@ -3315,16 +3315,6 @@ function TarjetaExpediente({ e, abrir }) {
           <span style={S.chip(true, e.etapa > 0)}>
             {e.etapa === 0 ? "⏳ Sin cotizar" : ETAPAS[e.etapa - 1] + " ✓"}
           </span>
-          {e.etapa > 0 && (() => {
-            const _est = estadoExpediente(e);
-            return (
-              <div title={_est.detalle.join("\n") || _est.texto}
-                style={{ fontSize: 11.5, marginTop: 6, fontWeight: 700, color: _est.color,
-                  background: _est.color + "18", borderRadius: 8, padding: "2px 8px", display: "inline-block" }}>
-                {_est.icono} {_est.texto}
-              </div>
-            );
-          })()}
           {e.etapa >= 9 && e.cuadro?.adjudicado && (
             <div style={{ fontSize: 12, marginTop: 6, fontWeight: 800, color: "#166534" }}>
               🏆 {e.cuadro.adjudicado}
@@ -6183,17 +6173,6 @@ function validarAvanceEtapa(exp, destino) {
   if (!problemas.length) return null;
   return "⛔ No se puede avanzar a «" + ETAPAS[destino - 1] + "»: hay etapas anteriores sin completar.\n\n" +
     problemas.join("\n\n") + "\n\nCompletá esas etapas en orden antes de continuar.";
-}
-
-// Estado global para el semáforo del tablero.
-function estadoExpediente(exp) {
-  const hasta = Number(exp?.etapa) || 0;
-  const huecos = [];
-  for (let n = 1; n <= hasta; n++) { const ff = _faltaEtapa(exp, n); if (ff.length) huecos.push(ETAPAS[n - 1] + ": " + ff.join("; ")); }
-  const incoh = _incoherencias(exp);
-  if (huecos.length) return { color: "#dc2626", icono: "🔴", texto: "Faltan datos en etapas ya cursadas", detalle: huecos.concat(incoh) };
-  if (incoh.length) return { color: "#f59e0b", icono: "🟡", texto: "Revisar posibles inconsistencias", detalle: incoh };
-  return { color: "#16a34a", icono: "🟢", texto: "Circuito en orden", detalle: [] };
 }
 
 // ¿El nombre del proveedor de la fila aparece en el texto del PDF? (para avisar
