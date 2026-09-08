@@ -8256,6 +8256,7 @@ function OrdenCompraEnvio({ exp, proveedores }) {
         threadId: sol.threadId || "",
         // Fase 1.5 — respuesta del proveedor
         respOk: !!resp.recibida,
+        respManual: !!resp.manual,
         respDe: resp.de || "",
         respFecha: resp.fecha || "",
         respResumen: resp.resumen || "",
@@ -8276,6 +8277,7 @@ function OrdenCompraEnvio({ exp, proveedores }) {
   const [firmante, setFirmante] = useState(ocGuardada.firmante || firmaInicial);
   const [bloques, setBloques] = useState(() => armarBloques(modoInicial, ocGuardada.firmante || firmaInicial));
   const [ocupado, setOcupado] = useState(""); // "clave|accion" mientras trabaja
+  const [manual, setManual] = useState(null); // {k, de, fecha, texto} → carga manual de respuesta (proveedor contestó fuera del hilo)
 
   const hayAlgoIniciado = bloques.some((b) => b.solEnviado || b.ocEnviado);
 
@@ -8312,7 +8314,7 @@ function OrdenCompraEnvio({ exp, proveedores }) {
       modulo: textoModulo(x.firmas),
       destinatarios: x.destinatarios,
       solicitud: { enviado: x.solEnviado, fecha: x.solFecha || "", threadId: x.threadId || "", asunto: x.asuntoSol },
-      respuesta: { recibida: x.respOk, fecha: x.respFecha || "", de: x.respDe || "", resumen: x.respResumen || "", url: x.respUrl || "" },
+      respuesta: { recibida: x.respOk, manual: !!x.respManual, fecha: x.respFecha || "", de: x.respDe || "", resumen: x.respResumen || "", url: x.respUrl || "" },
       nro: x.nro || "",
       enviado: x.ocEnviado,
       pdfUrl: x.pdfUrl || "",
@@ -8395,6 +8397,35 @@ function OrdenCompraEnvio({ exp, proveedores }) {
       alert("✅ ¡Respondieron! Ya podés cargar el N° de OC, adjuntar el PDF y enviar la Orden de Compra a " + b.clave + ".");
     } catch (e) {
       alert("❌ Error al verificar: " + e.message);
+    }
+    setOcupado("");
+  };
+
+  // ── FASE 1.5 (bis) ── Cargar A MANO la respuesta cuando el proveedor contestó por fuera del hilo
+  const guardarManual = async () => {
+    if (!manual) return;
+    const k = manual.k;
+    const b = bloques[k];
+    const texto = (manual.texto || "").trim();
+    if (!texto) { alert("Pegá el texto del correo del proveedor para que quede constancia en el expediente."); return; }
+    const de = (manual.de || "").trim();
+    const fecha = (manual.fecha || "").trim();
+    if (!confirm(
+      "Vas a dar por RESPONDIDA a mano la solicitud de " + b.clave + ".\n\n" +
+      "Usá esto sólo cuando el proveedor contestó por fuera del hilo (abrió un correo nuevo o cambió el asunto) y por eso \"Verificar respuesta\" no lo detecta.\n\n" +
+      "Queda registrado como CARGA MANUAL, con el texto que pegaste. Después vas a poder cargar la OC (que igual revalida todo el expediente antes de salir).\n\n¿Confirmás?"
+    )) return;
+    setOcupado(b.clave + "|ver");
+    const nuevos = bloques.map((x, i) => (i === k
+      ? { ...x, respOk: true, respManual: true, respDe: de, respFecha: fecha, respResumen: texto, respUrl: "" }
+      : x));
+    setBloques(nuevos);
+    try {
+      await persistir(nuevos, false);
+      setManual(null);
+      alert("✅ Respuesta cargada a mano para " + b.clave + ". Ya podés cargar el N° de OC, adjuntar el PDF y enviar la Orden de Compra.");
+    } catch (e) {
+      alert("❌ No se pudo guardar la carga manual: " + e.message);
     }
     setOcupado("");
   };
@@ -8563,6 +8594,15 @@ function OrdenCompraEnvio({ exp, proveedores }) {
                       disabled={trabajando} onClick={() => verificar(k)}>
                       {ocupado === b.clave + "|ver" ? "⏳ Verificando..." : "🔄 Verificar respuesta"}
                     </button>
+                    <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed #e2e8f0", fontSize: 12, color: "#94a3b8" }}>
+                      ¿El proveedor contestó pero abriendo un <b>correo nuevo</b> o con <b>otro asunto</b>? Entonces no cae en este hilo y no lo detecta.{" "}
+                      <button
+                        style={{ background: "none", border: "none", padding: 0, color: "#0891b2", fontWeight: 700, fontSize: 12, cursor: "pointer", textDecoration: "underline" }}
+                        disabled={trabajando}
+                        onClick={() => setManual({ k, de: (b.destinatarios.split(",")[0] || "").trim(), fecha: new Date().toISOString().slice(0, 10), texto: "" })}>
+                        ✍️ Cargar la respuesta a mano
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -8573,6 +8613,7 @@ function OrdenCompraEnvio({ exp, proveedores }) {
                       <div style={{ padding: 10, borderRadius: 10, background: "#ecfeff", border: "1px solid #a5f3fc", marginBottom: 12 }}>
                         <div style={{ fontSize: 12, fontWeight: 700, color: "#075e75", marginBottom: 4 }}>
                           📩 Respondió {b.respDe}{b.respFecha ? " · " + b.respFecha : ""}
+                          {b.respManual && (<span style={{ color: "#b45309" }}> · ✍️ carga manual</span>)}
                           {b.respUrl && (<> · <a href={b.respUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>ver en Gmail</a></>)}
                         </div>
                         <div style={{ fontSize: 13, color: "#334155", whiteSpace: "pre-wrap", maxHeight: 140, overflow: "auto" }}>{b.respResumen}</div>
@@ -8616,6 +8657,28 @@ function OrdenCompraEnvio({ exp, proveedores }) {
         <div style={{ fontSize: 13, color: "#b45309", marginTop: 10, fontWeight: 600 }}>
           El expediente se cierra cuando estén enviadas las {bloques.length} órdenes de compra.
           {bloques.some((b) => b.ocEnviado) && " Las que figuran en verde ya salieron y no se vuelven a enviar."}
+        </div>
+      )}
+
+      {manual && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}
+             onClick={(e) => { if (e.target === e.currentTarget) setManual(null); }}>
+          <div style={{ background: "#fff", borderRadius: 14, padding: 20, width: "min(560px, 100%)", maxHeight: "90vh", overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.35)" }}>
+            <h3 style={{ color: "#075e75", marginTop: 0, marginBottom: 6 }}>✍️ Cargar respuesta a mano</h3>
+            <div style={{ fontSize: 13, color: "#64748b", marginBottom: 14 }}>
+              Usá esto <b>sólo en casos especiales</b>: cuando el proveedor respondió por fuera del hilo (abrió un correo nuevo o cambió el asunto) y por eso <b>“Verificar respuesta” no lo detecta</b>. Pegá el texto del correo para que quede constancia en el expediente. Va a quedar marcado como <b>carga manual</b>.
+            </div>
+            <label style={S.label}>Correo del proveedor que respondió</label>
+            <input style={S.input} value={manual.de} onChange={(e) => setManual({ ...manual, de: e.target.value })} placeholder="nutricion@proveedor.com.ar" />
+            <label style={S.label}>Fecha de la respuesta</label>
+            <input style={S.input} value={manual.fecha} onChange={(e) => setManual({ ...manual, fecha: e.target.value })} placeholder="2026-09-08" />
+            <label style={S.label}>Texto del correo (pegalo tal cual)</label>
+            <textarea style={{ ...S.input, minHeight: 180, fontFamily: "inherit", fontSize: 14 }} value={manual.texto} onChange={(e) => setManual({ ...manual, texto: e.target.value })} placeholder="Pegá acá el cuerpo del mail que te mandó el proveedor..." />
+            <div style={{ display: "flex", gap: 10, marginTop: 16, justifyContent: "flex-end", flexWrap: "wrap" }}>
+              <button style={S.btnSec} onClick={() => setManual(null)}>Cancelar</button>
+              <button style={S.btn} onClick={guardarManual}>✅ Dar por respondida y habilitar la OC</button>
+            </div>
+          </div>
         </div>
       )}
     </div>
