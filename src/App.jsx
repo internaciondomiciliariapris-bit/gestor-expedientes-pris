@@ -4765,9 +4765,291 @@ function AfectacionEstimada31({ exp }) {
   );
 }
 
+/* ================================================================
+   MODO REVISIÓN (SOLO LECTURA) DEL EXPEDIENTE
+   El expediente arranca en solo lectura: recorrés todas las etapas
+   y ves cada documento sin poder tocar nada. El único desbloqueo es
+   el botón "Editar nuevamente".
+   ================================================================ */
+
+// Abre un documento (nota, pase, resolución) en vista NO editable.
+function BotonVerDocumento({ construirPlantilla, etiqueta }) {
+  const [abierto, setAbierto] = useState(false);
+  if (!abierto) {
+    return (
+      <button style={{ ...S.btnSec, marginTop: 10 }} onClick={() => setAbierto(true)}>
+        {etiqueta || "👁️ Ver documento"}
+      </button>
+    );
+  }
+  return <VistaPrevia construirPlantilla={construirPlantilla} soloLectura onCerrar={() => setAbierto(false)} />;
+}
+
+// Regenera y descarga el PDF del cuadro comparativo desde lo ya guardado (no edita nada).
+function BotonVerCuadro({ exp }) {
+  const [ocupado, setOcupado] = useState(false);
+  const descargar = async () => {
+    setOcupado(true);
+    try {
+      if (!window.PDFLib) throw new Error("Falta pdf-lib: subí pdf-lib.min.js a la carpeta public y agregá la línea al index.html");
+      const p = payloadCuadro(exp);
+      const adjs = (p.adjudicaciones && p.adjudicaciones.length)
+        ? p.adjudicaciones
+        : [{ modulo: modulosDeItems(p.items)[0], proveedor: p.adjudicado.nombre || "", mensual: p.adjudicado.mensual || 0 }];
+      const textosAdj = (p.textosAdjudicacion && p.textosAdjudicacion.length)
+        ? p.textosAdjudicacion
+        : (p.textoAdjudicacion ? [p.textoAdjudicacion] : []);
+      const logosB = await obtenerLogosBytes();
+      const bytes = await crearPdfCuadro(window.PDFLib, {
+        nroExpediente: exp.nroExpediente, paciente: exp.paciente, modulo: exp.modulo,
+        periodoTexto: exp.periodoTexto, periodoMeses: exp.periodoMeses,
+        fechaCorta: fechaCortaHoy(), fmt: formatoPesos,
+        items: p.items, proveedores: p.proveedores,
+        adjudicado: p.adjudicado, adjudicaciones: adjs,
+        textosAdjudicacion: textosAdj, textoAdjudicacion: (textosAdj || []).join("  "),
+        textoConstancia: p.textoConstancia,
+      }, logosB.pris, logosB.gob);
+      descargarBytes(bytes, "CUADRO COMPARATIVO " + exp.nroExpediente.replace(/\//g, "-") + " " + exp.paciente.toUpperCase() + ".pdf");
+    } catch (e) {
+      alert("❌ " + (e.message || e));
+    }
+    setOcupado(false);
+  };
+  return (
+    <button style={{ ...S.btnSec, marginTop: 10, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={descargar}>
+      {ocupado ? "⏳ Generando..." : "⬇️ Descargar cuadro comparativo (PDF)"}
+    </button>
+  );
+}
+
+// Ronda archivada colapsable (solo lectura), para el modo revisión.
+function VerRonda({ ronda }) {
+  const [ver, setVer] = useState(false);
+  return (
+    <div style={{ marginTop: 8 }}>
+      <button style={S.btnSec} onClick={() => setVer((v) => !v)}>
+        {ver ? "▲ Ocultar" : "🗂️ Ver"} ronda {ronda.n}º · {ronda.adjudicado || "sin adjudicar"}
+      </button>
+      {ver && <RondaArchivada ronda={ronda} onVolver={() => setVer(false)} />}
+    </div>
+  );
+}
+
+function RevisionExpediente({ exp, proveedores, onEditar, volver }) {
+  const va = exp.valoresAutorizados;
+  const autorizadas = (exp.dictamen?.prestaciones || []).filter((p) => (p.cantidad || "").trim() !== "");
+  const alim = (exp.dictamen?.prestaciones || []).find((p) => /aliment/i.test(p.nombre || "") && (p.cantidad || "").trim() !== "");
+  const carpeta = exp.cotizacion?.carpetaUrl || "";
+  const presupuestos = exp.presupuestos || {};
+  const nombresProv = Object.keys(presupuestos);
+  const dato = { fontSize: 13, color: "#334155" };
+
+  const bannerEditar = (
+    <div style={{ ...S.card, borderLeft: "5px solid #0891b2", background: "#f0f9ff", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+      <div style={{ flex: 1, minWidth: 220 }}>
+        <div style={{ fontWeight: 800, color: "#075e75" }}>🔒 Estás revisando este expediente (solo lectura)</div>
+        <div style={{ fontSize: 13, color: "#0369a1", marginTop: 2 }}>
+          Recorré todas las etapas y mirá cada documento sin riesgo de modificar nada. Para cambiar algo, apretá <b>Editar nuevamente</b>.
+        </div>
+      </div>
+      <button style={S.btn} onClick={onEditar}>✏️ Editar nuevamente</button>
+    </div>
+  );
+
+  const cabecera = (hecha, texto) => (
+    <div style={{ fontWeight: 800, color: hecha ? "#166534" : "#94a3b8", marginBottom: hecha ? 6 : 0 }}>
+      {hecha ? "✅ " : "⭕ "}{texto}{hecha ? "" : " — pendiente"}
+    </div>
+  );
+  const cardEtapa = (hecha, contenido) => (
+    <div style={{ ...S.card, borderLeft: "5px solid " + (hecha ? "#16a34a" : "#e2e8f0") }}>{contenido}</div>
+  );
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        <button style={S.btnSec} onClick={volver}>← Volver al tablero</button>
+      </div>
+
+      {bannerEditar}
+
+      <div style={S.card}>
+        <div style={{ fontWeight: 800, fontSize: 18, color: "#075e75" }}>{exp.paciente.toUpperCase()}</div>
+        <div style={{ fontSize: 14, color: "#475569", marginTop: 4 }}>
+          <b>Expte.:</b> {exp.nroExpediente} · <b>DNI:</b> {exp.dni} · <b>Edad:</b> {exp.edad} años
+        </div>
+        <div style={{ fontSize: 14, color: "#475569" }}><b>Diagnóstico:</b> {exp.diagnostico}</div>
+        <div style={{ fontSize: 14, color: "#475569" }}><b>Módulo:</b> {exp.modulo}</div>
+        <div style={{ fontSize: 14, color: "#475569" }}><b>Período:</b> {exp.periodoMeses} meses {exp.periodoTexto && `(${exp.periodoTexto})`}</div>
+        <div style={{ fontSize: 13, marginTop: 4, fontWeight: 700, color: "#0e7490" }}>👤 Responsable: {exp.responsable || "sin asignar"}</div>
+        <div style={{ fontSize: 13, marginTop: 6 }}>
+          <span style={S.chip(true, exp.etapa > 0)}>
+            {exp.etapa === 0 ? "⏳ Sin cotizar" : (exp.etapa >= 9 ? "🎉 Expediente completo" : "En " + ETAPAS[Math.min(exp.etapa, ETAPAS.length - 1)])}
+          </span>
+        </div>
+        {carpeta && (
+          <div style={{ marginTop: 8 }}>
+            <a href={carpeta} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📁 Abrir la carpeta del expediente en Drive (todos los archivos cargados)</a>
+          </div>
+        )}
+      </div>
+
+      <div style={{ ...S.card, borderLeft: "5px solid " + ((exp.dictamen || exp.dictamenValidadoManual) ? "#16a34a" : "#f59e0b") }}>
+        <div style={{ fontWeight: 800, color: (exp.dictamen || exp.dictamenValidadoManual) ? "#166534" : "#92400e" }}>
+          {exp.dictamen ? "🩺 Dictamen de Auditoría Médica" : exp.dictamenValidadoManual ? "✅ Dictamen validado (expediente anterior)" : "⚠️ Sin dictamen cargado"}
+        </div>
+        {exp.dictamen && (
+          <div style={{ fontSize: 14, color: "#334155", marginTop: 8 }}>
+            {exp.dictamen.nroDictamen && (<><b>Dictamen N°:</b> {exp.dictamen.nroDictamen} · </>)}
+            {exp.dictamen.fechaDictamen && (<><b>Fecha:</b> {exp.dictamen.fechaDictamen} · </>)}
+            {exp.dictamen.esRenovacion && <span style={{ color: "#0e7490", fontWeight: 700 }}>Renovación</span>}
+            {exp.dictamen.solicita && (<div style={{ marginTop: 2 }}><b>Solicita:</b> {exp.dictamen.solicita}</div>)}
+            {exp.dictamen.periodoAutorizado && (<div><b>Período autorizado:</b> {exp.dictamen.periodoAutorizado}</div>)}
+            <div style={{ marginTop: 6 }}>
+              <b>Prestaciones autorizadas ({autorizadas.length}):</b>{" "}
+              {autorizadas.length ? autorizadas.map((p) => `${p.nombre}: ${p.cantidad}`).join(" · ") : "—"}
+            </div>
+            {alim && <div style={{ marginTop: 4, fontWeight: 700, color: "#b45309" }}>🍽️ Alimentación autorizada: {alim.cantidad}</div>}
+          </div>
+        )}
+      </div>
+
+      <CruceDictamenPresupuesto exp={exp} />
+
+      {va && (
+        <div style={{ ...S.card, borderLeft: "5px solid #0891b2" }}>
+          <div style={{ fontWeight: 800, color: "#075e75" }}>
+            🩺 Valores autorizados {va.fuente === "estimado" ? "(estimado provisorio)" : "(dictamen definitivo)"}
+          </div>
+          <div style={{ fontSize: 14, color: "#334155", marginTop: 6 }}>
+            <b>Mensual:</b> {formatoPesos(va.mensualTotal)} · <b>Total {va.meses || exp.periodoMeses} meses:</b> {formatoPesos(va.totalAfectar)}
+            {va.diasBase ? <> · <b>Base:</b> {va.diasBase} días</> : null}
+          </div>
+          {(va.aclaraciones || []).length > 0 && (
+            <div style={{ marginTop: 6 }}>
+              {va.aclaraciones.map((a, k) => (
+                <div key={k} style={{ fontStyle: "italic", color: "#475569", marginTop: 2 }}>« {textoAclaracionObj(a, false)} »</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div style={{ ...S.card, background: "#0e7490", color: "#fff", padding: "10px 16px" }}>
+        <div style={{ fontWeight: 800, fontSize: 15 }}>📋 Etapas del expediente</div>
+        <div style={{ fontSize: 12.5, opacity: 0.92, marginTop: 2 }}>Revisá una por una: qué cargaste y qué documento salió. Tocá “Ver” para mirar cada PDF/Word.</div>
+      </div>
+
+      {cardEtapa(!!exp.cotizacion, exp.cotizacion ? (<>
+        {cabecera(true, "1. Cotización enviada")}
+        <div style={dato}>
+          <b>Fecha:</b> {formatearFecha(exp.cotizacion.fecha)}{exp.cotizacion.manual ? " (registrada manualmente)" : ""}<br />
+          {exp.cotizacion.firmante && (<><b>Enviado por:</b> {exp.cotizacion.firmante}<br /></>)}
+          <b>Proveedores:</b> {exp.cotizacion.proveedores}
+          {carpeta && (<><br /><a href={carpeta} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📁 Ver carpeta en Drive</a></>)}
+        </div>
+      </>) : cabecera(false, "1. Cotización"))}
+
+      {cardEtapa(nombresProv.length > 0, nombresProv.length > 0 ? (<>
+        {cabecera(true, "2. Presupuestos cargados")}
+        {nombresProv.map((n) => {
+          const g = presupuestos[n] || {};
+          return (
+            <div key={n} style={{ borderTop: "1px solid #eef2f7", padding: "8px 0", fontSize: 13, color: "#334155" }}>
+              <b>{n}</b> —{" "}
+              {g.estado === "cotizo" ? <span style={{ color: "#166534", fontWeight: 700 }}>Cotizó {formatoPesos(g.mensual)}/mes</span>
+                : g.estado === "desestimo" ? <span style={{ color: "#b91c1c", fontWeight: 700 }}>Negativa</span>
+                : <span style={{ color: "#64748b" }}>Sin respuesta</span>}
+              {g.pdfNombre ? <span style={{ color: "#475569" }}> · 📎 {g.pdfNombre}</span> : null}
+            </div>
+          );
+        })}
+        <div style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>
+          Los PDF de los presupuestos están en la carpeta del expediente en Drive.
+          {carpeta && (<> <a href={carpeta} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>Abrir carpeta →</a></>)}
+        </div>
+      </>) : cabecera(false, "2. Presupuestos"))}
+
+      {cardEtapa(!!exp.cuadro, exp.cuadro ? (<>
+        {cabecera(true, "3. Cuadro comparativo")}
+        <div style={dato}>
+          <b>Adjudicado:</b> {exp.cuadro.adjudicado} · <b>Fecha:</b> {formatearFecha(exp.cuadro.fecha)}<br />
+          <b>Mensual:</b> {formatoPesos(exp.cuadro.mensual)} · <b>Total {exp.periodoMeses} meses:</b> {formatoPesos(exp.cuadro.total)}
+        </div>
+        {(exp.cuadro.adjudicaciones || []).length > 1 && exp.cuadro.adjudicaciones.map((a, k) => (
+          <div key={k} style={dato}>🧩 <b>{a.modulo || "Sin módulo"}:</b> {a.proveedor} — {formatoPesos(a.mensual)}/mes</div>
+        ))}
+        <BotonVerCuadro exp={exp} />
+      </>) : cabecera(false, "3. Cuadro comparativo"))}
+
+      {cardEtapa(!!exp.nota, exp.nota ? (<>
+        {cabecera(true, "4. Nota de afectación")}
+        <div style={dato}><b>Importe total:</b> {formatoPesos(exp.nota.monto)} {exp.nota.montoLetras ? "(" + exp.nota.montoLetras + ")" : ""}</div>
+        <BotonVerDocumento etiqueta="👁️ Ver la nota" construirPlantilla={(logos) => plantillaNota(datosNota(exp), logos)} />
+      </>) : cabecera(false, "4. Nota de afectación"))}
+
+      {cardEtapa(!!exp.paseAuditoria, exp.paseAuditoria ? (<>
+        {cabecera(true, "5. Pase a Auditoría Médica")}
+        <div style={dato}><b>Fecha:</b> {formatearFecha(exp.paseAuditoria.fecha)}{exp.paseAuditoria.destinataria ? <> · <b>Dirigido a:</b> {exp.paseAuditoria.destinataria}</> : null}</div>
+        <BotonVerDocumento etiqueta="👁️ Ver el pase" construirPlantilla={(logos) => plantillaPase(datosPaseAuditoria(exp), logos)} />
+      </>) : cabecera(false, "5. Pase a Auditoría Médica"))}
+
+      {cardEtapa(!!exp.paseLetrada, exp.paseLetrada ? (<>
+        {cabecera(true, "6. Pase a Asesoría Letrada")}
+        <div style={dato}><b>Fecha:</b> {formatearFecha(exp.paseLetrada.fecha)}</div>
+        <BotonVerDocumento etiqueta="👁️ Ver el pase" construirPlantilla={(logos) => plantillaPase(datosPaseLetrada(exp), logos)} />
+      </>) : cabecera(false, "6. Pase a Asesoría Letrada"))}
+
+      {cardEtapa(!!exp.resolucion, exp.resolucion ? (<>
+        {cabecera(true, "7. Resolución Interna Nº " + (exp.resolucion.nro || ""))}
+        <div style={dato}>
+          <b>Fecha:</b> {formatearFecha(exp.resolucion.fecha)}<br />
+          <b>Adjudicado:</b> {exp.resolucion.adjudicado} · <b>Total:</b> {formatoPesos(exp.resolucion.total)}
+        </div>
+        <BotonVerDocumento etiqueta="👁️ Ver la resolución" construirPlantilla={(logos) => plantillaResolucion(datosResolucion(exp), logos)} />
+      </>) : cabecera(false, "7. Resolución Interna"))}
+
+      {cardEtapa(!!exp.paseTribunal, exp.paseTribunal ? (<>
+        {cabecera(true, "8. Pase al Tribunal de Cuentas")}
+        <div style={dato}><b>Fecha:</b> {formatearFecha(exp.paseTribunal.fecha)}</div>
+        <BotonVerDocumento etiqueta="👁️ Ver el pase" construirPlantilla={(logos) => plantillaPase(datosPaseTribunal(exp), logos)} />
+      </>) : cabecera(false, "8. Pase al Tribunal de Cuentas"))}
+
+      {cardEtapa(!!exp.oc, exp.oc ? (<>
+        {cabecera(true, "9. Orden de compra")}
+        <div style={dato}>
+          {exp.oc.nro && (<><b>N°:</b> {exp.oc.nro} · </>)}
+          {exp.oc.fecha && (<><b>Fecha:</b> {formatearFecha(exp.oc.fecha)}<br /></>)}
+          {exp.oc.destinatarios && (<><b>Destinatarios:</b> {exp.oc.destinatarios}<br /></>)}
+        </div>
+        {(exp.oc.envios || []).map((e, k) => (
+          <div key={k} style={dato}>
+            🧾 <b>{e.proveedor}</b> — OC Nº {e.nro}{e.modulo ? " (" + e.modulo + ")" : ""}
+            {e.pdfUrl && (<> · <a href={e.pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📄 PDF</a></>)}
+          </div>
+        ))}
+        {exp.oc.pdfUrl && !(exp.oc.envios || []).length && (
+          <div style={dato}><a href={exp.oc.pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📄 Orden de compra en el Drive</a></div>
+        )}
+      </>) : cabecera(false, "9. Orden de compra"))}
+
+      {Array.isArray(exp.rondas) && exp.rondas.length > 0 && (
+        <div style={{ ...S.card, borderLeft: "5px solid #64748b" }}>
+          <div style={{ fontWeight: 800, color: "#334155" }}>🗂️ Rondas archivadas ({exp.rondas.length})</div>
+          <div style={{ fontSize: 13, color: "#64748b", marginTop: 2 }}>Adjudicaciones anteriores (por desistimiento del proveedor), en solo lectura.</div>
+          {exp.rondas.map((r, i) => <VerRonda key={i} ronda={r} />)}
+        </div>
+      )}
+
+      <div style={{ marginTop: 6 }}>{bannerEditar}</div>
+    </div>
+  );
+}
+
 function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
   // Etapa que se está mirando. Arranca en la actual y se mueve sola cuando el expediente avanza.
   const [abierta, setAbierta] = useState(Math.min(exp.etapa, ETAPAS.length - 1));
+  const [modoLectura, setModoLectura] = useState(true); // arranca en solo lectura; "Editar nuevamente" desbloquea
   const [reenviarCotiz, setReenviarCotiz] = useState(false);
   const [modalSeg, setModalSeg] = useState(false);
   const [rondaVista, setRondaVista] = useState("activa"); // "activa" | índice en exp.rondas
@@ -4778,6 +5060,10 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
       setAbierta(Math.min(exp.etapa, ETAPAS.length - 1));
     }
   }, [exp.etapa]);
+
+  if (modoLectura) {
+    return <RevisionExpediente exp={exp} proveedores={proveedores} onEditar={() => setModoLectura(false)} volver={volver} />;
+  }
 
   const aviso = (texto) => (
     <div style={{ ...S.card, color: "#64748b", fontSize: 14, borderLeft: "5px solid #cbd5e1" }}>{texto}</div>
@@ -4794,6 +5080,14 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
         <div style={{ flex: 1 }} />
         <button style={S.btnSec} onClick={editar}>✏️ Editar datos</button>
         <button style={S.btnSec} onClick={renovar}>🔄 Renovar período</button>
+      </div>
+
+      <div style={{ ...S.card, borderLeft: "5px solid #f59e0b", background: "#fffbeb", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <div style={{ fontWeight: 800, color: "#b45309" }}>✏️ Modo edición activado</div>
+          <div style={{ fontSize: 13, color: "#7c5b13" }}>Podés modificar cualquier etapa. Cuando termines de revisar, volvé a solo lectura para no tocar nada sin querer.</div>
+        </div>
+        <button style={S.btnSec} onClick={() => setModoLectura(true)}>🔒 Volver a solo lectura</button>
       </div>
 
       <div style={S.card}>
@@ -5349,7 +5643,7 @@ function BotonRedescargar({ construirPayload }) {
 
 /* ---------- Vista previa editable de documentos ---------- */
 
-function VistaPrevia({ construirPlantilla, onListo, onCerrar }) {
+function VistaPrevia({ construirPlantilla, onListo, onCerrar, soloLectura }) {
   const [plantilla, setPlantilla] = useState(null);
   const [ocupado, setOcupado] = useState(false);
   const hojaRef = useRef(null);
@@ -5373,7 +5667,7 @@ function VistaPrevia({ construirPlantilla, onListo, onCerrar }) {
       const data = await llamarYDescargar(payload);
       if (onListo) await onListo({ ...data, montoLetras: plantilla.montoLetras || "" });
       alert("✅ PDF generado y descargado a tu máquina." + (conWord ? "\n📄 También se descargó la versión Word." : ""));
-      if (onCerrar) onCerrar();
+      if (onCerrar && !soloLectura) onCerrar();
     } catch (e) {
       alert("❌ Error al generar el PDF: " + e.message);
     }
@@ -5388,14 +5682,16 @@ function VistaPrevia({ construirPlantilla, onListo, onCerrar }) {
     <div style={{ ...S.card, borderLeft: "5px solid #0891b2", background: "#f8fafc" }}>
       <div style={{ fontWeight: 800, color: "#075e75", marginBottom: 4 }}>👁️ Revisión del documento</div>
       <div style={{ fontSize: 13, color: "#64748b", marginBottom: 10 }}>
-        Así va a salir el PDF. <b>Si hay algo que corregir, hacé clic sobre el texto y editalo directamente acá</b> — nombres, fechas, fojas, montos, lo que sea. Cuando esté bien, apretá el botón verde.
+        {soloLectura
+          ? <>Vista del documento tal cual quedó (<b>solo lectura</b>). Si querés, descargalo en PDF o Word con el botón de abajo.</>
+          : <>Así va a salir el PDF. <b>Si hay algo que corregir, hacé clic sobre el texto y editalo directamente acá</b> — nombres, fechas, fojas, montos, lo que sea. Cuando esté bien, apretá el botón verde.</>}
       </div>
       <style>{plantilla.css + " .hoja .pagina { background:#fff; box-shadow:0 1px 6px rgba(0,0,0,0.3); margin:0 auto 14px; width:" + (plantilla.apaisado ? "1123px" : "794px") + "; min-height:" + (plantilla.apaisado ? "794px" : "1122px") + "; box-sizing:border-box; }"}</style>
       <div style={{ overflowX: "auto", background: "#cbd5e1", padding: 12, borderRadius: 8 }}>
         <div
           className="hoja"
           ref={hojaRef}
-          contentEditable
+          contentEditable={!soloLectura}
           suppressContentEditableWarning
           spellCheck={false}
           style={{ outline: "none", minWidth: plantilla.apaisado ? 1123 : 794 }}
@@ -5403,14 +5699,27 @@ function VistaPrevia({ construirPlantilla, onListo, onCerrar }) {
         />
       </div>
       <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
-        <button style={{ ...S.btn, flex: 2, minWidth: 220, fontSize: 15, background: "#16a34a", opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => generar(false)}>
-          {ocupado ? "⏳ Generando..." : "✅ ESTÁ BIEN — GENERAR PDF"}
-        </button>
-        <button style={{ ...S.btnSec, flex: 1, minWidth: 130, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => generar(true)}>
-          {ocupado ? "⏳..." : "📄 PDF + Word"}
-        </button>
-        {onCerrar && (
-          <button style={{ ...S.btnSec, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={onCerrar}>✖ Cancelar</button>
+        {soloLectura ? (
+          <>
+            <button style={{ ...S.btn, flex: 2, minWidth: 220, fontSize: 15, background: "#0891b2", opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => generar(true)}>
+              {ocupado ? "⏳ Generando..." : "⬇️ Descargar PDF + Word"}
+            </button>
+            {onCerrar && (
+              <button style={{ ...S.btnSec, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={onCerrar}>✖ Cerrar</button>
+            )}
+          </>
+        ) : (
+          <>
+            <button style={{ ...S.btn, flex: 2, minWidth: 220, fontSize: 15, background: "#16a34a", opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => generar(false)}>
+              {ocupado ? "⏳ Generando..." : "✅ ESTÁ BIEN — GENERAR PDF"}
+            </button>
+            <button style={{ ...S.btnSec, flex: 1, minWidth: 130, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => generar(true)}>
+              {ocupado ? "⏳..." : "📄 PDF + Word"}
+            </button>
+            {onCerrar && (
+              <button style={{ ...S.btnSec, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={onCerrar}>✖ Cancelar</button>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -6143,17 +6452,26 @@ function _faltaEtapa(exp, n) {
 }
 
 // Inconsistencias entre etapas (aviso, no bloquean el avance salvo en el portón final).
+// Fuente de verdad del importe: si Auditoría Médica ya fijó valores autorizados
+// (dictamen definitivo o estimado a 31 días), la Nota y la Resolución se comparan
+// CONTRA EL DICTAMEN, no contra el Cuadro. El Cuadro se deja intacto (es el comparativo
+// real a 30 días que se presentó al SIGEDIG); la diferencia contra él es esperable y ya
+// queda explicada por la aclaración del dictamen (31 días / recorte), así que no dispara
+// el cartel. Si todavía NO hay dictamen, se compara contra el total del Cuadro.
 function _incoherencias(exp) {
   const a = [];
-  const cuadroMes = Number(exp?.cuadro?.mensual) || 0;
-  const cuadroTot = Number(exp?.cuadro?.total) || 0;
-  if (exp?.nota?.fecha && cuadroMes > 0 && Number(exp?.nota?.monto) > 0) {
-    if (Math.abs(Number(exp.nota.monto) - cuadroMes) > 1)
-      a.push("El monto de la Nota (" + formatoPesos(exp.nota.monto) + ") no coincide con el mensual del Cuadro (" + formatoPesos(cuadroMes) + ")");
+  const va = exp?.valoresAutorizados;
+  const hayDictamen = Number(va?.totalAfectar) > 0;
+  const baseTotal = hayDictamen ? Number(va.totalAfectar) : Number(exp?.cuadro?.total) || 0;
+  const origen = hayDictamen ? "el dictamen de Auditoría Médica (valores autorizados)" : "el Cuadro comparativo";
+
+  if (exp?.nota?.fecha && baseTotal > 0 && Number(exp?.nota?.monto) > 0) {
+    if (Math.abs(Number(exp.nota.monto) - baseTotal) > 1)
+      a.push("El importe de la Nota (" + formatoPesos(exp.nota.monto) + ") no coincide con " + origen + " (" + formatoPesos(baseTotal) + "). Regenerá la Nota con el valor vigente.");
   }
-  if (exp?.resolucion?.fecha && cuadroTot > 0 && Number(exp?.resolucion?.total) > 0) {
-    if (Math.abs(Number(exp.resolucion.total) - cuadroTot) > 1)
-      a.push("El total de la Resolución (" + formatoPesos(exp.resolucion.total) + ") no coincide con el total del Cuadro (" + formatoPesos(cuadroTot) + ")");
+  if (exp?.resolucion?.fecha && baseTotal > 0 && Number(exp?.resolucion?.total) > 0) {
+    if (Math.abs(Number(exp.resolucion.total) - baseTotal) > 1)
+      a.push("El total de la Resolución (" + formatoPesos(exp.resolucion.total) + ") no coincide con " + origen + " (" + formatoPesos(baseTotal) + "). Regenerá la Resolución con el valor vigente.");
   }
   if (exp?.resolucion?.adjudicado && exp?.cuadro?.adjudicado &&
       _norm(exp.resolucion.adjudicado) !== _norm(exp.cuadro.adjudicado))
