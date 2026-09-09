@@ -5049,7 +5049,7 @@ function RevisionExpediente({ exp, proveedores, onEditar, volver }) {
 function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
   // Etapa que se está mirando. Arranca en la actual y se mueve sola cuando el expediente avanza.
   const [abierta, setAbierta] = useState(Math.min(exp.etapa, ETAPAS.length - 1));
-  const [modoLectura, setModoLectura] = useState(true); // arranca en solo lectura; "Editar nuevamente" desbloquea
+  const [modoLectura, setModoLectura] = useState(exp.etapa >= 9); // SOLO los expedientes COMPLETOS (9 etapas + OC enviada) arrancan en solo lectura; los que están en proceso siguen igual que siempre
   const [reenviarCotiz, setReenviarCotiz] = useState(false);
   const [modalSeg, setModalSeg] = useState(false);
   const [rondaVista, setRondaVista] = useState("activa"); // "activa" | índice en exp.rondas
@@ -5082,13 +5082,15 @@ function DetalleExpediente({ exp, proveedores, volver, editar, renovar }) {
         <button style={S.btnSec} onClick={renovar}>🔄 Renovar período</button>
       </div>
 
-      <div style={{ ...S.card, borderLeft: "5px solid #f59e0b", background: "#fffbeb", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-        <div style={{ flex: 1, minWidth: 200 }}>
-          <div style={{ fontWeight: 800, color: "#b45309" }}>✏️ Modo edición activado</div>
-          <div style={{ fontSize: 13, color: "#7c5b13" }}>Podés modificar cualquier etapa. Cuando termines de revisar, volvé a solo lectura para no tocar nada sin querer.</div>
+      {exp.etapa >= 9 && (
+        <div style={{ ...S.card, borderLeft: "5px solid #f59e0b", background: "#fffbeb", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <div style={{ fontWeight: 800, color: "#b45309" }}>✏️ Modo edición activado</div>
+            <div style={{ fontSize: 13, color: "#7c5b13" }}>Podés modificar cualquier etapa. Cuando termines de revisar, volvé a solo lectura para no tocar nada sin querer.</div>
+          </div>
+          <button style={S.btnSec} onClick={() => setModoLectura(true)}>🔒 Volver a solo lectura</button>
         </div>
-        <button style={S.btnSec} onClick={() => setModoLectura(true)}>🔒 Volver a solo lectura</button>
-      </div>
+      )}
 
       <div style={S.card}>
         <div style={{ fontWeight: 800, fontSize: 18, color: "#075e75" }}>{exp.paciente.toUpperCase()}</div>
