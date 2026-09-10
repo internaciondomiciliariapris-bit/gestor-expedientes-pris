@@ -6432,17 +6432,22 @@ function _faltaEtapa(exp, n) {
       else if (!(Number(exp?.nota?.monto) > 0)) f.push("La nota de afectación no tiene monto");
       break;
     case 5:
-      if (!exp?.paseAuditoria?.fecha) f.push("El pase a Auditoría Médica no fue generado");
+      // Pase de trámite: si el expediente ya SUPERÓ esta etapa (avanzó a Asesoría Letrada o
+      // más), el pase se cumplió en el circuito real. No se bloquea la OC por falta del
+      // rastro digital —expedientes migrados/anteriores o avanzados por fuera del sistema—.
+      // Coincide con el semáforo del tablero, que da la etapa por hecha cuando exp.etapa la
+      // supera. Si todavía estás EN la etapa (exp.etapa < 5), sí se exige generar el pase.
+      if (!exp?.paseAuditoria?.fecha && !(Number(exp?.etapa) >= 5)) f.push("El pase a Auditoría Médica no fue generado");
       break;
     case 6:
-      if (!exp?.paseLetrada?.fecha) f.push("El pase a Asesoría Letrada no fue generado");
+      if (!exp?.paseLetrada?.fecha && !(Number(exp?.etapa) >= 6)) f.push("El pase a Asesoría Letrada no fue generado");
       break;
     case 7:
       if (!exp?.resolucion?.fecha) f.push("La resolución no fue generada");
       else if (!String(exp?.resolucion?.nro || "").trim()) f.push("La resolución no tiene número");
       break;
     case 8:
-      if (!exp?.paseTribunal?.fecha) f.push("El pase a Tribunal de Cuentas no fue generado");
+      if (!exp?.paseTribunal?.fecha && !(Number(exp?.etapa) >= 8)) f.push("El pase a Tribunal de Cuentas no fue generado");
       break;
     case 9: {
       const env = exp?.oc?.envios || [];
