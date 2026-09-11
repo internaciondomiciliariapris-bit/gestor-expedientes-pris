@@ -334,6 +334,50 @@ const envolverHtml = (css, body, apaisado) =>
 
 /* ---------- NOTA DE AFECTACIÓN (Times New Roman 12, formato del Word original) ---------- */
 
+// Cola de la imputación de la nota con el ejercicio correcto: reemplaza el
+// "– Presupuesto AAAA" final por el año que corresponda, marcando "a Futuro"
+// cuando el ejercicio es posterior al vigente (formato del modelo oficial).
+function imputacionNotaEjercicio(imput, anio, esFuturo) {
+  const base = String(imput || "").replace(/\s*[–-]\s*Presupuesto\b.*$/i, "").trim();
+  return base + " – Presupuesto " + (esFuturo ? "a Futuro " : "") + anio;
+}
+
+// Párrafo del importe de la nota. Si el período cruza dos (o más) ejercicios
+// presupuestarios (p.ej. "Septiembre 2026 a Febrero 2027"), sale PARTIDO por
+// ejercicio igual que la resolución, con el formato del modelo:
+//   "…por el importe total por N meses de $X (letras) a la … – Presupuesto 2026.
+//    Y por el importe total por M mes(es) de $Y (letras) a la … – Presupuesto a Futuro 2027."
+// Si cae en un solo ejercicio (o no se puede determinar el comienzo), sale como
+// siempre: un único importe total por el período completo.
+function importeNotaHtml(d) {
+  const total = Number(d.monto || 0);
+  const meses = Number(d.periodoMeses || 0);
+  const tramos = tramosPorEjercicio(d.periodoTexto, meses);
+  const frase = (n, monto, imput) =>
+    "por el importe total por " + n + " " + (n === 1 ? "mes" : "meses") +
+    " de <b>" + formatoPesos(monto) + "</b> (" + numeroALetras(monto) + ") a la " +
+    esc(imput)
+      .replace(/Subp:\s*3\d\d/g, "<b>$&</b>")
+      .replace(/Presupuesto(?:\s+a\s+Futuro)?\s*\d{4}/, "<b>$&</b>");
+
+  // Un solo ejercicio (o período no parseable) → comportamiento de siempre, sin tocar la imputación.
+  if (!tramos || tramos.length < 2 || !(total > 0)) {
+    return "Para los periodos de <b>" + esc(d.periodoTexto) + "</b>, " + frase(meses, total, d.imputacion) + ".";
+  }
+  // Dos (o más) ejercicios → un importe por ejercicio (el último absorbe el redondeo).
+  const mensual = Math.round(total / meses);
+  const anioVigente = tramos[0].anio;
+  let acumulado = 0;
+  const partes = tramos.map((t, i) => {
+    const n = t.meses.length;
+    const monto = (i === tramos.length - 1) ? (total - acumulado) : mensual * n;
+    acumulado += monto;
+    return frase(n, monto, imputacionNotaEjercicio(d.imputacion, t.anio, t.anio > anioVigente));
+  });
+  return "Para los periodos de <b>" + esc(d.periodoTexto) + "</b>, " +
+    partes.map((p, i) => (i === 0 ? "" : "Y ") + p).join(". ") + ".";
+}
+
 function plantillaNota(d, logos) {
   const letras = numeroALetras(d.monto);
   const moduloLimpio = limpiarModulo(d.modulo);
@@ -343,9 +387,6 @@ function plantillaNota(d, logos) {
   const prestacionesHtml = itemsNota
     .map((it) => '<p style="margin-left:176pt; margin-top:2pt;">' + esc(it.nombre) + (it.cantTexto ? ": " + esc(it.cantTexto) : "") + "</p>")
     .join("");
-  const impHtml = esc(d.imputacion)
-    .replace(/Subp:\s*3\d\d/g, "<b>$&</b>")
-    .replace(/Presupuesto\s*\d{4}/, "<b>$&</b>");
   const css =
     ".hoja { font-family:'Times New Roman', Times, serif; font-size:12pt; color:#000; } " +
     ".hoja .pagina { padding: 26pt 79pt 30pt 80pt; } .hoja p { margin:0; }";
@@ -361,8 +402,7 @@ function plantillaNota(d, logos) {
     '<p style="margin-left:146pt; margin-top:12pt;">' + lineaModulo + (itemsNota.length ? ":" : "") + "</p>" +
     prestacionesHtml +
     '<p style="text-align:justify; text-indent:135pt; line-height:1.5; margin-top:14pt;">' +
-    "Para los periodos de <b>" + esc(d.periodoTexto) + "</b>, por el importe total por " + esc(d.periodoMeses) +
-    " meses de <b>" + esc(d.montoFormato) + "</b> (" + letras + ") a la " + impHtml + ".</p>" +
+    importeNotaHtml(d) + "</p>" +
     ((Array.isArray(d.aclaracion) ? d.aclaracion : (d.aclaracion ? [d.aclaracion] : []))
       .map((_a) => '<p style="text-align:justify; text-indent:135pt; line-height:1.5; margin-top:10pt; font-family:Arial, Helvetica, sans-serif; font-style:italic;">«' + esc(_a) + '»</p>').join("")) +
     '<p style="margin-left:145pt; margin-top:22pt;">Sin otro motivo saludo atentamente.</p>' +
