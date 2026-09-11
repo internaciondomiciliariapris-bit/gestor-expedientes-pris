@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, Fragment } from "react";
 import { initializeApp } from "firebase/app";
 import {
-  getFirestore, collection, addDoc, doc, updateDoc, deleteDoc, onSnapshot, getDocs, setDoc,
+  getFirestore, collection, addDoc, doc, updateDoc, deleteDoc, onSnapshot, getDocs, setDoc, FieldPath,
 } from "firebase/firestore";
 import { getAuth, signInAnonymously } from "firebase/auth";
 import { PACIENTES_USUARIOS } from "./usuarios.js";
@@ -6891,12 +6891,15 @@ function RegistroPresupuestos({ exp }) {
     setAutoInfo("💾 Guardando...");
     timerAuto.current = setTimeout(async () => {
       try {
-        const cambios = { itemsPrestacion: items };
+        // Se arma como pares (campo, valor) con FieldPath para que los nombres de
+        // proveedor CON PUNTOS (ej. "OMNES S.R.L") se guarden como clave literal y
+        // no como campos anidados. Ver nota en guardarProveedor.
+        const pares = ["itemsPrestacion", items];
         consultados.forEach((n) => {
           const r = registroParcial(n);
-          if (r) cambios["presupuestos." + n] = r;
+          if (r) pares.push(new FieldPath("presupuestos", n), r);
         });
-        await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), cambios);
+        await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), ...pares);
         setAutoInfo("✓ Guardado automáticamente " + new Date().toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }));
       } catch (e) {
         setAutoInfo("⚠️ No se pudo autoguardar — usá los botones Guardar");
@@ -6982,10 +6985,15 @@ function RegistroPresupuestos({ exp }) {
         pdfNombre,
         fecha: new Date().toISOString(),
       };
-      await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), {
-        ["presupuestos." + nombre]: registro,
-        itemsPrestacion: items,
-      });
+      // OJO: el nombre del proveedor puede tener puntos (ej. "OMNES S.R.L").
+      // Con la forma { "presupuestos."+nombre: ... } Firestore leería esos puntos
+      // como campos ANIDADOS y guardaría mal (presupuestos→"OMNES S"→"R"→"L").
+      // FieldPath("presupuestos", nombre) trata cada segmento como clave LITERAL.
+      await updateDoc(
+        doc(db, COL_EXPEDIENTES, exp.id),
+        new FieldPath("presupuestos", nombre), registro,
+        "itemsPrestacion", items
+      );
       setDatos({ ...datos, [nombre]: { ...d, pdfNombre } });
       setAbiertos({ ...abiertos, [nombre]: false });
       alert("✅ Guardado: " + nombre + (d.estado === "cotizo" ? " — Mensual total: " + formatoPesos(registro.mensual) : ""));
