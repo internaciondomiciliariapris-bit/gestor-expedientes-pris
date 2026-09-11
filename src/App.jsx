@@ -2434,6 +2434,7 @@ export default function App() {
           <NuevoExpediente
             modo="nuevo"
             usuario={usuario}
+            existentes={expedientes}
             onCreado={(e) => { setExpedienteSel(e); setVista("detalle"); }}
             onCancelar={() => setVista("tablero")}
           />
@@ -2453,6 +2454,7 @@ export default function App() {
             modo="renovar"
             usuario={usuario}
             inicial={expedienteVivo}
+            existentes={expedientes}
             onCreado={(e) => { setExpedienteSel(e); setVista("detalle"); }}
             onCancelar={() => setVista("detalle")}
           />
@@ -3294,12 +3296,13 @@ function TarjetaCorreo({ c }) {
 
 /* ---------- Tablero ---------- */
 
-function TarjetaExpediente({ e, abrir }) {
+function TarjetaExpediente({ e, abrir, duplicado }) {
   const [editando, setEditando] = useState(false);
   const [dom, setDom] = useState(e.domicilio || "");
   const [tel, setTel] = useState(e.telefono || "");
   const [guardando, setGuardando] = useState(false);
   const [ok, setOk] = useState(false);
+  const [borrando, setBorrando] = useState(false);
 
   // Si el expediente se actualiza desde afuera (onSnapshot) y no estoy editando,
   // reflejo los valores nuevos en los inputs.
@@ -3311,6 +3314,21 @@ function TarjetaExpediente({ e, abrir }) {
   const vencido = dias !== null && dias > 5 && e.etapa === 1;
 
   const stop = (ev) => ev.stopPropagation();
+  const eliminar = async (ev) => {
+    ev.stopPropagation();
+    if (!confirm(
+      `Vas a ELIMINAR este expediente:\n\nN° ${e.nroExpediente} — ${(e.paciente || "").toUpperCase()}` +
+      (e.dni ? ` (DNI ${e.dni})` : "") + "\n\n" +
+      "Asegurate de que sea el duplicado que sobra (no el que tiene los datos buenos). Esto NO se puede deshacer. ¿Confirmás?"
+    )) return;
+    setBorrando(true);
+    try {
+      await deleteDoc(doc(db, COL_EXPEDIENTES, e.id));
+    } catch (err) {
+      alert("No se pudo eliminar: " + err.message);
+      setBorrando(false);
+    }
+  };
   const abrirEdicion = (ev) => {
     ev.stopPropagation();
     setDom(e.domicilio || ""); setTel(e.telefono || "");
@@ -3338,6 +3356,19 @@ function TarjetaExpediente({ e, abrir }) {
 
   return (
     <div style={{ ...S.card, cursor: editando ? "default" : "pointer" }} onClick={() => { if (!editando) abrir(e); }}>
+      {duplicado && (
+        <div onClick={stop} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, padding: "6px 10px", marginBottom: 10 }}>
+          <span style={{ fontSize: 13, fontWeight: 800, color: "#b91c1c" }}>⚠ Posible duplicado — hay otro expediente con este mismo número</span>
+          <div style={{ flex: 1 }} />
+          <button
+            style={{ ...S.btnSec, padding: "4px 10px", fontSize: 13, borderColor: "#fca5a5", color: "#b91c1c" }}
+            onClick={eliminar}
+            disabled={borrando}
+          >
+            {borrando ? "Eliminando…" : "🗑 Eliminar este"}
+          </button>
+        </div>
+      )}
       <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
         <div>
           <div style={{ fontWeight: 800, fontSize: 16, color: "#075e75" }}>{e.paciente.toUpperCase()}</div>
@@ -3425,6 +3456,10 @@ function TarjetaExpediente({ e, abrir }) {
 
 function Tablero({ expedientes, usuario, abrir }) {
   const [filtro, setFiltro] = useState("mios"); // mios | todos
+  // Números que aparecen en más de un expediente → posibles duplicados.
+  const normNro = (s) => String(s || "").toUpperCase().replace(/\s+/g, "").replace(/[.\-]/g, "");
+  const conteoNro = {};
+  expedientes.forEach((e) => { const k = normNro(e.nroExpediente); if (k) conteoNro[k] = (conteoNro[k] || 0) + 1; });
   const lista = (filtro === "mios"
     ? expedientes.filter((e) => (e.responsable || "") === usuario)
     : [...expedientes]
@@ -3452,7 +3487,7 @@ function Tablero({ expedientes, usuario, abrir }) {
       )}
 
       {lista.map((e) => (
-        <TarjetaExpediente key={e.id} e={e} abrir={abrir} />
+        <TarjetaExpediente key={e.id} e={e} abrir={abrir} duplicado={conteoNro[normNro(e.nroExpediente)] > 1} />
       ))}
     </div>
   );
@@ -3460,7 +3495,7 @@ function Tablero({ expedientes, usuario, abrir }) {
 
 /* ---------- Nuevo expediente ---------- */
 
-function NuevoExpediente({ modo = "nuevo", usuario = "", inicial = null, expId = null, onCreado, onCancelar }) {
+function NuevoExpediente({ modo = "nuevo", usuario = "", inicial = null, expId = null, existentes = [], onCreado, onCancelar }) {
   const [f, setF] = useState(() => {
     if (inicial) {
       return {
@@ -3579,6 +3614,26 @@ function NuevoExpediente({ modo = "nuevo", usuario = "", inicial = null, expId =
         await updateDoc(doc(db, COL_EXPEDIENTES, expId), { ...f, edad });
         onCreado({ id: expId, ...f, edad });
       } else {
+        // 🛡️ Guard anti-duplicado: no crear otro expediente con el MISMO número
+        // (y mismo DNI). Se compara normalizando mayúsculas/espacios/barras.
+        const norm = (s) => String(s || "").toUpperCase().replace(/\s+/g, "").replace(/[.\-]/g, "");
+        const dupe = (existentes || []).find((ex) =>
+          norm(ex.nroExpediente) === norm(f.nroExpediente) &&
+          (norm(ex.dni) === norm(f.dni) || !f.dni || !ex.dni)
+        );
+        if (dupe) {
+          setGuardando(false);
+          const abrir = confirm(
+            `Ya existe un expediente con el N° ${dupe.nroExpediente}` +
+            (dupe.paciente ? ` — ${dupe.paciente.toUpperCase()}` : "") +
+            (dupe.dni ? ` (DNI ${dupe.dni})` : "") + ".\n\n" +
+            "Un mismo trámite (aunque pida rehabilitación Y traslado, o varias prestaciones) va en UN SOLO expediente: se cargan como módulos distintos dentro del mismo.\n\n" +
+            "Aceptar = ABRIR el que ya existe (recomendado).\n" +
+            "Cancelar = crear otro igual de todos modos."
+          );
+          if (abrir) { onCreado(dupe); return; }
+          setGuardando(true); // el usuario insiste en crear un duplicado
+        }
         const data = { ...f, edad, etapa: 0, sv: 4, creado: new Date().toISOString(), ...(dictamenCargado ? { dictamen: dictamenCargado } : {}) };
         const ref = await addDoc(collection(db, COL_EXPEDIENTES), data);
         onCreado({ id: ref.id, ...data });
@@ -3887,6 +3942,7 @@ function _norm(s) {
 const _LABELS_DICT = [
   "Médico", "Enfermería", "Fonoaudiología",
   "Kinesiología respiratoria", "Kinesiología motora", "Alimentación",
+  "Transporte", "Centro de Educación Temprana",
 ];
 
 // Interpreta el texto del dictamen y arma los campos de la ficha.
@@ -5047,6 +5103,7 @@ function RevisionExpediente({ exp, proveedores, onEditar, volver }) {
                 : g.estado === "desestimo" ? <span style={{ color: "#b91c1c", fontWeight: 700 }}>Negativa</span>
                 : <span style={{ color: "#64748b" }}>Sin respuesta</span>}
               {g.pdfNombre ? <span style={{ color: "#475569" }}> · 📎 {g.pdfNombre}</span> : null}
+              {g.pdfUrl ? <> · <a href={g.pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📄 Ver PDF</a></> : null}
             </div>
           );
         })}
@@ -6656,6 +6713,15 @@ function _proveedorEnTexto(nombreProv, textoPdf) {
   return tokens.some((tok) => t.includes(tok));
 }
 
+// Convierte un link del Drive ("/file/d/ID/view") a su versión embebible ("/preview")
+// para mostrarlo dentro de un <iframe>. Otros hosts se intentan embeber tal cual.
+function urlPdfEmbebible(url) {
+  const u = String(url || "");
+  const m = u.match(/drive\.google\.com\/file\/d\/([^/]+)/);
+  if (m) return "https://drive.google.com/file/d/" + m[1] + "/preview";
+  return u;
+}
+
 function RegistroPresupuestos({ exp }) {
   const consultados = (exp.cotizacion?.proveedores || "").split(",").map((s) => s.trim()).filter(Boolean);
   const guardados = exp.presupuestos || {};
@@ -6685,6 +6751,7 @@ function RegistroPresupuestos({ exp }) {
   const [editandoItems, setEditandoItems] = useState(false);
   const [pegando, setPegando] = useState(false);
   const [textoPegado, setTextoPegado] = useState("");
+  const [pdfVista, setPdfVista] = useState(null); // nombre del proveedor cuyo PDF se ve embebido
 
   const setItem = (i, campo, valor) => {
     const nuevos = items.map((it, idx) => (idx === i ? { ...it, [campo]: valor } : it));
@@ -6730,6 +6797,7 @@ function RegistroPresupuestos({ exp }) {
       d[n] = {
         estado: guardados[n]?.estado || "",
         pdfNombre: guardados[n]?.pdfNombre || "",
+        pdfUrl: guardados[n]?.pdfUrl || "",
         items: itemsProveedorIniciales(guardados[n]),
         modulos: guardados[n]?.modulos ? JSON.parse(JSON.stringify(guardados[n].modulos)) : {},
       };
@@ -6964,7 +7032,8 @@ function RegistroPresupuestos({ exp }) {
       modulos: mods,
       mensual: totalMes || null,
       unitario: d.estado === "cotizo" && its.length === 1 && its[0].unitario != null ? its[0].unitario : null,
-      pdfNombre: d.pdfNombre || "",
+      pdfNombre: d.pdfNombre || guardados[nombre]?.pdfNombre || "",
+      pdfUrl: d.pdfUrl || guardados[nombre]?.pdfUrl || "",
       fecha: guardados[nombre]?.fecha || new Date().toISOString(),
     };
   };
@@ -7027,6 +7096,7 @@ function RegistroPresupuestos({ exp }) {
     setOcupado(true);
     try {
       let pdfNombre = d.pdfNombre || "";
+      let pdfUrl = d.pdfUrl || "";
       const archivo = archivos[nombre];
       if (archivo) {
         const base64 = await leerArchivoBase64(archivo);
@@ -7042,6 +7112,8 @@ function RegistroPresupuestos({ exp }) {
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || "Error al subir el PDF");
         pdfNombre = archivo.name;
+        // El puente devuelve el link del PDF en el Drive; lo guardamos para poder verlo después.
+        pdfUrl = data.url || data.pdfUrl || data.archivoUrl || data.carpetaUrl || pdfUrl;
       }
       const itemsRegistro = d.estado === "cotizo"
         ? items.map((it, i) => ({
@@ -7069,6 +7141,7 @@ function RegistroPresupuestos({ exp }) {
         mensual: d.estado === "cotizo" ? mensualEnPantalla(nombre) : null,
         unitario: d.estado === "cotizo" && itemsRegistro.length === 1 ? itemsRegistro[0].unitario : null,
         pdfNombre,
+        pdfUrl,
         fecha: new Date().toISOString(),
       };
       // OJO: el nombre del proveedor puede tener puntos (ej. "OMNES S.R.L").
@@ -7080,7 +7153,7 @@ function RegistroPresupuestos({ exp }) {
         new FieldPath("presupuestos", nombre), registro,
         "itemsPrestacion", items
       );
-      setDatos({ ...datos, [nombre]: { ...d, pdfNombre } });
+      setDatos({ ...datos, [nombre]: { ...d, pdfNombre, pdfUrl } });
       setAbiertos({ ...abiertos, [nombre]: false });
       alert("✅ Guardado: " + nombre + (d.estado === "cotizo" ? " — Mensual total: " + formatoPesos(registro.mensual) : ""));
     } catch (e) {
@@ -7520,11 +7593,29 @@ function RegistroPresupuestos({ exp }) {
               {guardados[nombre]?.estado === "cotizo" && <span style={{ color: "#16a34a" }}>✅ Cotizó: {formatoPesos(guardados[nombre].mensual)}/mes · {formatoPesos((guardados[nombre].mensual || 0) * Number(exp.periodoMeses || 6))} por {exp.periodoMeses} meses</span>}
               {guardados[nombre]?.estado === "desestimo" && <span style={{ color: "#b91c1c" }}>🚫 No cotizó (negativa){guardados[nombre]?.pdfNombre ? " 📎" : ""}</span>}
               {guardados[nombre]?.estado === "sin_respuesta" && <span style={{ color: "#64748b" }}>⏳ No respondió</span>}
+              {guardados[nombre]?.pdfUrl && <a href={guardados[nombre].pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700, fontSize: 13 }}>📄 Ver PDF</a>}
+              {guardados[nombre]?.pdfUrl && (
+                <button
+                  style={{ ...S.btnSec, padding: "4px 10px", fontSize: 13 }}
+                  onClick={() => setPdfVista(pdfVista === nombre ? null : nombre)}
+                >
+                  {pdfVista === nombre ? "🙈 Ocultar" : "👁 Ver acá"}
+                </button>
+              )}
               <div style={{ flex: 1 }} />
               <button style={S.btnSec} onClick={() => setAbiertos({ ...abiertos, [nombre]: !abierto })}>
                 {abierto ? "▲ Cerrar" : "▼ Editar"}
               </button>
             </div>
+            {pdfVista === nombre && guardados[nombre]?.pdfUrl && (
+              <div style={{ marginTop: 10, border: "1px solid #cbd5e1", borderRadius: 8, overflow: "hidden" }}>
+                <iframe
+                  title={"PDF " + nombre}
+                  src={urlPdfEmbebible(guardados[nombre].pdfUrl)}
+                  style={{ width: "100%", height: 520, border: "none" }}
+                />
+              </div>
+            )}
             {abierto && (<>
             <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
               {[["cotizo", "💰 Cotizó"], ["desestimo", "🚫 No cotizó (mandó negativa)"], ["sin_respuesta", "⏳ No respondió"]].map(([v, t]) => (
