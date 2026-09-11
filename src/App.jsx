@@ -353,8 +353,9 @@ function importeNotaHtml(d) {
   const total = Number(d.monto || 0);
   const meses = Number(d.periodoMeses || 0);
   const tramos = tramosPorEjercicio(d.periodoTexto, meses);
-  const frase = (n, monto, imput) =>
+  const frase = (n, monto, imput, rango) =>
     "por el importe total por " + n + " " + (n === 1 ? "mes" : "meses") +
+    (rango ? " (" + rango + ")" : "") +
     " de <b>" + formatoPesos(monto) + "</b> (" + numeroALetras(monto) + ") a la " +
     esc(imput)
       .replace(/Subp:\s*3\d\d/g, "<b>$&</b>")
@@ -372,7 +373,7 @@ function importeNotaHtml(d) {
     const n = t.meses.length;
     const monto = (i === tramos.length - 1) ? (total - acumulado) : mensual * n;
     acumulado += monto;
-    return frase(n, monto, imputacionNotaEjercicio(d.imputacion, t.anio, t.anio > anioVigente));
+    return frase(n, monto, imputacionNotaEjercicio(d.imputacion, t.anio, t.anio > anioVigente), rangoMesesTexto(t.meses, t.anio));
   });
   return "Para los periodos de <b>" + esc(d.periodoTexto) + "</b>, " +
     partes.map((p, i) => (i === 0 ? "" : "Y ") + p).join(". ") + ".";
@@ -4395,6 +4396,7 @@ function cruzarDictamen(autorizadas, items) {
 }
 
 function CruceDictamenPresupuesto({ exp }) {
+  const [expandido, setExpandido] = useState(false);
   if (!exp.dictamen) return null; // sin dictamen no hay contra qué cruzar
 
   const autorizadas = (exp.dictamen.prestaciones || []).filter((p) => (p.cantidad || "").trim() !== "");
@@ -4421,27 +4423,30 @@ function CruceDictamenPresupuesto({ exp }) {
     extra: { bg: "#fef2f2", bd: "#fca5a5", tag: "#b91c1c", txt: "✖ cotizado, no autorizado" },
   };
 
-  const borde = difs === 0 ? "5px solid #16a34a" : "5px solid #ef4444";
+  // Firma de las diferencias actuales. Si cambia el dictamen o lo cotizado, cambia
+  // la firma y el aviso vuelve a aparecer (no se tapa un cambio real posterior).
+  const firma = filas.filter((f) => f.tipo !== "ok")
+    .map((f) => (f.izq?.nombre || "") + "|" + (f.izq?.cantidad || "") + "~" + (f.der?.nombre || "") + "|" + (f.der?.cantidad || ""))
+    .join(";");
+  // El aviso deja de molestar cuando: (a) ya avanzaste más allá del cuadro (nota
+  // afectación en adelante), o (b) tocaste "Ya lo revisé" para ESTAS mismas
+  // diferencias. En esos casos queda un resumen chico y neutro, desplegable.
+  const avanzado = (Number(exp.etapa) || 0) > 2 || !!exp.nota;
+  const revisadoManual = difs > 0 && exp.cruceRevisadoFirma === firma;
+  const modoResumen = difs > 0 && (avanzado || revisadoManual);
 
-  return (
-    <div style={{ ...S.card, borderLeft: borde }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <div style={{ fontWeight: 800, color: difs === 0 ? "#166534" : "#b91c1c" }}>
-          🔀 Cruce Dictamen ↔ Cotizado
-        </div>
-        <div style={{ flex: 1 }} />
-        <div style={{ fontSize: 13, fontWeight: 700, color: difs === 0 ? "#166534" : "#b91c1c" }}>
-          {difs === 0 ? "✅ Todo lo autorizado coincide con lo cotizado" : `⚠️ ${difs} diferencia${difs === 1 ? "" : "s"} para revisar`}
-        </div>
-      </div>
+  const marcarRevisado = async () => {
+    try { await updateDoc(doc(db, COL_EXPEDIENTES, exp.id), { cruceRevisadoFirma: firma }); }
+    catch (e) { alert("No se pudo guardar: " + e.message); }
+  };
 
-      {/* encabezado de las dos columnas */}
+  const tabla = (
+    <>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, marginTop: 12, fontSize: 12, fontWeight: 800, color: "#334155" }}>
         <div>🩺 AUTORIZADO (Dictamen)</div>
         <div>💰 COTIZADO / ADJUDICADO</div>
         <div style={{ textAlign: "right" }}>Estado</div>
       </div>
-
       <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
         {filas.map((f, i) => {
           const c = colores[f.tipo];
@@ -4474,9 +4479,50 @@ function CruceDictamenPresupuesto({ exp }) {
           );
         })}
       </div>
+    </>
+  );
 
-      <div style={{ fontSize: 12, color: "#64748b", marginTop: 10 }}>
-        El cruce es una ayuda para revisar de un vistazo: puede marcar diferencias por cómo esté redactado un ítem. Confirmá vos antes de avanzar.
+  // MODO RESUMEN: ya revisado / ya avanzado → una sola línea neutra (sin rojo), desplegable.
+  if (modoResumen && !expandido) {
+    return (
+      <div style={{ ...S.card, borderLeft: "5px solid #cbd5e1" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ fontWeight: 800, color: "#475569" }}>🔀 Cruce Dictamen ↔ Cotizado</div>
+          <div style={{ fontSize: 13, color: "#64748b" }}>
+            ✓ Revisado — {difs} ítem{difs === 1 ? "" : "s"} con redacción distinta
+          </div>
+          <div style={{ flex: 1 }} />
+          <button style={S.btnSec} onClick={() => setExpandido(true)}>▼ Ver detalle</button>
+        </div>
+      </div>
+    );
+  }
+
+  const borde = difs === 0 ? "5px solid #16a34a" : (modoResumen ? "5px solid #cbd5e1" : "5px solid #ef4444");
+  const colorTit = difs === 0 ? "#166534" : (modoResumen ? "#475569" : "#b91c1c");
+
+  return (
+    <div style={{ ...S.card, borderLeft: borde }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ fontWeight: 800, color: colorTit }}>
+          🔀 Cruce Dictamen ↔ Cotizado
+        </div>
+        <div style={{ flex: 1 }} />
+        <div style={{ fontSize: 13, fontWeight: 700, color: colorTit }}>
+          {difs === 0 ? "✅ Todo lo autorizado coincide con lo cotizado" : `⚠️ ${difs} diferencia${difs === 1 ? "" : "s"} para revisar`}
+        </div>
+      </div>
+
+      {tabla}
+
+      <div style={{ fontSize: 12, color: "#64748b", marginTop: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ flex: 1, minWidth: 220 }}>El cruce es una ayuda para revisar de un vistazo: puede marcar diferencias por cómo esté redactado un ítem. Confirmá vos antes de avanzar.</span>
+        {difs > 0 && !modoResumen && (
+          <button style={S.btnSec} onClick={marcarRevisado}>✓ Ya lo revisé (son redacciones)</button>
+        )}
+        {modoResumen && expandido && (
+          <button style={S.btnSec} onClick={() => setExpandido(false)}>▲ Ocultar</button>
+        )}
       </div>
     </div>
   );
