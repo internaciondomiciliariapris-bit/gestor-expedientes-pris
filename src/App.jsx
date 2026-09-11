@@ -6361,41 +6361,100 @@ function _tokensNombre(s) {
     .trim().split(/\s+/)
     .filter((t) => t.length >= 2 && !_PARTICULAS_NOMBRE.has(t));
 }
-// Saca el nombre del paciente del texto del PDF (después del marcador "Pcte"/"Paciente").
-function _pacienteDeTextoPdf(texto) {
+// Solo los dígitos de una cadena (para comparar DNI aunque venga con puntos).
+function _soloDigitos(s) { return String(s || "").replace(/\D+/g, ""); }
+// Conjunto de tokens (MAYÚSCULAS, sin acentos) de cualquier texto — misma
+// normalización que _tokensNombre, para buscar el nombre en TODO el PDF.
+function _setTokensDeTexto(texto) {
+  return new Set(
+    String(texto || "").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^A-ZÑ]+/g, " ").split(/\s+/).filter(Boolean)
+  );
+}
+// ¿Aparece el DNI del expediente en el texto? Une los separadores de miles
+// (58.861.273 / 58 861 273 → 58861273) SIN pegar números distintos, y exige que
+// el DNI quede delimitado (no como parte de otro número más largo).
+function _dniEnTexto(dni, texto) {
+  const d = _soloDigitos(dni);
+  if (d.length < 7) return false;
+  const compact = String(texto || "").replace(/(\d)[.\s](?=\d)/g, "$1");
+  return new RegExp("(?<!\\d)" + d + "(?!\\d)").test(compact);
+}
+// Saca el nombre del paciente del texto del PDF. 1º por el marcador
+// "Pcte"/"Paciente" (formato Dynamic); si no está, por la línea que contiene el
+// DNI del expediente (formato Omnes: "Apellido Nombre - 58861273 - Siprosa …").
+function _pacienteDeTextoPdf(texto, dniExp) {
   const m = String(texto || "").match(/\bp(?:cte|aciente)\.?\s*:?\s*([^\n\r]+)/i);
-  if (!m) return null;
-  let s = m[1].trim();
-  // corta si en la misma línea sigue otra etiqueta del presupuesto o el punto final
-  s = s.split(/\s{2,}|\bperiodo\b|\bcond\.?\b|\bvendedor\b|\bmoneda\b|\bflete\b|\bdni\b/i)[0];
-  return s.replace(/\.\s*$/, "").trim();
+  if (m) {
+    let s = m[1].trim();
+    // corta si en la misma línea sigue otra etiqueta del presupuesto o el punto final
+    s = s.split(/\s{2,}|\bperiodo\b|\bcond\.?\b|\bvendedor\b|\bmoneda\b|\bflete\b|\bdni\b/i)[0];
+    return s.replace(/\.\s*$/, "").trim();
+  }
+  const d = _soloDigitos(dniExp);
+  if (d.length >= 7) {
+    const lineas = String(texto || "").split(/[\n\r]+/);
+    for (const l of lineas) {
+      if (_dniEnTexto(d, l)) {
+        let s = l.split(/\d/)[0];                 // el nombre va antes del DNI
+        s = s.replace(/[-–:]+\s*$/, "").trim();
+        if (_tokensNombre(s).length) return s;
+      }
+    }
+  }
+  return null;
 }
 function verificarIdentidadPaciente(exp, textoPdf) {
   const tExp = _tokensNombre(exp?.paciente);
-  if (tExp.length === 0) return { estado: "ok", nombrePdf: null }; // expediente sin paciente: nada que comparar
-  const nombrePdf = _pacienteDeTextoPdf(textoPdf);
-  if (!nombrePdf) {
+  const dniExp = _soloDigitos(exp?.dni);
+  // Expediente sin paciente ni DNI: nada que comparar.
+  if (tExp.length === 0 && dniExp.length < 7) return { estado: "ok", nombrePdf: null };
+
+  // ✅ Confirmación fuerte por DNI: si el DNI del expediente aparece en el PDF,
+  // es prácticamente seguro que el presupuesto es de este paciente (aunque el
+  // nombre venga con otro orden/acento o el formato no lo exponga claro).
+  const dniEnPdf = _dniEnTexto(dniExp, textoPdf);
+  const nombrePdf = _pacienteDeTextoPdf(textoPdf, exp?.dni);
+  if (dniEnPdf) return { estado: "ok", nombrePdf: nombrePdf || exp?.paciente || null };
+
+  // Sin DNI en el PDF: comparo por nombre (marcador Pcte o línea del DNI).
+  if (nombrePdf && tExp.length) {
+    const setPdf = new Set(_tokensNombre(nombrePdf));
+    const comunes = tExp.filter((t) => setPdf.has(t));
+    const faltantes = tExp.filter((t) => !setPdf.has(t));
+    if (faltantes.length === 0) return { estado: "ok", nombrePdf };
+    if (comunes.length === 0) {
+      return {
+        estado: "rojo", nombrePdf,
+        mensaje: `El PDF figura a nombre de "${nombrePdf}", que NO coincide con el paciente del expediente ` +
+          `"${exp.paciente}". No coincide ningún nombre.`,
+      };
+    }
     return {
-      estado: "sinDato", nombrePdf: null,
-      mensaje: `No pude leer el nombre del paciente dentro del PDF para compararlo con "${exp.paciente}". ` +
-        `Verificá a mano que el presupuesto sea de este paciente.`,
+      estado: "amarillo", nombrePdf,
+      mensaje: `El PDF figura a nombre de "${nombrePdf}" y el paciente del expediente es "${exp.paciente}". ` +
+        `Coinciden en parte, pero no del todo (revisá: ${faltantes.join(", ")}).`,
     };
   }
-  const setPdf = new Set(_tokensNombre(nombrePdf));
-  const comunes = tExp.filter((t) => setPdf.has(t));
-  const faltantes = tExp.filter((t) => !setPdf.has(t));
-  if (faltantes.length === 0) return { estado: "ok", nombrePdf };
-  if (comunes.length === 0) {
-    return {
-      estado: "rojo", nombrePdf,
-      mensaje: `El PDF figura a nombre de "${nombrePdf}", que NO coincide con el paciente del expediente ` +
-        `"${exp.paciente}". No coincide ningún nombre.`,
-    };
+
+  // Último recurso: sin marcador ni DNI, busco el nombre COMPLETO en todo el texto.
+  if (tExp.length) {
+    const setTodo = _setTokensDeTexto(textoPdf);
+    const comunes = tExp.filter((t) => setTodo.has(t));
+    const faltantes = tExp.filter((t) => !setTodo.has(t));
+    if (faltantes.length === 0) return { estado: "ok", nombrePdf: exp.paciente };
+    if (comunes.length > 0) {
+      return {
+        estado: "amarillo", nombrePdf: null,
+        mensaje: `El nombre del paciente "${exp.paciente}" aparece solo en parte dentro del PDF ` +
+          `(revisá: ${faltantes.join(", ")}).`,
+      };
+    }
   }
   return {
-    estado: "amarillo", nombrePdf,
-    mensaje: `El PDF figura a nombre de "${nombrePdf}" y el paciente del expediente es "${exp.paciente}". ` +
-      `Coinciden en parte, pero no del todo (revisá: ${faltantes.join(", ")}).`,
+    estado: "sinDato", nombrePdf: null,
+    mensaje: `No pude leer el nombre del paciente dentro del PDF para compararlo con "${exp.paciente}". ` +
+      `Verificá a mano que el presupuesto sea de este paciente.`,
   };
 }
 
