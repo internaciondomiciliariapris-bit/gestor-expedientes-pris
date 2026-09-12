@@ -3385,35 +3385,37 @@ function TarjetaExpediente({ e, abrir, duplicado }) {
           </button>
         </div>
       )}
-      <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-        <div>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.3fr) minmax(0, 1.2fr) max-content", gap: 12, alignItems: "start" }}>
+        <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 800, fontSize: 16, color: "#075e75" }}>{e.paciente.toUpperCase()}</div>
           <div style={{ fontSize: 13, color: "#475569" }}>
             Expte. {e.nroExpediente} · DNI {e.dni}
           </div>
           <div style={{ fontSize: 13, color: "#475569", marginTop: 2 }}>{e.modulo}</div>
-          <div style={{ fontSize: 14, fontWeight: 800, color: "#334155", marginTop: 4, textAlign: "center" }}>
+          <div style={{ fontSize: 14, fontWeight: 800, color: "#334155", marginTop: 4 }}>
             🗓️ {e.periodoTexto ? e.periodoTexto : (e.periodoMeses ? e.periodoMeses + " meses" : "Período no cargado")}
           </div>
           <div style={{ fontSize: 12, marginTop: 4, fontWeight: 700, color: e.responsable ? "#0e7490" : "#94a3b8" }}>
             👤 {e.responsable || "Sin responsable asignado"}
           </div>
         </div>
-        {itemsOrdenados.length > 0 && (
-          <div style={{ flex: 1, minWidth: 200, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2, padding: "0 8px" }}>
-            <div style={{ fontSize: 12, fontWeight: 800, color: "#0e7490", marginBottom: 2, textAlign: "center" }}>
-              🩺 Prestaciones{e.cuadro?.adjudicado ? " · " + e.cuadro.adjudicado : ""}
-            </div>
-            {itemsOrdenados.map((it, i) => {
-              const cant = it.cantTexto || (it.cantNum ? String(it.cantNum) : "");
-              return (
-                <div key={i} style={{ fontSize: 13, color: "#334155", textAlign: "center", lineHeight: 1.35 }}>
-                  <b>{it.nombre}</b>{cant ? ": " + cant : ""}
-                </div>
-              );
-            })}
-          </div>
-        )}
+        <div style={{ minWidth: 0, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2 }}>
+          {itemsOrdenados.length > 0 && (
+            <>
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#0e7490", marginBottom: 2 }}>
+                🩺 Prestaciones{e.cuadro?.adjudicado ? " · " + e.cuadro.adjudicado : ""}
+              </div>
+              {itemsOrdenados.map((it, i) => {
+                const cant = it.cantTexto || (it.cantNum ? String(it.cantNum) : "");
+                return (
+                  <div key={i} style={{ fontSize: 13, color: "#334155", lineHeight: 1.35 }}>
+                    <b>{it.nombre}</b>{cant ? ": " + cant : ""}
+                  </div>
+                );
+              })}
+            </>
+          )}
+        </div>
         <div style={{ textAlign: "right" }}>
           <span style={S.chip(true, e.etapa > 0)}>
             {e.etapa === 0 ? "⏳ Sin cotizar" : ETAPAS[e.etapa - 1] + " ✓"}
