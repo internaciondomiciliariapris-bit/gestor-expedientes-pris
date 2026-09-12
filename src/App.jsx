@@ -3400,6 +3400,24 @@ function TarjetaExpediente({ e, abrir, duplicado }) {
         </div>
       </div>
 
+      {Array.isArray(e.itemsPrestacion) && e.itemsPrestacion.filter((it) => it && it.nombre).length > 0 && (
+        <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #eef2f7" }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: "#0e7490", marginBottom: 4 }}>
+            🩺 Prestaciones{e.cuadro?.adjudicado ? ` — adjudicado a ${e.cuadro.adjudicado}` : ""}
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px" }}>
+            {e.itemsPrestacion.filter((it) => it && it.nombre).map((it, i) => {
+              const cant = it.cantTexto || (it.cantNum ? String(it.cantNum) : "");
+              return (
+                <span key={i} style={{ fontSize: 13, color: "#334155" }}>
+                  <b>{it.nombre}</b>{cant ? ": " + cant : ""}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Contacto del paciente / familiar: visible y editable sin abrir el expediente */}
       <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #eef2f7" }} onClick={stop}>
         {!editando ? (
@@ -3946,6 +3964,35 @@ const _LABELS_DICT = [
 ];
 
 // Interpreta el texto del dictamen y arma los campos de la ficha.
+// Lee la tabla "DETALLE / CANTIDAD SOLICITADA" del dictamen SIN lista fija:
+// toma cada renglón con una cantidad (N sesiones/hs/traslados/visitas/veces… x
+// semana/día/mes) y devuelve {nombre, cantidad}. Así entra CUALQUIER prestación,
+// no solo las conocidas. El texto ya viene separado por renglones (reconstruirTexto).
+function prestacionesTablaGenerica(t) {
+  const lineas = String(t || "").split("\n");
+  let ini = -1, fin = lineas.length;
+  for (let i = 0; i < lineas.length; i++) {
+    const n = _norm(lineas[i]);
+    if (ini === -1) { if (/cantidad\s+solicitada/.test(n)) ini = i + 1; continue; }
+    if (/(dictamen\s+de\s+auditoria|^\s*dictamen\b|^\s*pase\b|documentaci[oó]n\s+adjunta|observaci)/.test(n)) { fin = i; break; }
+  }
+  if (ini === -1) return [];
+  const reCant = /(\d[\d.,]*\s*(?:sesion\w*|traslado\w*|visita\w*|veces|vez|hs|horas?|d[ií]as?|m[oó]dulos?|unidad\w*)?(?:\s*(?:x|por)\s*(?:semana|d[ií]a|dia|mes))?)\s*$/i;
+  const out = [];
+  for (let i = ini; i < fin; i++) {
+    const l = lineas[i].replace(/\s+/g, " ").trim();
+    if (!l || /^detalle\b/i.test(_norm(l))) continue;
+    let nombre = l, cantidad = "";
+    const m = l.match(reCant);
+    if (m && /\d/.test(m[1])) { cantidad = m[1].trim(); nombre = l.slice(0, l.length - m[1].length).trim(); }
+    nombre = nombre.replace(/[·:.\-–]+$/, "").trim();
+    if (nombre.length < 3 || !/[a-záéíóúñ]/i.test(nombre)) continue;
+    if (!cantidad) continue; // solo las prestaciones autorizadas (con cantidad)
+    out.push({ nombre, cantidad });
+  }
+  return out;
+}
+
 function parsearDictamen(texto) {
   // Algunos PDF mapean el espacio a un carácter del área privada (U+E000–U+F8FF);
   // lo pasamos a espacio real para que trim() y la búsqueda de etiquetas funcionen.
@@ -4053,6 +4100,10 @@ function parsearDictamen(texto) {
     }
   });
 
+  // Lectura libre: prestaciones de la tabla que NO están en la lista conocida
+  // (Transporte/Traslado, Centro Educativo, o cualquier otra futura).
+  out.prestacionesExtra = prestacionesTablaGenerica(t);
+
   return out;
 }
 
@@ -4090,6 +4141,18 @@ function FichaDictamen({ exp }) {
           }
           return p;
         });
+        // Agrega las prestaciones leídas de la tabla que NO están en la plantilla
+        // fija (Transporte, Centro Educativo, o cualquier otra) → lectura libre.
+        const nuevos = [];
+        const vistos = new Set(pres.map((p) => _norm(p.nombre)));
+        (d.prestacionesExtra || []).forEach((x) => {
+          const k = _norm(x.nombre);
+          if (vistos.has(k)) return;
+          if (pres.some((p) => matchPrestacion(p.nombre, x.nombre))) return;
+          vistos.add(k);
+          const tm = totalMensualDesde(x.cantidad).total;
+          nuevos.push({ nombre: x.nombre, cantidad: x.cantidad, totalMensual: tm != null ? String(tm) : "" });
+        });
         return {
           ...prev,
           nroDictamen: d.nroDictamen || prev.nroDictamen,
@@ -4098,7 +4161,7 @@ function FichaDictamen({ exp }) {
           esRenovacion: d.esRenovacion || prev.esRenovacion,
           periodoAutorizado: d.periodoAutorizado || prev.periodoAutorizado,
           firmante: d.firmante || prev.firmante,
-          prestaciones: pres,
+          prestaciones: [...pres, ...nuevos],
         };
       });
       const topesTxt = (d.topesDictamen || [])
