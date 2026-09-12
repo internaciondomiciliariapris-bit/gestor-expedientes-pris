@@ -3296,6 +3296,19 @@ function TarjetaCorreo({ c }) {
 
 /* ---------- Tablero ---------- */
 
+// Orden clínico fijo para mostrar las prestaciones en la tarjeta:
+// enfermería, kinesiología motora, kinesiología respiratoria, fonoaudiología,
+// médico/visita, y el resto (transporte, centro, alimentación…) al final.
+function _ordenPresta(nombre) {
+  const n = _norm(nombre);
+  if (n.includes("enfermer")) return 0;
+  if (n.includes("kinesi") && n.includes("motor")) return 1;
+  if (n.includes("kinesi") && n.includes("respirator")) return 2;
+  if (n.includes("fonoaud") || n.includes("fonoest")) return 3;
+  if (n.includes("medic") || n.includes("visita")) return 4;
+  return 5;
+}
+
 function TarjetaExpediente({ e, abrir, duplicado }) {
   const [editando, setEditando] = useState(false);
   const [dom, setDom] = useState(e.domicilio || "");
@@ -3312,6 +3325,9 @@ function TarjetaExpediente({ e, abrir, duplicado }) {
 
   const dias = e.etapa >= 1 && e.cotizacion ? diasHabilesDesde(e.cotizacion.fecha) : null;
   const vencido = dias !== null && dias > 5 && e.etapa === 1;
+  const itemsOrdenados = (Array.isArray(e.itemsPrestacion) ? e.itemsPrestacion.filter((it) => it && it.nombre) : [])
+    .slice()
+    .sort((a, b) => _ordenPresta(a.nombre) - _ordenPresta(b.nombre));
 
   const stop = (ev) => ev.stopPropagation();
   const eliminar = async (ev) => {
@@ -3383,6 +3399,21 @@ function TarjetaExpediente({ e, abrir, duplicado }) {
             👤 {e.responsable || "Sin responsable asignado"}
           </div>
         </div>
+        {itemsOrdenados.length > 0 && (
+          <div style={{ flex: 1, minWidth: 200, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2, padding: "0 8px" }}>
+            <div style={{ fontSize: 12, fontWeight: 800, color: "#0e7490", marginBottom: 2, textAlign: "center" }}>
+              🩺 Prestaciones{e.cuadro?.adjudicado ? " · " + e.cuadro.adjudicado : ""}
+            </div>
+            {itemsOrdenados.map((it, i) => {
+              const cant = it.cantTexto || (it.cantNum ? String(it.cantNum) : "");
+              return (
+                <div key={i} style={{ fontSize: 13, color: "#334155", textAlign: "center", lineHeight: 1.35 }}>
+                  <b>{it.nombre}</b>{cant ? ": " + cant : ""}
+                </div>
+              );
+            })}
+          </div>
+        )}
         <div style={{ textAlign: "right" }}>
           <span style={S.chip(true, e.etapa > 0)}>
             {e.etapa === 0 ? "⏳ Sin cotizar" : ETAPAS[e.etapa - 1] + " ✓"}
@@ -3399,24 +3430,6 @@ function TarjetaExpediente({ e, abrir, duplicado }) {
           )}
         </div>
       </div>
-
-      {Array.isArray(e.itemsPrestacion) && e.itemsPrestacion.filter((it) => it && it.nombre).length > 0 && (
-        <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #eef2f7" }}>
-          <div style={{ fontSize: 12, fontWeight: 800, color: "#0e7490", marginBottom: 4 }}>
-            🩺 Prestaciones{e.cuadro?.adjudicado ? ` — adjudicado a ${e.cuadro.adjudicado}` : ""}
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px" }}>
-            {e.itemsPrestacion.filter((it) => it && it.nombre).map((it, i) => {
-              const cant = it.cantTexto || (it.cantNum ? String(it.cantNum) : "");
-              return (
-                <span key={i} style={{ fontSize: 13, color: "#334155" }}>
-                  <b>{it.nombre}</b>{cant ? ": " + cant : ""}
-                </span>
-              );
-            })}
-          </div>
-        </div>
-      )}
 
       {/* Contacto del paciente / familiar: visible y editable sin abrir el expediente */}
       <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #eef2f7" }} onClick={stop}>
