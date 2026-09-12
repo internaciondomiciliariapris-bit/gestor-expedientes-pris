@@ -2519,6 +2519,11 @@ function Login({ onOk }) {
   const [ver, setVer] = useState(false);
   const [error, setError] = useState("");
   const [consulta, setConsulta] = useState(false);
+  // Evita que el navegador rellene la clave sola al cargar la pantalla: el campo
+  // arranca de solo-lectura y se habilita recién cuando el usuario lo toca. Así
+  // la casilla aparece vacía, pero el navegador sigue pudiendo guardar/ofrecer
+  // la clave una vez que se hace clic.
+  const [campoActivo, setCampoActivo] = useState(false);
 
   const entrar = () => {
     if (!usuario) { setError("Elegí tu usuario en la lista."); return; }
@@ -2564,6 +2569,8 @@ function Login({ onOk }) {
               name="password"
               placeholder="Contraseña"
               autoComplete="current-password"
+              readOnly={!campoActivo}
+              onFocus={() => setCampoActivo(true)}
               style={{ ...S.input, paddingRight: 44 }}
               value={clave}
               onChange={(e) => { setClave(e.target.value); setError(""); }}
