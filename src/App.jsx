@@ -59,7 +59,58 @@ const CREDENCIALES = [
 
 /* ================================================================ */
 
-const app = initializeApp(firebaseConfig);
+// Frases de bienvenida por día de la semana (getDay(): 0=domingo … 6=sábado).
+// Se elige una al azar en cada ingreso, así no se repite siempre la misma.
+const FRASES_POR_DIA = {
+  1: [ // lunes
+    "Arranca la semana. Cada expediente que resolvés hoy es una familia que respira más tranquila. ¡Vamos con todo!",
+    "Lunes de página en blanco: hoy empieza una semana llena de oportunidades para ayudar. ¡Que sea una gran jornada!",
+    "Nueva semana, nueva energía. Gracias por poner el hombro cada día por los pacientes del programa.",
+    "Feliz lunes. Los grandes logros se construyen un día a la vez; hoy damos el primer paso.",
+  ],
+  2: [ // martes
+    "Martes de seguir sumando. Lo que hacés importa, y se nota. ¡Buena jornada!",
+    "Ya tomamos ritmo: paso firme y con foco, hoy va a ser un gran día.",
+    "Feliz martes. La constancia de tu trabajo es la que sostiene a todo el equipo.",
+    "Martes con impulso: cada tarea completada acerca a un paciente a su tratamiento.",
+  ],
+  3: [ // miércoles
+    "¡Mitad de semana! Ya recorriste la mitad del camino y lo hiciste muy bien. Seguimos.",
+    "Miércoles, el corazón de la semana. Gracias por tu compromiso de todos los días.",
+    "Feliz miércoles. Un respiro, un mate, y a seguir haciendo la diferencia.",
+    "Cuesta arriba hasta acá, cuesta abajo desde acá. ¡Buen miércoles para todos!",
+  ],
+  4: [ // jueves
+    "Jueves de recta final. Falta poco para el finde y hoy también dejamos huella. ¡Ánimo!",
+    "Casi, casi. Tu esfuerzo de esta semana ya está dando frutos. Feliz jueves.",
+    "Feliz jueves: un día más cerca del descanso, un día más ayudando a quien lo necesita.",
+    "Jueves con la meta a la vista. Terminemos la semana tan bien como la empezamos.",
+  ],
+  5: [ // viernes
+    "¡Viernes! Cerramos la semana con orgullo por todo lo que logramos. Que tengas un finde hermoso.",
+    "Último empujón de la semana. Gracias por tu trabajo; te ganaste el descanso que viene.",
+    "Feliz viernes. Cada semana que cierra es una semana de pacientes mejor atendidos. ¡Bien ahí!",
+    "Viernes de balance positivo. Terminá tranquilo: hiciste un gran trabajo.",
+  ],
+  6: [ // sábado
+    "¿Trabajando un sábado? Que sea liviano y que te quede tiempo para vos. ¡Gracias por tanto!",
+    "Sábado de esfuerzo extra. Ojalá sea un ratito nomás. ¡Cuidate!",
+  ],
+  0: [ // domingo
+    "Domingo de recargar energías. Si estás por acá, que sea un momento cortito. ¡Cuidate!",
+    "Gracias por tu dedicación, hasta en domingo. Que puedas descansar pronto.",
+  ],
+};
+
+const NOMBRE_DIA = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
+
+function fraseDelDia() {
+  const arr = FRASES_POR_DIA[new Date().getDay()] || [];
+  if (!arr.length) return "¡Que tengas una excelente jornada de trabajo!";
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+/* ================================================================ */
 const db = getFirestore(app);
 const auth = getAuth(app);
 
@@ -2311,6 +2362,7 @@ export default function App() {
   const [proveedores, setProveedores] = useState([]);
   const [expedienteSel, setExpedienteSel] = useState(null);
   const [busqueda, setBusqueda] = useState(false); // pantalla de consulta rápida (solo lectura)
+  const [bienvenida, setBienvenida] = useState(null); // frase de bienvenida al ingresar (o null)
 
   // Inicia la sesión con las credenciales ya validadas en el Login.
   const iniciarSesion = (id, rolUsuario) => {
@@ -2323,6 +2375,7 @@ export default function App() {
     setBusqueda(false);
     setUsuario(id);
     setRol(rolUsuario);
+    setBienvenida(fraseDelDia()); // cartel de bienvenida sólo al ingresar
     setLogueado(true);
   };
 
@@ -2419,6 +2472,13 @@ export default function App() {
 
   return (
     <div style={S.page}>
+      {bienvenida && (
+        <BienvenidaModal
+          nombre={esGerencia ? "" : usuario}
+          frase={bienvenida}
+          onCerrar={() => setBienvenida(null)}
+        />
+      )}
       <header style={S.header}>
         <img src={LOGO_PRIS} alt="" style={S.logo} onError={(e) => (e.target.style.display = "none")} />
         <div style={{ flex: 1 }}>
@@ -2501,6 +2561,47 @@ export default function App() {
           />
         )}
         {vista === "proveedores" && <Proveedores proveedores={proveedores} />}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Cartel de bienvenida (motivación de inicio de jornada) ---------- */
+
+function BienvenidaModal({ nombre, frase, onCerrar }) {
+  const dia = NOMBRE_DIA[new Date().getDay()];
+  const diaCap = dia.charAt(0).toUpperCase() + dia.slice(1);
+  const saludo = nombre ? `¡Hola, ${nombre}!` : "¡Hola!";
+  return (
+    <div
+      style={{
+        position: "fixed", inset: 0, background: "rgba(15,23,42,0.55)",
+        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000, padding: 16,
+      }}
+      onClick={(e) => { if (e.target === e.currentTarget) onCerrar(); }}
+    >
+      <div style={{
+        background: "#fff", borderRadius: 18, width: "min(440px, 100%)",
+        boxShadow: "0 24px 70px rgba(0,0,0,0.4)", overflow: "hidden", textAlign: "center",
+      }}>
+        <div style={{
+          background: "linear-gradient(135deg, #075e75 0%, #0891b2 100%)",
+          color: "#fff", padding: "26px 22px 22px",
+        }}>
+          <div style={{ fontSize: 40, lineHeight: 1, marginBottom: 8 }}>☀️</div>
+          <div style={{ fontSize: 22, fontWeight: 800 }}>{saludo}</div>
+          <div style={{ fontSize: 14, opacity: 0.92, marginTop: 2 }}>{diaCap} · Internación Domiciliaria · PRIS</div>
+        </div>
+        <div style={{ padding: "22px 24px 8px" }}>
+          <div style={{ fontSize: 17, color: "#0f172a", lineHeight: 1.55, fontWeight: 500 }}>
+            {frase}
+          </div>
+        </div>
+        <div style={{ padding: "16px 24px 24px" }}>
+          <button style={{ ...S.btn, width: "100%", fontSize: 16, padding: "12px 18px" }} onClick={onCerrar}>
+            Comenzar la jornada →
+          </button>
+        </div>
       </div>
     </div>
   );
