@@ -110,6 +110,71 @@ function fraseDelDia() {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
+// Cumpleaños del equipo. "id" = usuario que inicia sesión. Los usuarios con
+// login propio se saludan a sí mismos en su cumple; las personas de gerencia
+// (contadoras) se avisan cuando alguien entra con la sesión "gerencia".
+const CUMPLES = [
+  { id: "Paula",    nombre: "Paula",              mes: 9,  dia: 17 },
+  { id: "Jorge",    nombre: "Jorge",              mes: 10, dia: 25 },
+  { id: "Yamila",   nombre: "Yamila",             mes: 7,  dia: 19 },
+  { id: "Julieta",  nombre: "Julieta",            mes: 1,  dia: 3  },
+  { id: "gerencia", nombre: "la contadora Lucía", mes: 2,  dia: 28 },
+  { id: "gerencia", nombre: "la contadora Maru",  mes: 7,  dia: 10 },
+];
+
+// Devuelve el contenido del cartel de bienvenida según el día y el usuario.
+// Prioridad: cumple propio → cumple de gerencia → día de la sanidad → frase normal.
+function bienvenidaDelDia(usuario, esGerencia) {
+  const hoy = new Date();
+  const mes = hoy.getMonth() + 1, dia = hoy.getDate();
+  const esHoy = (m, d) => m === mes && d === dia;
+  const diaSem = NOMBRE_DIA[hoy.getDay()];
+  const diaCap = diaSem.charAt(0).toUpperCase() + diaSem.slice(1);
+
+  // 1) Cumple propio (usuarios con login propio, no gerencia)
+  const propio = CUMPLES.find((c) => c.id === usuario && c.id !== "gerencia" && esHoy(c.mes, c.dia));
+  if (propio) {
+    return {
+      emoji: "🎂",
+      titulo: `¡Feliz cumpleaños, ${propio.nombre}!`,
+      subtitulo: "Que tengas un día espectacular",
+      frase: "Todo el equipo del PRIS te desea un cumpleaños hermoso. ¡Gracias por ser parte! 🎉",
+    };
+  }
+
+  // 2) Gerencia: cumple de las contadoras
+  if (esGerencia) {
+    const cont = CUMPLES.find((c) => c.id === "gerencia" && esHoy(c.mes, c.dia));
+    if (cont) {
+      return {
+        emoji: "🎂",
+        titulo: `Hoy cumple años ${cont.nombre}`,
+        subtitulo: "¡No te olvides de saludarla!",
+        frase: "Un lindo día para celebrar en el equipo. 🎉",
+      };
+    }
+  }
+
+  // 3) 21 de septiembre: Día de la Sanidad + llegada de la primavera (para todos)
+  if (esHoy(9, 21)) {
+    return {
+      emoji: "🌷",
+      titulo: "¡Feliz Día de la Sanidad!",
+      subtitulo: "Y feliz llegada de la primavera 🌸",
+      frase: "Hoy celebramos a quienes cuidan la salud de los demás. Gracias por tu vocación y tu esfuerzo de cada día. ¡Que esta primavera te traiga mucha energía!",
+    };
+  }
+
+  // 4) Frase motivadora del día (comportamiento normal)
+  const nombre = esGerencia ? "" : usuario;
+  return {
+    emoji: "☀️",
+    titulo: nombre ? `¡Hola, ${nombre}!` : "¡Hola!",
+    subtitulo: `${diaCap} · Internación Domiciliaria · PRIS`,
+    frase: fraseDelDia(),
+  };
+}
+
 /* ================================================================ */
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
@@ -2376,7 +2441,7 @@ export default function App() {
     setBusqueda(false);
     setUsuario(id);
     setRol(rolUsuario);
-    setBienvenida(fraseDelDia()); // cartel de bienvenida sólo al ingresar
+    setBienvenida(bienvenidaDelDia(id, rolUsuario === "gerencia")); // cumples · día especial · frase
     setLogueado(true);
   };
 
@@ -2474,11 +2539,7 @@ export default function App() {
   return (
     <div style={S.page}>
       {bienvenida && (
-        <BienvenidaModal
-          nombre={esGerencia ? "" : usuario}
-          frase={bienvenida}
-          onCerrar={() => setBienvenida(null)}
-        />
+        <BienvenidaModal contenido={bienvenida} onCerrar={() => setBienvenida(null)} />
       )}
       <header style={S.header}>
         <img src={LOGO_PRIS} alt="" style={S.logo} onError={(e) => (e.target.style.display = "none")} />
@@ -2569,10 +2630,8 @@ export default function App() {
 
 /* ---------- Cartel de bienvenida (motivación de inicio de jornada) ---------- */
 
-function BienvenidaModal({ nombre, frase, onCerrar }) {
-  const dia = NOMBRE_DIA[new Date().getDay()];
-  const diaCap = dia.charAt(0).toUpperCase() + dia.slice(1);
-  const saludo = nombre ? `¡Hola, ${nombre}!` : "¡Hola!";
+function BienvenidaModal({ contenido, onCerrar }) {
+  const { emoji = "☀️", titulo = "¡Hola!", subtitulo = "", frase = "" } = contenido || {};
   return (
     <div
       style={{
@@ -2589,9 +2648,9 @@ function BienvenidaModal({ nombre, frase, onCerrar }) {
           background: "linear-gradient(135deg, #075e75 0%, #0891b2 100%)",
           color: "#fff", padding: "26px 22px 22px",
         }}>
-          <div style={{ fontSize: 40, lineHeight: 1, marginBottom: 8 }}>☀️</div>
-          <div style={{ fontSize: 22, fontWeight: 800 }}>{saludo}</div>
-          <div style={{ fontSize: 14, opacity: 0.92, marginTop: 2 }}>{diaCap} · Internación Domiciliaria · PRIS</div>
+          <div style={{ fontSize: 40, lineHeight: 1, marginBottom: 8 }}>{emoji}</div>
+          <div style={{ fontSize: 22, fontWeight: 800 }}>{titulo}</div>
+          {subtitulo && <div style={{ fontSize: 14, opacity: 0.92, marginTop: 2 }}>{subtitulo}</div>}
         </div>
         <div style={{ padding: "22px 24px 8px" }}>
           <div style={{ fontSize: 17, color: "#0f172a", lineHeight: 1.55, fontWeight: 500 }}>
