@@ -44,6 +44,19 @@ const USUARIOS = [
 ];
 const FIRMANTES = USUARIOS.map((u) => u.firma);
 
+// Credenciales de acceso. "usuario" es lo que se elige en el desplegable de
+// ingreso (en minúscula, es también el "username" que guarda el navegador);
+// "id" es el nombre canónico que usa toda la app (debe coincidir con USUARIOS
+// para que filtre bien los pacientes y firme los mails). "gerencia" ve todos
+// los paneles; los demás sólo ven lo suyo.
+const CREDENCIALES = [
+  { usuario: "yamila",   clave: "yamila2026",    id: "Yamila",   rol: "usuario"  },
+  { usuario: "julieta",  clave: "julieta2026",   id: "Julieta",  rol: "usuario"  },
+  { usuario: "paula",    clave: "paula2026",     id: "Paula",    rol: "usuario"  },
+  { usuario: "jorge",    clave: "jorge1070",     id: "Jorge",    rol: "usuario"  },
+  { usuario: "gerencia", clave: "laspiedras626", id: "gerencia", rol: "gerencia" },
+];
+
 /* ================================================================ */
 
 const app = initializeApp(firebaseConfig);
@@ -2280,29 +2293,52 @@ function sesionVigente() {
     sessionStorage.removeItem("gexp_login");
     sessionStorage.removeItem("gexp_login_fecha");
     localStorage.removeItem("gexp_usuario");
+    localStorage.removeItem("gexp_rol");
     return false;
   }
   return true;
 }
 
 export default function App() {
-  const [logueado, setLogueado] = useState(sesionVigente());
-  const [usuario, setUsuario] = useState(localStorage.getItem("gexp_usuario") || "");
+  // La sesión sólo se considera iniciada si además hay usuario y rol guardados.
+  const _sesOk = sesionVigente() && !!localStorage.getItem("gexp_usuario") && !!localStorage.getItem("gexp_rol");
+  const [logueado, setLogueado] = useState(_sesOk);
+  const [usuario, setUsuario] = useState(_sesOk ? (localStorage.getItem("gexp_usuario") || "") : "");
+  const [rol, setRol] = useState(_sesOk ? (localStorage.getItem("gexp_rol") || "usuario") : "usuario");
+  const esGerencia = rol === "gerencia";
   const [vista, setVista] = useState("tablero"); // tablero | nuevo | detalle | proveedores
   const [expedientes, setExpedientes] = useState([]);
   const [proveedores, setProveedores] = useState([]);
   const [expedienteSel, setExpedienteSel] = useState(null);
   const [busqueda, setBusqueda] = useState(false); // pantalla de consulta rápida (solo lectura)
 
-  const elegirUsuario = (id) => {
+  // Inicia la sesión con las credenciales ya validadas en el Login.
+  const iniciarSesion = (id, rolUsuario) => {
+    sessionStorage.setItem("gexp_login", "ok");
+    sessionStorage.setItem("gexp_login_fecha", new Date().toDateString());
     localStorage.setItem("gexp_usuario", id);
-    // Al entrar un usuario SIEMPRE se arranca limpio en el Tablero. Así se evita
-    // que quede "pegada" la vista/expediente que dejó abierto el usuario anterior
-    // al usar "Cambiar" (era un bug puramente visual del estado de React).
+    localStorage.setItem("gexp_rol", rolUsuario);
     setExpedienteSel(null);
     setVista("tablero");
     setBusqueda(false);
     setUsuario(id);
+    setRol(rolUsuario);
+    setLogueado(true);
+  };
+
+  // Cierra la sesión por completo: para volver a entrar (o cambiar de usuario)
+  // hay que poner de nuevo usuario y contraseña.
+  const cerrarSesion = () => {
+    sessionStorage.removeItem("gexp_login");
+    sessionStorage.removeItem("gexp_login_fecha");
+    localStorage.removeItem("gexp_usuario");
+    localStorage.removeItem("gexp_rol");
+    setUsuario("");
+    setRol("usuario");
+    setExpedienteSel(null);
+    setVista("tablero");
+    setBusqueda(false);
+    setLogueado(false);
   };
 
   useEffect(() => {
@@ -2321,7 +2357,9 @@ export default function App() {
         sessionStorage.removeItem("gexp_login");
         sessionStorage.removeItem("gexp_login_fecha");
         localStorage.removeItem("gexp_usuario");
+        localStorage.removeItem("gexp_rol");
         setUsuario("");
+        setRol("usuario");
         setLogueado(false);
       }
     };
@@ -2376,15 +2414,8 @@ export default function App() {
     [expedientes, expedienteSel]
   );
 
-  if (!logueado) return <Login onOk={() => { sessionStorage.setItem("gexp_login", "ok"); sessionStorage.setItem("gexp_login_fecha", new Date().toDateString()); localStorage.removeItem("gexp_usuario"); setUsuario(""); setExpedienteSel(null); setVista("tablero"); setBusqueda(false); setLogueado(true); }} />;
+  if (!logueado || !usuario) return <Login onOk={iniciarSesion} />;
   if (busqueda) return <BusquedaRapida expedientes={expedientes} onVolver={() => setBusqueda(false)} />;
-  if (!usuario) return (
-    <SeleccionUsuario
-      onElegir={elegirUsuario}
-      onVolver={() => { sessionStorage.removeItem("gexp_login"); sessionStorage.removeItem("gexp_login_fecha"); setLogueado(false); }}
-      onBuscar={() => setBusqueda(true)}
-    />
-  );
 
   return (
     <div style={S.page}>
@@ -2401,15 +2432,15 @@ export default function App() {
         {/* barra de navegación */}
         <div style={{ display: "flex", gap: 8, marginBottom: 18, flexWrap: "wrap", alignItems: "center" }}>
           <button style={vista === "tablero" ? S.btn : S.btnSec} onClick={() => setVista("tablero")}>📋 Tablero</button>
-          <button style={vista === "nuevo" ? S.btn : S.btnSec} onClick={() => setVista("nuevo")}>➕ Nuevo expediente</button>
+          {!esGerencia && (
+            <button style={vista === "nuevo" ? S.btn : S.btnSec} onClick={() => setVista("nuevo")}>➕ Nuevo expediente</button>
+          )}
           <button style={vista === "proveedores" ? S.btn : S.btnSec} onClick={() => setVista("proveedores")}>🏢 Proveedores</button>
           <div style={{ flex: 1 }} />
           <span
-            title="Cambiar de usuario"
-            onClick={() => { localStorage.removeItem("gexp_usuario"); setUsuario(""); }}
-            style={{ fontWeight: 800, color: "#075e75", cursor: "pointer", fontSize: 14, padding: "8px 12px", background: "#e0f2fe", borderRadius: 8 }}
-          >👤 {usuario} · Cambiar</span>
-          <button style={S.btnRojo} onClick={() => { sessionStorage.removeItem("gexp_login"); sessionStorage.removeItem("gexp_login_fecha"); localStorage.removeItem("gexp_usuario"); setUsuario(""); setLogueado(false); }}>Salir</button>
+            style={{ fontWeight: 800, color: "#075e75", fontSize: 14, padding: "8px 12px", background: "#e0f2fe", borderRadius: 8 }}
+          >👤 {esGerencia ? "Gerencia" : usuario}</span>
+          <button style={S.btnRojo} title="Cerrar sesión / cambiar de usuario" onClick={cerrarSesion}>Salir</button>
         </div>
 
         {/* botón Volver según la pantalla */}
@@ -2427,6 +2458,7 @@ export default function App() {
           <Tablero
             expedientes={expedientes}
             usuario={usuario}
+            esGerencia={esGerencia}
             abrir={(e) => { setExpedienteSel(e); setVista("detalle"); }}
           />
         )}
@@ -2477,14 +2509,28 @@ export default function App() {
 /* ---------- Login ---------- */
 
 function Login({ onOk }) {
+  // Recordamos el último usuario elegido en ESTE navegador para que aparezca
+  // ya seleccionado (el gestor de contraseñas del navegador completa la clave).
+  const [usuario, setUsuario] = useState(() => {
+    const prev = localStorage.getItem("gexp_ultimo_usuario") || "";
+    return CREDENCIALES.some((c) => c.usuario === prev) ? prev : "";
+  });
   const [clave, setClave] = useState("");
   const [ver, setVer] = useState(false);
-  const [error, setError] = useState(false);
+  const [error, setError] = useState("");
   const [consulta, setConsulta] = useState(false);
+
   const entrar = () => {
-    if (clave === ADMIN_PASSWORD) onOk();
-    else setError(true);
+    if (!usuario) { setError("Elegí tu usuario en la lista."); return; }
+    const cred = CREDENCIALES.find((c) => c.usuario === usuario);
+    if (cred && clave === cred.clave) {
+      localStorage.setItem("gexp_ultimo_usuario", usuario);
+      onOk(cred.id, cred.rol);
+    } else {
+      setError("Usuario o contraseña incorrectos.");
+    }
   };
+
   if (consulta) return <ConsultaPublica onVolver={() => setConsulta(false)} />;
   return (
     <div style={{ ...S.page, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -2493,29 +2539,52 @@ function Login({ onOk }) {
         <img src={LOGO_GOBIERNO} alt="" style={{ maxWidth: "70%", height: "auto", marginBottom: 10 }} onError={(e) => (e.target.style.display = "none")} />
         <h2 style={{ color: "#075e75", marginBottom: 4 }}>Gestor de Expedientes</h2>
         <div style={{ fontSize: 13, color: "#64748b", marginBottom: 16 }}>Internación Domiciliaria · PRIS</div>
-        <div style={{ position: "relative" }}>
-          <input
-            type={ver ? "text" : "password"}
-            placeholder="Contraseña"
-            autoComplete="new-password"
-            style={{ ...S.input, paddingRight: 44 }}
-            value={clave}
-            onChange={(e) => { setClave(e.target.value); setError(false); }}
-            onKeyDown={(e) => e.key === "Enter" && entrar()}
-          />
-          <button
-            type="button"
-            onClick={() => setVer(!ver)}
-            title={ver ? "Ocultar contraseña" : "Ver contraseña"}
-            style={{
-              position: "absolute", right: 8, top: "50%", transform: "translateY(-38%)",
-              background: "none", border: "none", cursor: "pointer", fontSize: 19, padding: 4,
-            }}
-          >{ver ? "🙈" : "👁️"}</button>
-        </div>
-        {error && <div style={{ color: "#dc2626", fontSize: 13, marginTop: 8 }}>Contraseña incorrecta</div>}
-        <button style={{ ...S.btn, width: "100%", marginTop: 14 }} onClick={entrar}>Ingresar</button>
+
+        {/* Form real para que el navegador ofrezca guardar y autocompletar la clave */}
+        <form onSubmit={(e) => { e.preventDefault(); entrar(); }} autoComplete="on">
+          {/* Desplegable de usuario (también actúa como "username" para el navegador) */}
+          <select
+            name="username"
+            autoComplete="username"
+            value={usuario}
+            onChange={(e) => { setUsuario(e.target.value); setClave(""); setError(""); }}
+            style={{ ...S.input, textAlign: "left", background: "#fff", cursor: "pointer", marginBottom: 4 }}
+          >
+            <option value="">— Elegí tu usuario —</option>
+            {CREDENCIALES.map((c) => (
+              <option key={c.usuario} value={c.usuario}>
+                {c.rol === "gerencia" ? "Gerencia (todos los paneles)" : c.id}
+              </option>
+            ))}
+          </select>
+
+          <div style={{ position: "relative", marginTop: 10 }}>
+            <input
+              type={ver ? "text" : "password"}
+              name="password"
+              placeholder="Contraseña"
+              autoComplete="current-password"
+              style={{ ...S.input, paddingRight: 44 }}
+              value={clave}
+              onChange={(e) => { setClave(e.target.value); setError(""); }}
+            />
+            <button
+              type="button"
+              onClick={() => setVer(!ver)}
+              title={ver ? "Ocultar contraseña" : "Ver contraseña"}
+              style={{
+                position: "absolute", right: 8, top: "50%", transform: "translateY(-38%)",
+                background: "none", border: "none", cursor: "pointer", fontSize: 19, padding: 4,
+              }}
+            >{ver ? "🙈" : "👁️"}</button>
+          </div>
+
+          {error && <div style={{ color: "#dc2626", fontSize: 13, marginTop: 8 }}>{error}</div>}
+          <button type="submit" style={{ ...S.btn, width: "100%", marginTop: 14 }}>Ingresar</button>
+        </form>
+
         <button
+          type="button"
           style={{ ...S.btnSec, width: "100%", marginTop: 10 }}
           onClick={() => setConsulta(true)}
         >🔍 Búsqueda rápida</button>
@@ -3487,35 +3556,59 @@ function TarjetaExpediente({ e, abrir, duplicado }) {
   );
 }
 
-function Tablero({ expedientes, usuario, abrir }) {
-  const [filtro, setFiltro] = useState("mios"); // mios | todos
+function Tablero({ expedientes, usuario, esGerencia = false, abrir }) {
+  // Gerencia arranca viendo TODOS; puede filtrar por persona. Un usuario común
+  // sólo ve lo suyo y no tiene forma de ver lo de los demás.
+  const [filtro, setFiltro] = useState(esGerencia ? "todos" : "mios");
   // Números que aparecen en más de un expediente → posibles duplicados.
   const normNro = (s) => String(s || "").toUpperCase().replace(/\s+/g, "").replace(/[.\-]/g, "");
   const conteoNro = {};
   expedientes.forEach((e) => { const k = normNro(e.nroExpediente); if (k) conteoNro[k] = (conteoNro[k] || 0) + 1; });
-  const lista = (filtro === "mios"
-    ? expedientes.filter((e) => (e.responsable || "") === usuario)
-    : [...expedientes]
-  ).sort((a, b) =>
+
+  // Qué expedientes se muestran según el filtro elegido.
+  const filtrar = (f) => {
+    if (f === "todos") return expedientes;
+    if (f === "mios") return expedientes.filter((e) => (e.responsable || "") === usuario);
+    // filtro por responsable puntual (sólo gerencia): f === "resp:Nombre"
+    const quien = f.slice(5);
+    return expedientes.filter((e) => (e.responsable || "") === quien);
+  };
+  const lista = [...filtrar(filtro)].sort((a, b) =>
     (a.paciente || "").localeCompare(b.paciente || "", "es", { sensitivity: "base" })
   );
 
   return (
     <div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-        <button style={filtro === "mios" ? S.btn : S.btnSec} onClick={() => setFiltro("mios")}>
-          👤 Mis expedientes ({expedientes.filter((e) => (e.responsable || "") === usuario).length})
-        </button>
-        <button style={filtro === "todos" ? S.btn : S.btnSec} onClick={() => setFiltro("todos")}>
-          👥 Todos ({expedientes.length})
-        </button>
-      </div>
+      {esGerencia ? (
+        // GERENCIA: ve todos los paneles y puede abrir el de cada persona.
+        <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+          <button style={filtro === "todos" ? S.btn : S.btnSec} onClick={() => setFiltro("todos")}>
+            👥 Todos ({expedientes.length})
+          </button>
+          {USUARIOS.map((u) => (
+            <button
+              key={u.id}
+              style={filtro === "resp:" + u.id ? S.btn : S.btnSec}
+              onClick={() => setFiltro("resp:" + u.id)}
+            >
+              👤 {u.id} ({expedientes.filter((e) => (e.responsable || "") === u.id).length})
+            </button>
+          ))}
+        </div>
+      ) : (
+        // USUARIO COMÚN: solamente sus expedientes.
+        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+          <button style={S.btn}>
+            👤 Mis expedientes ({expedientes.filter((e) => (e.responsable || "") === usuario).length})
+          </button>
+        </div>
+      )}
 
       {lista.length === 0 && (
         <div style={{ ...S.card, textAlign: "center", color: "#64748b", padding: 40 }}>
-          {filtro === "mios"
-            ? <>No tenés expedientes a tu nombre todavía.<br />Creá uno con <b>➕ Nuevo expediente</b> o mirá la pestaña <b>👥 Todos</b>.</>
-            : <>Todavía no hay expedientes cargados.<br />Creá el primero con el botón <b>➕ Nuevo expediente</b>.</>}
+          {esGerencia
+            ? <>No hay expedientes para mostrar en esta vista.</>
+            : <>No tenés expedientes a tu nombre todavía.<br />Creá uno con <b>➕ Nuevo expediente</b>.</>}
         </div>
       )}
 
