@@ -5322,6 +5322,8 @@ function VerRonda({ ronda }) {
 }
 
 function RevisionExpediente({ exp, proveedores, onEditar, volver }) {
+  const [abierta, setAbierta] = useState(0);
+  const [modalSeg, setModalSeg] = useState(false);
   const va = exp.valoresAutorizados;
   const autorizadas = (exp.dictamen?.prestaciones || []).filter((p) => (p.cantidad || "").trim() !== "");
   const alim = (exp.dictamen?.prestaciones || []).find((p) => /aliment/i.test(p.nombre || "") && (p.cantidad || "").trim() !== "");
@@ -5350,6 +5352,122 @@ function RevisionExpediente({ exp, proveedores, onEditar, volver }) {
   const cardEtapa = (hecha, contenido) => (
     <div style={{ ...S.card, borderLeft: "5px solid " + (hecha ? "#16a34a" : "#e2e8f0") }}>{contenido}</div>
   );
+
+  // Contenido de cada etapa (para el semáforo horizontal: se muestra sólo la etapa abierta)
+  const etapasRev = [
+    {
+      hecha: !!exp.cotizacion,
+      contenido: exp.cotizacion ? (<>
+        {cabecera(true, "1. Cotización enviada")}
+        <div style={dato}>
+          <b>Fecha:</b> {formatearFecha(exp.cotizacion.fecha)}{exp.cotizacion.manual ? " (registrada manualmente)" : ""}<br />
+          {exp.cotizacion.firmante && (<><b>Enviado por:</b> {exp.cotizacion.firmante}<br /></>)}
+          <b>Proveedores:</b> {exp.cotizacion.proveedores}
+          {carpeta && (<><br /><a href={carpeta} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📁 Ver carpeta en Drive</a></>)}
+        </div>
+      </>) : cabecera(false, "1. Cotización"),
+    },
+    {
+      hecha: nombresProv.length > 0,
+      contenido: nombresProv.length > 0 ? (<>
+        {cabecera(true, "2. Presupuestos cargados")}
+        {nombresProv.map((n) => {
+          const g = presupuestos[n] || {};
+          return (
+            <div key={n} style={{ borderTop: "1px solid #eef2f7", padding: "8px 0", fontSize: 13, color: "#334155" }}>
+              <b>{n}</b> —{" "}
+              {g.estado === "cotizo" ? <span style={{ color: "#166534", fontWeight: 700 }}>Cotizó {formatoPesos(g.mensual)}/mes</span>
+                : g.estado === "desestimo" ? <span style={{ color: "#b91c1c", fontWeight: 700 }}>Negativa</span>
+                : <span style={{ color: "#64748b" }}>Sin respuesta</span>}
+              {g.pdfNombre ? <span style={{ color: "#475569" }}> · 📎 {g.pdfNombre}</span> : null}
+              {g.pdfUrl ? <> · <a href={g.pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📄 Ver PDF</a></> : null}
+            </div>
+          );
+        })}
+        <div style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>
+          Los PDF de los presupuestos están en la carpeta del expediente en Drive.
+          {carpeta && (<> <a href={carpeta} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>Abrir carpeta →</a></>)}
+        </div>
+      </>) : cabecera(false, "2. Presupuestos"),
+    },
+    {
+      hecha: !!exp.cuadro,
+      contenido: exp.cuadro ? (<>
+        {cabecera(true, "3. Cuadro comparativo")}
+        <div style={dato}>
+          <b>Adjudicado:</b> {exp.cuadro.adjudicado} · <b>Fecha:</b> {formatearFecha(exp.cuadro.fecha)}<br />
+          <b>Mensual:</b> {formatoPesos(exp.cuadro.mensual)} · <b>Total {exp.periodoMeses} meses:</b> {formatoPesos(exp.cuadro.total)}
+        </div>
+        {(exp.cuadro.adjudicaciones || []).length > 1 && exp.cuadro.adjudicaciones.map((a, k) => (
+          <div key={k} style={dato}>🧩 <b>{a.modulo || "Sin módulo"}:</b> {a.proveedor} — {formatoPesos(a.mensual)}/mes</div>
+        ))}
+        <BotonVerCuadro exp={exp} />
+      </>) : cabecera(false, "3. Cuadro comparativo"),
+    },
+    {
+      hecha: !!exp.nota,
+      contenido: exp.nota ? (<>
+        {cabecera(true, "4. Nota de afectación")}
+        <div style={dato}><b>Importe total:</b> {formatoPesos(exp.nota.monto)} {exp.nota.montoLetras ? "(" + exp.nota.montoLetras + ")" : ""}</div>
+        <BotonVerDocumento etiqueta="👁️ Ver la nota" construirPlantilla={(logos) => plantillaNota(datosNota(exp), logos)} />
+      </>) : cabecera(false, "4. Nota de afectación"),
+    },
+    {
+      hecha: !!exp.paseAuditoria,
+      contenido: exp.paseAuditoria ? (<>
+        {cabecera(true, "5. Pase a Auditoría Médica")}
+        <div style={dato}><b>Fecha:</b> {formatearFecha(exp.paseAuditoria.fecha)}{exp.paseAuditoria.destinataria ? <> · <b>Dirigido a:</b> {exp.paseAuditoria.destinataria}</> : null}</div>
+        <BotonVerDocumento etiqueta="👁️ Ver el pase" construirPlantilla={(logos) => plantillaPase(datosPaseAuditoria(exp), logos)} />
+      </>) : cabecera(false, "5. Pase a Auditoría Médica"),
+    },
+    {
+      hecha: !!exp.paseLetrada,
+      contenido: exp.paseLetrada ? (<>
+        {cabecera(true, "6. Pase a Asesoría Letrada")}
+        <div style={dato}><b>Fecha:</b> {formatearFecha(exp.paseLetrada.fecha)}</div>
+        <BotonVerDocumento etiqueta="👁️ Ver el pase" construirPlantilla={(logos) => plantillaPase(datosPaseLetrada(exp), logos)} />
+      </>) : cabecera(false, "6. Pase a Asesoría Letrada"),
+    },
+    {
+      hecha: !!exp.resolucion,
+      contenido: exp.resolucion ? (<>
+        {cabecera(true, "7. Resolución Interna Nº " + (exp.resolucion.nro || ""))}
+        <div style={dato}>
+          <b>Fecha:</b> {formatearFecha(exp.resolucion.fecha)}<br />
+          <b>Adjudicado:</b> {exp.resolucion.adjudicado} · <b>Total:</b> {formatoPesos(exp.resolucion.total)}
+        </div>
+        <BotonVerDocumento etiqueta="👁️ Ver la resolución" construirPlantilla={(logos) => plantillaResolucion(datosResolucion(exp), logos)} />
+      </>) : cabecera(false, "7. Resolución Interna"),
+    },
+    {
+      hecha: !!exp.paseTribunal,
+      contenido: exp.paseTribunal ? (<>
+        {cabecera(true, "8. Pase al Tribunal de Cuentas")}
+        <div style={dato}><b>Fecha:</b> {formatearFecha(exp.paseTribunal.fecha)}</div>
+        <BotonVerDocumento etiqueta="👁️ Ver el pase" construirPlantilla={(logos) => plantillaPase(datosPaseTribunal(exp), logos)} />
+      </>) : cabecera(false, "8. Pase al Tribunal de Cuentas"),
+    },
+    {
+      hecha: !!exp.oc,
+      contenido: exp.oc ? (<>
+        {cabecera(true, "9. Orden de compra")}
+        <div style={dato}>
+          {exp.oc.nro && (<><b>N°:</b> {exp.oc.nro} · </>)}
+          {exp.oc.fecha && (<><b>Fecha:</b> {formatearFecha(exp.oc.fecha)}<br /></>)}
+          {exp.oc.destinatarios && (<><b>Destinatarios:</b> {exp.oc.destinatarios}<br /></>)}
+        </div>
+        {(exp.oc.envios || []).map((e, k) => (
+          <div key={k} style={dato}>
+            🧾 <b>{e.proveedor}</b> — OC Nº {e.nro}{e.modulo ? " (" + e.modulo + ")" : ""}
+            {e.pdfUrl && (<> · <a href={e.pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📄 PDF</a></>)}
+          </div>
+        ))}
+        {exp.oc.pdfUrl && !(exp.oc.envios || []).length && (
+          <div style={dato}><a href={exp.oc.pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📄 Orden de compra en el Drive</a></div>
+        )}
+      </>) : cabecera(false, "9. Orden de compra"),
+    },
+  ];
 
   return (
     <div>
@@ -5423,102 +5541,55 @@ function RevisionExpediente({ exp, proveedores, onEditar, volver }) {
 
       <div style={{ ...S.card, background: "#0e7490", color: "#fff", padding: "10px 16px" }}>
         <div style={{ fontWeight: 800, fontSize: 15 }}>📋 Etapas del expediente</div>
-        <div style={{ fontSize: 12.5, opacity: 0.92, marginTop: 2 }}>Revisá una por una: qué cargaste y qué documento salió. Tocá “Ver” para mirar cada PDF/Word.</div>
+        <div style={{ fontSize: 12.5, opacity: 0.92, marginTop: 2 }}>Tocá cualquier etapa para ver qué cargaste y abrir su documento (PDF/Word).</div>
       </div>
 
-      {cardEtapa(!!exp.cotizacion, exp.cotizacion ? (<>
-        {cabecera(true, "1. Cotización enviada")}
-        <div style={dato}>
-          <b>Fecha:</b> {formatearFecha(exp.cotizacion.fecha)}{exp.cotizacion.manual ? " (registrada manualmente)" : ""}<br />
-          {exp.cotizacion.firmante && (<><b>Enviado por:</b> {exp.cotizacion.firmante}<br /></>)}
-          <b>Proveedores:</b> {exp.cotizacion.proveedores}
-          {carpeta && (<><br /><a href={carpeta} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📁 Ver carpeta en Drive</a></>)}
+      {/* semáforo horizontal — todas las etapas en verde; cada chip abre su etapa */}
+      <div style={S.card}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {ETAPAS.map((nombre, i) => {
+            const hecha = etapasRev[i].hecha;
+            const mirando = i === abierta;
+            return (
+              <button
+                key={i}
+                onClick={() => setAbierta(i)}
+                title="Ver esta etapa"
+                style={{
+                  ...S.chip(false, hecha),
+                  border: mirando ? "2.5px solid #0891b2" : "2.5px solid transparent",
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                }}
+              >
+                {hecha ? "✓ " : ""}{nombre}
+              </button>
+            );
+          })}
         </div>
-      </>) : cabecera(false, "1. Cotización"))}
-
-      {cardEtapa(nombresProv.length > 0, nombresProv.length > 0 ? (<>
-        {cabecera(true, "2. Presupuestos cargados")}
-        {nombresProv.map((n) => {
-          const g = presupuestos[n] || {};
-          return (
-            <div key={n} style={{ borderTop: "1px solid #eef2f7", padding: "8px 0", fontSize: 13, color: "#334155" }}>
-              <b>{n}</b> —{" "}
-              {g.estado === "cotizo" ? <span style={{ color: "#166534", fontWeight: 700 }}>Cotizó {formatoPesos(g.mensual)}/mes</span>
-                : g.estado === "desestimo" ? <span style={{ color: "#b91c1c", fontWeight: 700 }}>Negativa</span>
-                : <span style={{ color: "#64748b" }}>Sin respuesta</span>}
-              {g.pdfNombre ? <span style={{ color: "#475569" }}> · 📎 {g.pdfNombre}</span> : null}
-              {g.pdfUrl ? <> · <a href={g.pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📄 Ver PDF</a></> : null}
-            </div>
-          );
-        })}
-        <div style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>
-          Los PDF de los presupuestos están en la carpeta del expediente en Drive.
-          {carpeta && (<> <a href={carpeta} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>Abrir carpeta →</a></>)}
+        <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 8 }}>
+          Estás viendo: <b style={{ color: "#0891b2" }}>{ETAPAS[abierta]}</b>. Tocá cualquier etapa para abrirla.
         </div>
-      </>) : cabecera(false, "2. Presupuestos"))}
+      </div>
 
-      {cardEtapa(!!exp.cuadro, exp.cuadro ? (<>
-        {cabecera(true, "3. Cuadro comparativo")}
-        <div style={dato}>
-          <b>Adjudicado:</b> {exp.cuadro.adjudicado} · <b>Fecha:</b> {formatearFecha(exp.cuadro.fecha)}<br />
-          <b>Mensual:</b> {formatoPesos(exp.cuadro.mensual)} · <b>Total {exp.periodoMeses} meses:</b> {formatoPesos(exp.cuadro.total)}
-        </div>
-        {(exp.cuadro.adjudicaciones || []).length > 1 && exp.cuadro.adjudicaciones.map((a, k) => (
-          <div key={k} style={dato}>🧩 <b>{a.modulo || "Sin módulo"}:</b> {a.proveedor} — {formatoPesos(a.mensual)}/mes</div>
-        ))}
-        <BotonVerCuadro exp={exp} />
-      </>) : cabecera(false, "3. Cuadro comparativo"))}
+      {cardEtapa(etapasRev[abierta].hecha, etapasRev[abierta].contenido)}
 
-      {cardEtapa(!!exp.nota, exp.nota ? (<>
-        {cabecera(true, "4. Nota de afectación")}
-        <div style={dato}><b>Importe total:</b> {formatoPesos(exp.nota.monto)} {exp.nota.montoLetras ? "(" + exp.nota.montoLetras + ")" : ""}</div>
-        <BotonVerDocumento etiqueta="👁️ Ver la nota" construirPlantilla={(logos) => plantillaNota(datosNota(exp), logos)} />
-      </>) : cabecera(false, "4. Nota de afectación"))}
-
-      {cardEtapa(!!exp.paseAuditoria, exp.paseAuditoria ? (<>
-        {cabecera(true, "5. Pase a Auditoría Médica")}
-        <div style={dato}><b>Fecha:</b> {formatearFecha(exp.paseAuditoria.fecha)}{exp.paseAuditoria.destinataria ? <> · <b>Dirigido a:</b> {exp.paseAuditoria.destinataria}</> : null}</div>
-        <BotonVerDocumento etiqueta="👁️ Ver el pase" construirPlantilla={(logos) => plantillaPase(datosPaseAuditoria(exp), logos)} />
-      </>) : cabecera(false, "5. Pase a Auditoría Médica"))}
-
-      {cardEtapa(!!exp.paseLetrada, exp.paseLetrada ? (<>
-        {cabecera(true, "6. Pase a Asesoría Letrada")}
-        <div style={dato}><b>Fecha:</b> {formatearFecha(exp.paseLetrada.fecha)}</div>
-        <BotonVerDocumento etiqueta="👁️ Ver el pase" construirPlantilla={(logos) => plantillaPase(datosPaseLetrada(exp), logos)} />
-      </>) : cabecera(false, "6. Pase a Asesoría Letrada"))}
-
-      {cardEtapa(!!exp.resolucion, exp.resolucion ? (<>
-        {cabecera(true, "7. Resolución Interna Nº " + (exp.resolucion.nro || ""))}
-        <div style={dato}>
-          <b>Fecha:</b> {formatearFecha(exp.resolucion.fecha)}<br />
-          <b>Adjudicado:</b> {exp.resolucion.adjudicado} · <b>Total:</b> {formatoPesos(exp.resolucion.total)}
-        </div>
-        <BotonVerDocumento etiqueta="👁️ Ver la resolución" construirPlantilla={(logos) => plantillaResolucion(datosResolucion(exp), logos)} />
-      </>) : cabecera(false, "7. Resolución Interna"))}
-
-      {cardEtapa(!!exp.paseTribunal, exp.paseTribunal ? (<>
-        {cabecera(true, "8. Pase al Tribunal de Cuentas")}
-        <div style={dato}><b>Fecha:</b> {formatearFecha(exp.paseTribunal.fecha)}</div>
-        <BotonVerDocumento etiqueta="👁️ Ver el pase" construirPlantilla={(logos) => plantillaPase(datosPaseTribunal(exp), logos)} />
-      </>) : cabecera(false, "8. Pase al Tribunal de Cuentas"))}
-
-      {cardEtapa(!!exp.oc, exp.oc ? (<>
-        {cabecera(true, "9. Orden de compra")}
-        <div style={dato}>
-          {exp.oc.nro && (<><b>N°:</b> {exp.oc.nro} · </>)}
-          {exp.oc.fecha && (<><b>Fecha:</b> {formatearFecha(exp.oc.fecha)}<br /></>)}
-          {exp.oc.destinatarios && (<><b>Destinatarios:</b> {exp.oc.destinatarios}<br /></>)}
-        </div>
-        {(exp.oc.envios || []).map((e, k) => (
-          <div key={k} style={dato}>
-            🧾 <b>{e.proveedor}</b> — OC Nº {e.nro}{e.modulo ? " (" + e.modulo + ")" : ""}
-            {e.pdfUrl && (<> · <a href={e.pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📄 PDF</a></>)}
+      {exp.etapa >= 9 && (
+        <div style={{ ...S.card, background: "#f0fdf4", border: "2px solid #16a34a", textAlign: "center" }}>
+          <div style={{ fontSize: 22 }}>🎉</div>
+          <div style={{ fontWeight: 800, color: "#166534", fontSize: 16 }}>Expediente completo</div>
+          <div style={{ fontSize: 13, color: "#475569", marginTop: 4 }}>
+            Las 9 etapas del circuito están cerradas. Da de alta (o renueva) al paciente en Visitas para arrancar el control de prestaciones.
           </div>
-        ))}
-        {exp.oc.pdfUrl && !(exp.oc.envios || []).length && (
-          <div style={dato}><a href={exp.oc.pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#0891b2", fontWeight: 700 }}>📄 Orden de compra en el Drive</a></div>
-        )}
-      </>) : cabecera(false, "9. Orden de compra"))}
+          <button style={{ ...S.btn, marginTop: 12, background: "#2563eb" }} onClick={() => setModalSeg(true)}>
+            📋 Enviar a seguimiento (Visitas SIPROSA)
+          </button>
+          <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
+            Te muestra todo antes de confirmar.
+          </div>
+        </div>
+      )}
+      {modalSeg && <EnviarASeguimiento exp={exp} onClose={() => setModalSeg(false)} />}
 
       {Array.isArray(exp.rondas) && exp.rondas.length > 0 && (
         <div style={{ ...S.card, borderLeft: "5px solid #64748b" }}>
@@ -8816,10 +8887,18 @@ function periodoTextoDe(exp) {
   return String(exp.periodoTexto || (exp.periodoMeses ? exp.periodoMeses + " meses" : "")).trim();
 }
 
+// "Sin módulo" (placeholder interno) o vacío ⇒ sin módulo: NO se nombra en asuntos ni cuerpos.
+function _moduloLimpio(s) {
+  const t = String(s || "").trim();
+  if (!t) return "";
+  return t.toUpperCase() === MODULO_SIN_NOMBRE.toUpperCase() ? "" : t;
+}
+
 // ── MAIL 1 ── Adjudicación + condiciones de inicio (presentación/instalación en domicilio,
 //             datos a informar y canal oficial). SIN Orden de Compra.
 function generarCuerpoSolicitudInicio(exp, firmante, moduloTexto) {
-  const moduloMail = String(moduloTexto || exp.modulo || "").toUpperCase();
+  const moduloMail = _moduloLimpio(moduloTexto || exp.modulo).toUpperCase();
+  const servicioTxt = moduloMail ? ` de *${moduloMail}*` : "";
   const paciente = String(exp.paciente || "").toUpperCase();
   const periodo = periodoTextoDe(exp);
   const lineaPeriodo = periodo ? `, correspondiente al período *${periodo}*` : "";
@@ -8828,7 +8907,7 @@ function generarCuerpoSolicitudInicio(exp, firmante, moduloTexto) {
 
 *ADJUDICACIÓN — INICIO DE PRESTACIÓN.* Expte. ${exp.nroExpediente} — Paciente: *${paciente}*.
 
-Por la presente se comunica que, conforme al procedimiento de contratación tramitado en el expediente de referencia, esa firma ha resultado *adjudicataria* de la prestación del servicio de *${moduloMail}*${lineaPeriodo}.
+Por la presente se comunica que, conforme al procedimiento de contratación tramitado en el expediente de referencia, esa firma ha resultado *adjudicataria* de la prestación del servicio${servicioTxt}${lineaPeriodo}.
 
 En consecuencia, se solicita dar inicio a la prestación dando cumplimiento a las siguientes condiciones:
 
@@ -8859,12 +8938,13 @@ Gerencia Administrativa.`
 
 // ── MAIL 2 ── Envío de la Orden de Compra (va adjunta). Obligaciones + cláusula de sanción.
 function generarCuerpoOrdenCompra(exp, nroOC, firmante, moduloTexto) {
-  const moduloMail = String(moduloTexto || exp.modulo || "").toUpperCase();
+  const moduloMail = _moduloLimpio(moduloTexto || exp.modulo).toUpperCase();
   const paciente = String(exp.paciente || "").toUpperCase();
+  const servicioTxt = moduloMail ? ` Servicio de *${moduloMail}*.` : "";
   return (
 `Estimados:
 
-*ENVÍO DE ORDEN DE COMPRA Nº ${nroOC || "____"}.* Expte. ${exp.nroExpediente} — Paciente: *${paciente}*. Servicio de *${moduloMail}*.
+*ENVÍO DE ORDEN DE COMPRA Nº ${nroOC || "____"}.* Expte. ${exp.nroExpediente} — Paciente: *${paciente}*.${servicioTxt}
 
 Adjunto a la presente se remite la *Orden de Compra Nº ${nroOC || "____"}*, que autoriza y respalda la prestación del servicio adjudicado. Se solicita dar inicio a la prestación conforme a los datos oportunamente informados.
 
@@ -9142,17 +9222,21 @@ function OrdenCompraEnvio({ exp, proveedores }) {
   const modulosDe = (nombres) => {
     const ms = [];
     adjsExp.forEach((a) => {
-      if (nombres.includes(a.proveedor) && a.modulo && !ms.includes(a.modulo)) ms.push(a.modulo);
+      if (nombres.includes(a.proveedor) && a.modulo && a.modulo !== MODULO_SIN_NOMBRE && !ms.includes(a.modulo)) ms.push(a.modulo);
     });
     return ms;
   };
-  const textoModulo = (nombres) => modulosDe(nombres).join(" y ") || exp.modulo || "";
+  const textoModulo = (nombres) => modulosDe(nombres).join(" y ") || _moduloLimpio(exp.modulo);
 
   // Asunto ÚNICO por bloque para el Mail 1 (incluye la firma → un hilo por proveedor).
-  const asuntoSolicitud = (g) =>
-    "INICIO DE PRESTACIÓN " + textoModulo(g).toUpperCase() + " " + exp.paciente.toUpperCase() + " — " + g.join(" / ").toUpperCase();
-  const asuntoOC = (g) =>
-    "ENVIO ORDEN DE COMPRA " + textoModulo(g).toUpperCase() + " " + exp.paciente.toUpperCase();
+  const asuntoSolicitud = (g) => {
+    const m = textoModulo(g).toUpperCase();
+    return "INICIO DE PRESTACIÓN " + (m ? m + " " : "") + exp.paciente.toUpperCase() + " — " + g.join(" / ").toUpperCase();
+  };
+  const asuntoOC = (g) => {
+    const m = textoModulo(g).toUpperCase();
+    return "ENVIO ORDEN DE COMPRA " + (m ? m + " " : "") + exp.paciente.toUpperCase();
+  };
 
   // Lo que YA quedó grabado en el expediente (para retomar si se cierra la pantalla)
   const ocGuardada = exp.oc || {};
