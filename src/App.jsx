@@ -1296,7 +1296,12 @@ const moduloSinPeriodo = (m, periodo) => {
 };
 
 const imputacionNotaPorSubpartida = (sub) => {
-  const subTxt = sub === "342" ? "Subp: 342" : sub === "ambas" ? "Subp: 322 y Subp: 342" : "Subp: 322";
+  const subTxt =
+    sub === "342" ? "Subp: 342" :
+    sub === "359" ? "Subp: 359" :
+    sub === "342y359" ? "Subp: 342 y Subp: 359" :
+    sub === "ambas" ? "Subp: 322 y Subp: 342" :
+    "Subp: 322";
   return "Jur: 67, U.O: 965, Fin/Fun: 314, Proy: 00, Subp: 00, Progr: 19, A/OB: 01, Part. Ppal.: 300, " + subTxt +
     " – Fuente de financiamiento Nº 10 – Recursos Tesoro General de la Provincia – Presupuesto " + new Date().getFullYear();
 };
@@ -8083,8 +8088,12 @@ function RegistroPresupuestos({ exp }) {
 
 function GenerarNota({ exp }) {
   const total = (exp.cuadro?.mensual || 0) * Number(exp.periodoMeses || 6);
+  // Módulos de rehabilitación/centro terapéutico CON traslado: 342 (prestación) + 359 (traslado).
+  const tieneTraslado = /traslado/i.test(exp.modulo || "");
+  const tieneCentro = /centro|rehabilitaci[oó]n|educativo terap[eé]utico/i.test(exp.modulo || "");
   // Si el cuadro adjudicó más de un módulo, el gasto toca las dos subpartidas
-  const subDefecto = (exp.cuadro?.adjudicaciones || []).length > 1 ? "ambas" : "322";
+  const subDefecto = (tieneTraslado && tieneCentro) ? "342y359"
+    : (exp.cuadro?.adjudicaciones || []).length > 1 ? "ambas" : "322";
   const borr = exp.borradores?.nota || null;
   const hayDict = Number(exp.valoresAutorizados?.totalAfectar) > 0;
   // Con dictamen, el importe manda desde valoresAutorizados (no desde el borrador viejo).
@@ -8146,6 +8155,12 @@ function GenerarNota({ exp }) {
         Con el formato oficial del Word real (Times New Roman). El importe sale del cuadro comparativo y las letras se escriben solas. Primero la revisás en pantalla, la corregís si hace falta, y recién ahí generás el PDF.
       </div>
 
+      {!exp.periodoTexto && (
+        <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: 8, background: "#fef3c7", color: "#92400e", fontSize: 13, fontWeight: 600 }}>
+          ⚠️ Este expediente no tiene cargado el "Período en texto" (Ej: "Octubre 2026 a Marzo 2027"). Sin ese dato, la nota va a salir como "{exp.periodoMeses} meses" en vez de los meses reales, y si el período cruza de ejercicio (año), NO se va a dividir el importe entre "Presupuesto {new Date().getFullYear()}" y "Presupuesto a Futuro {new Date().getFullYear() + 1}". Completalo en la ficha del expediente (o en el Período autorizado del dictamen) antes de generar.
+        </div>
+      )}
+
       <AvisoBorrador aviso={borradorAviso} onDescartar={descartarBorr} />
 
       <div style={{ display: "grid", gridTemplateColumns: "180px 1fr 1fr", gap: 10 }}>
@@ -8165,7 +8180,7 @@ function GenerarNota({ exp }) {
 
       <label style={S.label}>Subpartida(s) del gasto</label>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
-        {[["322", "322"], ["342", "342"], ["ambas", "322 y 342 (internación + alimentación)"]].map(([v, t]) => (
+        {[["322", "322"], ["342", "342"], ["359", "359"], ["ambas", "322 y 342 (internación + alimentación)"], ["342y359", "342 y 359 (centro terapéutico + traslado)"]].map(([v, t]) => (
           <label key={v} style={{
             display: "flex", alignItems: "center", gap: 6, padding: "7px 12px",
             borderRadius: 8, border: "1.5px solid " + (subpartida === v ? "#0891b2" : "#cbd5e1"),
