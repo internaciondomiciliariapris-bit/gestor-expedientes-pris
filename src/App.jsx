@@ -60,7 +60,6 @@ const USUARIOS = [
   { id: "Jorge", firma: "Dipl. Jorge Barone" },
   { id: "Yamila", firma: "Yamila Avila" },
   { id: "Paula", firma: "Paula Facchin" },
-  { id: "Julieta", firma: "Julieta Aguirre" },
   { id: "Vanina", firma: "Vanina Bustamante" },
 ];
 const FIRMANTES = USUARIOS.map((u) => u.firma);
@@ -2540,6 +2539,15 @@ export default function App() {
           e.sv = sv;
           e.etapa = etapa;
         }
+        // Reasignación de usuario: Julieta fue reemplazada por Vanina, que continúa
+        // sus expedientes. Solo cambia el DUEÑO (responsable) para que Vanina los vea
+        // y los siga; las etapas YA generadas conservan su firmante guardado (lo que
+        // hizo Julieta queda con su nombre) y solo las etapas nuevas salen como Vanina.
+        // Idempotente: una vez en "Vanina" no se vuelve a tocar.
+        if (e.responsable === "Julieta") {
+          updateDoc(doc(db, COL_EXPEDIENTES, e.id), { responsable: "Vanina" }).catch(() => {});
+          e.responsable = "Vanina";
+        }
       });
       arr.sort((a, b) => (b.creado || "").localeCompare(a.creado || ""));
       setExpedientes(arr);
@@ -2897,7 +2905,7 @@ function periodoDeExpediente(exp) {
 
 // Arma la ficha de consulta de un expediente (un bloque por módulo adjudicado)
 /* ---------- USUARIOS (base LISTADO_PACIENTES_INTERNACION) ---------- */
-const USUARIOS_ORDEN = ["JORGE", "YAMILA", "PAULA", "JULIETA", "VANINA"];
+const USUARIOS_ORDEN = ["JORGE", "YAMILA", "PAULA", "VANINA"];
 
 // Normaliza un nombre para comparar: MAYÚSCULAS, sin acentos, sin "(ALIMENTACION)" etc.
 function normNombrePac(s) {
