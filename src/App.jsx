@@ -31,6 +31,26 @@ const APPS_SCRIPT_CLAVE = "GESTORPRIS2026";
 // Contraseña de acceso (la misma del panel admin de visitas-siprosa)
 const ADMIN_PASSWORD = "gerenciapris626";
 
+// Geocoding para el pase a Visitas: misma API key que usa Visitas SIPROSA, así el
+// domicilio del expediente llega con lat/lng cargadas y el prestador ya se puede
+// verificar por GPS sin pasos manuales. Es best-effort: si falla, se guarda sin
+// coordenadas (igual que antes) y se resuelven con "Buscar coordenadas" en Visitas.
+const GOOGLE_MAPS_API_KEY = "AIzaSyA4rYBSHBsExu5FFXjcrJqrpWHNbkCvtjc";
+async function geocodificarDomicilioVisitas(direccion) {
+  const dir = String(direccion || "").trim();
+  if (!dir) return null;
+  try {
+    const query = encodeURIComponent(dir + ", Tucumán, Argentina");
+    const resp = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${query}&key=${GOOGLE_MAPS_API_KEY}`);
+    const data = await resp.json();
+    if (data.status === "OK" && data.results?.[0]?.geometry?.location) {
+      const { lat, lng } = data.results[0].geometry.location;
+      return { lat: Number(Number(lat).toFixed(6)), lng: Number(Number(lng).toFixed(6)) };
+    }
+  } catch { /* best-effort: sin coordenadas */ }
+  return null;
+}
+
 // Logos (copiá los archivos desde la carpeta /public de visitas-siprosa)
 const LOGO_PRIS = "/logo-pris.png";
 const LOGO_GOBIERNO = "/logo-gobierno.png";
@@ -9103,6 +9123,7 @@ function EnviarASeguimiento({ exp, onClose }) {
     setEnviando(true);
     try {
       const desde = new Date().toISOString().slice(0, 10);
+      const coords = await geocodificarDomicilioVisitas(exp.domicilio);
       if (estado?.existe) {
         const p = estado.data;
         const auth = { ...(p.autorizaciones || {}) };
@@ -9112,16 +9133,29 @@ function EnviarASeguimiento({ exp, onClose }) {
         });
         const empresasUnion = Array.from(new Set([...(p.empresas || []), ...empresasFinal]));
         const prestUnion = Array.from(new Set([...(p.prestaciones || []), ...prestaciones.map((x) => x.key)]));
-        await setDoc(doc(db, COL_PACIENTES, estado.docId), { ...p, gestora, empresas: empresasUnion, prestaciones: prestUnion, autorizaciones: auth, activo: true, direccion: p.direccion || exp.domicilio || "" });
+        const cantUnion = { ...(p.cantidades || {}) };
+        prestaciones.forEach((pr) => { cantUnion[pr.key] = pr.cantidad; });
+        const dirPrev = String(p.domicilio || p.direccion || exp.domicilio || "").trim();
+        const telPrev = String(p.telefono || exp.telefono || "").trim();
+        const coordsPrev = (p.lat != null && p.lng != null) ? {} : (coords ? { lat: coords.lat, lng: coords.lng } : {});
+        await setDoc(doc(db, COL_PACIENTES, estado.docId), { ...p, gestora, empresas: empresasUnion, prestaciones: prestUnion, autorizaciones: auth, cantidades: cantUnion, activo: true, domicilio: dirPrev, direccion: dirPrev, telefono: telPrev, ...coordsPrev });
         setResultado({ tipo: "renovacion", nombre: p.nombre });
       } else {
         const id = "P" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
         const auth = {};
-        prestaciones.forEach((pr) => { auth[pr.key] = { activa: true, modo: pr.modo, historial: [{ cantidad: pr.cantidad, desde }] }; });
+        const cantidades = {};
+        prestaciones.forEach((pr) => {
+          auth[pr.key] = { activa: true, modo: pr.modo, historial: [{ cantidad: pr.cantidad, desde }] };
+          cantidades[pr.key] = pr.cantidad;
+        });
+        const dir = String(exp.domicilio || "").trim();
+        const tel = String(exp.telefono || "").trim();
         await setDoc(doc(db, COL_PACIENTES, id), {
           id, nombre, dni, gestora, empresas: empresasFinal,
           prestaciones: prestaciones.map((x) => x.key), autorizaciones: auth,
-          cantidades: {}, activo: true, direccion: exp.domicilio || "", lat: null, lng: null,
+          cantidades, activo: true,
+          domicilio: dir, direccion: dir, telefono: tel,
+          lat: coords?.lat ?? null, lng: coords?.lng ?? null,
         });
         setResultado({ tipo: "alta", nombre });
       }
