@@ -61,6 +61,7 @@ const USUARIOS = [
   { id: "Yamila", firma: "Yamila Avila" },
   { id: "Paula", firma: "Paula Facchin" },
   { id: "Julieta", firma: "Julieta Aguirre" },
+  { id: "Vanina", firma: "Vanina Bustamante" },
 ];
 const FIRMANTES = USUARIOS.map((u) => u.firma);
 
@@ -71,7 +72,7 @@ const FIRMANTES = USUARIOS.map((u) => u.firma);
 // los paneles; los demás sólo ven lo suyo.
 const CREDENCIALES = [
   { usuario: "yamila",   clave: "yamila2026",    id: "Yamila",   rol: "usuario"  },
-  { usuario: "julieta",  clave: "julieta2026",   id: "Julieta",  rol: "usuario"  },
+  { usuario: "vanina",   clave: "vanina2026",    id: "Vanina",   rol: "usuario"  },
   { usuario: "paula",    clave: "paula2026",     id: "Paula",    rol: "usuario"  },
   { usuario: "jorge",    clave: "jorge1070",     id: "Jorge",    rol: "usuario"  },
   { usuario: "gerencia", clave: "laspiedras626", id: "gerencia", rol: "gerencia" },
@@ -137,7 +138,6 @@ const CUMPLES = [
   { id: "Paula",    nombre: "Paula",              mes: 9,  dia: 17 },
   { id: "Jorge",    nombre: "Jorge",              mes: 10, dia: 25 },
   { id: "Yamila",   nombre: "Yamila",             mes: 7,  dia: 19 },
-  { id: "Julieta",  nombre: "Julieta",            mes: 1,  dia: 3  },
   { id: "gerencia", nombre: "la contadora Lucía", mes: 2,  dia: 28 },
   { id: "gerencia", nombre: "la contadora Maru",  mes: 7,  dia: 10 },
 ];
@@ -2897,7 +2897,7 @@ function periodoDeExpediente(exp) {
 
 // Arma la ficha de consulta de un expediente (un bloque por módulo adjudicado)
 /* ---------- USUARIOS (base LISTADO_PACIENTES_INTERNACION) ---------- */
-const USUARIOS_ORDEN = ["JORGE", "YAMILA", "PAULA", "JULIETA"];
+const USUARIOS_ORDEN = ["JORGE", "YAMILA", "PAULA", "JULIETA", "VANINA"];
 
 // Normaliza un nombre para comparar: MAYÚSCULAS, sin acentos, sin "(ALIMENTACION)" etc.
 function normNombrePac(s) {
@@ -9002,10 +9002,10 @@ Gerencia Administrativa.`
    ============================================================ */
 const COL_PACIENTES = "pacientes";
 const VISITAS_EMPRESAS = ["SIAD", "NUTRIHOME", "QUIMUR", "OMNES", "MARCKAY", "ROMERO", "NUTRICION"];
-const USUARIO_A_GESTORA = { JORGE: "G_JOR", YAMILA: "G_YAM", PAULA: "G_PAU", JULIETA: "G_JUL" };
+const USUARIO_A_GESTORA = { JORGE: "G_JOR", YAMILA: "G_YAM", PAULA: "G_PAU", VANINA: "G_JUL", JULIETA: "G_JUL" };
 const GESTORAS_SEG = [
   { cod: "G_JOR", nombre: "Jorge" }, { cod: "G_YAM", nombre: "Yamila" },
-  { cod: "G_PAU", nombre: "Paula" }, { cod: "G_JUL", nombre: "Julieta" },
+  { cod: "G_PAU", nombre: "Paula" }, { cod: "G_JUL", nombre: "Vanina" },
 ];
 const _digitos = (s) => String(s || "").replace(/\D/g, "");
 const _empresaNorm = (s) => String(s || "").replace(/\([^)]*\)/g, "").trim().toUpperCase();
@@ -9031,7 +9031,13 @@ function mapearPrestacionAVisitas(nombre, cantidadTexto, totalMensual) {
   if (/kinesi/.test(n) && /respirator/.test(n)) return { key: "Kinesiología respiratoria", cantidad: _sesSemana(t, num, esLaV), unidad: "ses/semana", modo: "semanal" };
   if (/kinesi/.test(n)) return { key: "Kinesiología motora", cantidad: _sesSemana(t, num, esLaV), unidad: "ses/semana", modo: "semanal" };
   if (/rehabilit/.test(n)) return { key: "Rehabilitación", cantidad: _sesSemana(t, num, esLaV), unidad: "ses/semana", modo: "semanal" };
-  if (/medic|visita med/.test(n)) return { key: "Visita médica", cantidad: tm || num || 0, unidad: "visitas/mes", modo: "semanal" };
+  if (/medic|visita med/.test(n)) {
+    // SIPROSA autoriza como MÁXIMO 4 visitas médicas al mes. Si el dictamen la expresa
+    // por semana (ej. "1 visita semanal"), son 4 visitas/mes (1 x semana), nunca más.
+    const semanal = /x\s*semana|por semana|semanal/.test(t);
+    const vm = semanal && num ? num * 4 : (tm || num || 0);
+    return { key: "Visita médica", cantidad: Math.min(vm, 4), unidad: "visitas/mes", modo: "semanal" };
+  }
   if (/aliment/.test(n)) {
     // La Alimentación Enteral es DIARIA: 31 días fijo (23 si fuera L a V). El número que
     // aparezca en el texto (ej. "15 set de infusión") es la entrega de sets — uno cada 15
