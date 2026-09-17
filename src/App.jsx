@@ -2591,6 +2591,7 @@ export default function App() {
             <button style={vista === "nuevo" ? S.btn : S.btnSec} onClick={() => setVista("nuevo")}>➕ Nuevo expediente</button>
           )}
           <button style={vista === "proveedores" ? S.btn : S.btnSec} onClick={() => setVista("proveedores")}>🏢 Proveedores</button>
+          <button style={vista === "importar" ? S.btn : S.btnSec} onClick={() => setVista("importar")}>📥 Importar tramitado</button>
           <div style={{ flex: 1 }} />
           <span
             style={{ fontWeight: 800, color: "#075e75", fontSize: 14, padding: "8px 12px", background: "#e0f2fe", borderRadius: 8 }}
@@ -2603,6 +2604,9 @@ export default function App() {
           <button style={{ ...S.btnSec, marginBottom: 12 }} onClick={() => setVista("tablero")}>← Volver al tablero</button>
         )}
         {vista === "proveedores" && (
+          <button style={{ ...S.btnSec, marginBottom: 12 }} onClick={() => setVista("tablero")}>← Volver al tablero</button>
+        )}
+        {vista === "importar" && (
           <button style={{ ...S.btnSec, marginBottom: 12 }} onClick={() => setVista("tablero")}>← Volver al tablero</button>
         )}
         {(vista === "editar" || vista === "renovar") && (
@@ -2624,6 +2628,12 @@ export default function App() {
             existentes={expedientes}
             onCreado={(e) => { setExpedienteSel(e); setVista("detalle"); }}
             onCancelar={() => setVista("tablero")}
+          />
+        )}
+        {vista === "importar" && (
+          <ImportarTramitado
+            usuario={usuario}
+            onListo={() => setVista("tablero")}
           />
         )}
         {vista === "editar" && expedienteVivo && (
@@ -3821,6 +3831,109 @@ function Tablero({ expedientes, usuario, esGerencia = false, abrir }) {
 }
 
 /* ---------- Nuevo expediente ---------- */
+
+// ============================================================================
+// IMPORTAR EXPEDIENTE YA TRAMITADO (por fuera del sistema)
+// Toma un JSON acotado (lo que se extrae del PDF en papel) y arma el expediente
+// COMPLETO en el mismo esquema que uno nativo, con las 9 etapas cerradas (etapa 9).
+// Idempotente: el id se deriva del N° de expediente, así reimportar no duplica.
+// ============================================================================
+function expandirExpedienteTramitado(x) {
+  const prest = Array.isArray(x.prestaciones) ? x.prestaciones : [];
+  const items = prest.map((p) => {
+    const m = String(p.cantTexto || "").match(/\d{1,4}/);
+    return { nombre: p.nombre, cantTexto: p.cantTexto || "", cantNum: m ? parseInt(m[0], 10) : "", modulo: p.modulo || x.modulo || "" };
+  });
+  const presupuestos = {};
+  (x.cotizaron || []).forEach((c) => { presupuestos[c.nombre] = { estado: "cotizo", mensual: Number(c.mensual) || 0, itemsPrestacion: items }; });
+  (x.noCotizaron || []).forEach((nombre) => { presupuestos[nombre] = { estado: "desestimo" }; });
+  const firma = (USUARIOS.find((u) => u.id === (x.responsable || "Paula"))?.firma) || FIRMANTES[0];
+  const fx = x.fechas || {};
+  const mensual = Number(x.mensual) || 0;
+  const total = Number(x.total) || 0;
+  return {
+    paciente: x.paciente || "", dni: x.dni || "", domicilio: x.domicilio || "", telefono: x.telefono || "",
+    diagnostico: x.diagnostico || "", edad: x.edad || "", fechaNacimiento: x.fechaNacimiento || "",
+    modulo: x.modulo || "", detalleServicios: x.detalleServicios || "",
+    periodoMeses: Number(x.periodoMeses) || 0, periodoTexto: x.periodoTexto || "",
+    nroExpediente: x.nroExpediente || "", responsable: x.responsable || "Paula",
+    itemsPrestacion: items,
+    dictamen: {
+      prestaciones: prest.map((p) => ({ nombre: p.nombre, cantidad: p.cantTexto || "", totalMensual: "" })),
+      firmante: x.dictamenFirmante || "", esRenovacion: x.esRenovacion !== false, periodoAutorizado: x.periodoTexto || "",
+    },
+    cotizacion: { fecha: fx.cotizacion || "", manual: true, firmante: firma, proveedores: x.proveedoresInvitados || [] },
+    presupuestos,
+    cuadro: { adjudicado: x.adjudicado || "", mensual, total, adjudicaciones: [{ modulo: x.modulo || "", adjudicado: x.adjudicado || "", mensual }] },
+    nota: { fecha: fx.nota || "", monto: Number(x.notaMonto) || total },
+    paseAuditoria: { fecha: fx.auditoria || "" },
+    paseLetrada: { fecha: fx.letrada || "" },
+    resolucion: { fecha: x.resolucionFecha || "", nro: x.resolucionNro || "", total: Number(x.resolucionTotal) || total },
+    paseTribunal: { fecha: fx.tribunal || "" },
+    oc: { envios: [{ proveedor: x.adjudicado || "", modulo: x.modulo || "", nro: x.ocNro || "", enviado: true, fecha: x.ocFecha || "" }], nro: x.ocNro || "" },
+    etapa: 9, sv: 4, importado: true, importadoEl: new Date().toISOString(),
+    creado: x.creado || new Date().toISOString(),
+  };
+}
+
+function ImportarTramitado({ usuario = "", onListo }) {
+  const [texto, setTexto] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [log, setLog] = useState(null);
+  async function importar() {
+    let arr;
+    try { arr = JSON.parse(texto); } catch { setLog({ error: "El JSON no es válido. Revisá que esté completo y bien cerrado." }); return; }
+    if (!Array.isArray(arr)) arr = [arr];
+    if (!arr.length) { setLog({ error: "El JSON no tiene expedientes." }); return; }
+    setBusy(true); setLog(null);
+    const res = [];
+    for (const x of arr) {
+      try {
+        if (!x.nroExpediente) throw new Error("falta nroExpediente");
+        const full = expandirExpedienteTramitado(x);
+        const id = "imp-" + String(x.nroExpediente).replace(/[^\w]+/g, "-");
+        await setDoc(doc(db, COL_EXPEDIENTES, id), full);
+        res.push({ ok: true, paciente: full.paciente, nro: full.nroExpediente });
+      } catch (e) { res.push({ ok: false, paciente: x && x.paciente ? x.paciente : "(sin nombre)", error: e.message }); }
+    }
+    setBusy(false); setLog({ res });
+    if (res.every((r) => r.ok) && onListo) setTimeout(onListo, 1500);
+  }
+  const okN = log && log.res ? log.res.filter((r) => r.ok).length : 0;
+  const failN = log && log.res ? log.res.filter((r) => !r.ok).length : 0;
+  return (
+    <div style={S.card}>
+      <h2 style={{ marginTop: 0, color: "#075e75" }}>📥 Importar expediente ya tramitado</h2>
+      <p style={{ fontSize: 14, color: "#475569", lineHeight: 1.5 }}>
+        Para cargar expedientes que se tramitaron <b>en papel, por fuera del sistema</b>. Pegá el JSON que te paso (uno o varios) y quedan cargados con las <b>9 etapas cerradas</b>, igual que los nativos: se ven en el Tablero, se pueden revisar y se pueden enviar a Visitas. Reimportar el mismo N° de expediente lo actualiza (no duplica).
+      </p>
+      <textarea
+        style={{ ...S.input, minHeight: 240, fontFamily: "monospace", fontSize: 12 }}
+        placeholder='[ { "nroExpediente": "2155/623/G/2026", "paciente": "...", ... } ]'
+        value={texto}
+        onChange={(e) => setTexto(e.target.value)}
+      />
+      <button style={{ ...S.btn, marginTop: 10 }} onClick={importar} disabled={busy}>
+        {busy ? "Importando…" : "📥 Importar al sistema"}
+      </button>
+      {log && log.error && (
+        <div style={{ marginTop: 14, padding: 12, borderRadius: 8, background: "#fef2f2", border: "1px solid #fecaca", color: "#b91c1c", fontSize: 14 }}>
+          ❌ {log.error}
+        </div>
+      )}
+      {log && log.res && (
+        <div style={{ marginTop: 14, padding: 12, borderRadius: 8, background: failN ? "#fffbeb" : "#f0fdf4", border: "1px solid " + (failN ? "#fde68a" : "#bbf7d0"), fontSize: 14 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>{okN} importado(s){failN ? " · " + failN + " con error" : ""}.</div>
+          {log.res.map((r, i) => (
+            <div key={i} style={{ color: r.ok ? "#166534" : "#b91c1c" }}>
+              {r.ok ? "✓ " + r.paciente + " (" + r.nro + ")" : "❌ " + r.paciente + ": " + r.error}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function NuevoExpediente({ modo = "nuevo", usuario = "", inicial = null, expId = null, existentes = [], onCreado, onCancelar }) {
   const [f, setF] = useState(() => {
